@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -207,19 +208,24 @@ CREATE INDEX IF NOT EXISTS idx_queries_ts ON queries(ts DESC);
 
 
 class Store:
-    """Thin SQLite wrapper. Single-writer, thread-unsafe by design.
+    """Thin SQLite wrapper. Single connection, RLock-serialized for thread safety.
 
-    Higher layers should hold a single Store per process.
+    The store can be shared across threads (e.g., the watcher's worker thread
+    and the HTTP server's event loop). All public methods take the internal
+    RLock for the duration of their work, including cursor consumption, so
+    callers do not need to coordinate.
     """
 
     def __init__(self, db_path: Path):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(str(self.db_path))
+        self.conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
-        self.conn.execute("PRAGMA foreign_keys = ON")
-        self.conn.execute("PRAGMA journal_mode = WAL")
-        self._init_schema()
+        self._lock = threading.RLock()
+        with self._lock:
+            self.conn.execute("PRAGMA foreign_keys = ON")
+            self.conn.execute("PRAGMA journal_mode = WAL")
+            self._init_schema()
 
     def _init_schema(self) -> None:
         self.conn.executescript(SCHEMA_SQL)
@@ -229,11 +235,13 @@ class Store:
         self.conn.commit()
 
     def schema_version(self) -> int:
-        row = self.conn.execute("SELECT version FROM schema_version").fetchone()
-        return int(row["version"])
+        with self._lock:
+            row = self.conn.execute("SELECT version FROM schema_version").fetchone()
+            return int(row["version"])
 
     def close(self) -> None:
-        self.conn.close()
+        with self._lock:
+            self.conn.close()
 
     def __enter__(self) -> Store:
         return self
@@ -244,50 +252,53 @@ class Store:
     # --- Nodes -------------------------------------------------------------
 
     def upsert_node(self, node: Node) -> None:
-        self.conn.execute(
-            """
-            INSERT INTO nodes
-              (id, type, name, description, body, source_path, source_kind,
-               project_key, frontmatter_json, hash, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-              type             = excluded.type,
-              name             = excluded.name,
-              description      = excluded.description,
-              body             = excluded.body,
-              source_path      = excluded.source_path,
-              source_kind      = excluded.source_kind,
-              project_key      = excluded.project_key,
-              frontmatter_json = excluded.frontmatter_json,
-              hash             = excluded.hash,
-              updated_at       = excluded.updated_at
-            """,
-            (
-                node.id,
-                node.type,
-                node.name,
-                node.description,
-                node.body,
-                node.source_path,
-                node.source_kind,
-                node.project_key,
-                node.frontmatter_json,
-                node.hash,
-                node.created_at,
-                node.updated_at,
-            ),
-        )
-        self.conn.commit()
+        with self._lock:
+            self.conn.execute(
+                """
+                INSERT INTO nodes
+                  (id, type, name, description, body, source_path, source_kind,
+                   project_key, frontmatter_json, hash, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                  type             = excluded.type,
+                  name             = excluded.name,
+                  description      = excluded.description,
+                  body             = excluded.body,
+                  source_path      = excluded.source_path,
+                  source_kind      = excluded.source_kind,
+                  project_key      = excluded.project_key,
+                  frontmatter_json = excluded.frontmatter_json,
+                  hash             = excluded.hash,
+                  updated_at       = excluded.updated_at
+                """,
+                (
+                    node.id,
+                    node.type,
+                    node.name,
+                    node.description,
+                    node.body,
+                    node.source_path,
+                    node.source_kind,
+                    node.project_key,
+                    node.frontmatter_json,
+                    node.hash,
+                    node.created_at,
+                    node.updated_at,
+                ),
+            )
+            self.conn.commit()
 
     def get_node(self, node_id: str) -> Node | None:
-        row = self.conn.execute("SELECT * FROM nodes WHERE id = ?", (node_id,)).fetchone()
-        return self._row_to_node(row) if row else None
+        with self._lock:
+            row = self.conn.execute("SELECT * FROM nodes WHERE id = ?", (node_id,)).fetchone()
+            return self._row_to_node(row) if row else None
 
     def get_node_by_source(self, source_path: str) -> Node | None:
-        row = self.conn.execute(
-            "SELECT * FROM nodes WHERE source_path = ?", (source_path,)
-        ).fetchone()
-        return self._row_to_node(row) if row else None
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT * FROM nodes WHERE source_path = ?", (source_path,)
+            ).fetchone()
+            return self._row_to_node(row) if row else None
 
     def list_nodes(
         self,
@@ -309,15 +320,20 @@ class Store:
             sql += " WHERE " + " AND ".join(clauses)
         sql += " ORDER BY updated_at DESC LIMIT ?"
         params.append(limit)
-        rows = self.conn.execute(sql, params).fetchall()
+        with self._lock:
+            rows = self.conn.execute(sql, params).fetchall()
         return [self._row_to_node(r) for r in rows]
 
     def delete_node(self, node_id: str) -> None:
-        self.conn.execute("DELETE FROM nodes WHERE id = ?", (node_id,))
-        self.conn.commit()
+        with self._lock:
+            self.conn.execute("DELETE FROM nodes WHERE id = ?", (node_id,))
+            self.conn.commit()
 
     def count_nodes(self) -> dict[str, int]:
-        rows = self.conn.execute("SELECT type, COUNT(*) AS n FROM nodes GROUP BY type").fetchall()
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT type, COUNT(*) AS n FROM nodes GROUP BY type"
+            ).fetchall()
         return {row["type"]: row["n"] for row in rows}
 
     @staticmethod
@@ -352,17 +368,18 @@ class Store:
             raise ValueError(f"unknown edge relation: {relation!r}")
         if source not in EDGE_SOURCES:
             raise ValueError(f"unknown edge source: {source!r}")
-        self.conn.execute(
-            """
-            INSERT INTO edges (src_id, dst_id, relation, weight, created_at, source)
-            VALUES (?, ?, ?, ?, ?, ?)
-            ON CONFLICT(src_id, dst_id, relation) DO UPDATE SET
-              weight = excluded.weight,
-              source = excluded.source
-            """,
-            (src_id, dst_id, relation, weight, int(time.time()), source),
-        )
-        self.conn.commit()
+        with self._lock:
+            self.conn.execute(
+                """
+                INSERT INTO edges (src_id, dst_id, relation, weight, created_at, source)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(src_id, dst_id, relation) DO UPDATE SET
+                  weight = excluded.weight,
+                  source = excluded.source
+                """,
+                (src_id, dst_id, relation, weight, int(time.time()), source),
+            )
+            self.conn.commit()
 
     def get_edges(
         self,
@@ -385,7 +402,8 @@ class Store:
             params.append(relation)
         if clauses:
             sql += " WHERE " + " AND ".join(clauses)
-        rows = self.conn.execute(sql, params).fetchall()
+        with self._lock:
+            rows = self.conn.execute(sql, params).fetchall()
         return [
             Edge(
                 src_id=r["src_id"],
@@ -399,11 +417,12 @@ class Store:
         ]
 
     def remove_edge(self, src_id: str, dst_id: str, relation: str) -> None:
-        self.conn.execute(
-            "DELETE FROM edges WHERE src_id = ? AND dst_id = ? AND relation = ?",
-            (src_id, dst_id, relation),
-        )
-        self.conn.commit()
+        with self._lock:
+            self.conn.execute(
+                "DELETE FROM edges WHERE src_id = ? AND dst_id = ? AND relation = ?",
+                (src_id, dst_id, relation),
+            )
+            self.conn.commit()
 
     # --- Sources -----------------------------------------------------------
 
@@ -417,24 +436,26 @@ class Store:
     ) -> None:
         if kind not in SOURCE_KINDS:
             raise ValueError(f"unknown source kind: {kind!r}")
-        self.conn.execute(
-            """
-            INSERT INTO sources (path, kind, project_key, enabled)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(path) DO UPDATE SET
-              kind        = excluded.kind,
-              project_key = excluded.project_key,
-              enabled     = excluded.enabled
-            """,
-            (path, kind, project_key, 1 if enabled else 0),
-        )
-        self.conn.commit()
+        with self._lock:
+            self.conn.execute(
+                """
+                INSERT INTO sources (path, kind, project_key, enabled)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(path) DO UPDATE SET
+                  kind        = excluded.kind,
+                  project_key = excluded.project_key,
+                  enabled     = excluded.enabled
+                """,
+                (path, kind, project_key, 1 if enabled else 0),
+            )
+            self.conn.commit()
 
     def list_sources(self, *, only_enabled: bool = False) -> list[Source]:
         sql = "SELECT * FROM sources"
         if only_enabled:
             sql += " WHERE enabled = 1"
-        rows = self.conn.execute(sql).fetchall()
+        with self._lock:
+            rows = self.conn.execute(sql).fetchall()
         return [
             Source(
                 path=r["path"],
@@ -448,12 +469,14 @@ class Store:
 
     def mark_source_indexed(self, path: str, *, when: int | None = None) -> None:
         ts = when if when is not None else int(time.time())
-        self.conn.execute("UPDATE sources SET last_indexed_at = ? WHERE path = ?", (ts, path))
-        self.conn.commit()
+        with self._lock:
+            self.conn.execute("UPDATE sources SET last_indexed_at = ? WHERE path = ?", (ts, path))
+            self.conn.commit()
 
     def remove_source(self, path: str) -> None:
-        self.conn.execute("DELETE FROM sources WHERE path = ?", (path,))
-        self.conn.commit()
+        with self._lock:
+            self.conn.execute("DELETE FROM sources WHERE path = ?", (path,))
+            self.conn.commit()
 
     # --- Query audit log ---------------------------------------------------
 
@@ -466,29 +489,31 @@ class Store:
         scores: dict[str, float],
     ) -> str:
         qid = uuid.uuid4().hex
-        self.conn.execute(
-            """
-            INSERT INTO queries (id, prompt, intent_tags, retrieved_ids, scores, ts)
-            VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (
-                qid,
-                prompt,
-                json.dumps(intent_tags),
-                json.dumps(retrieved_ids),
-                json.dumps(scores),
-                int(time.time()),
-            ),
-        )
-        self.conn.commit()
+        with self._lock:
+            self.conn.execute(
+                """
+                INSERT INTO queries (id, prompt, intent_tags, retrieved_ids, scores, ts)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    qid,
+                    prompt,
+                    json.dumps(intent_tags),
+                    json.dumps(retrieved_ids),
+                    json.dumps(scores),
+                    int(time.time()),
+                ),
+            )
+            self.conn.commit()
         return qid
 
     def recent_queries(self, limit: int = 50) -> list[Query]:
         # ts has 1-second resolution, so ties within the same second fall back
         # to rowid order (SQLite's monotonic insertion order).
-        rows = self.conn.execute(
-            "SELECT * FROM queries ORDER BY ts DESC, rowid DESC LIMIT ?", (limit,)
-        ).fetchall()
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT * FROM queries ORDER BY ts DESC, rowid DESC LIMIT ?", (limit,)
+            ).fetchall()
         return [
             Query(
                 id=r["id"],
