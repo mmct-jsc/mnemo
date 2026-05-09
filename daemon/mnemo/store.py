@@ -18,7 +18,10 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
+import sqlite_vec
+
 SCHEMA_VERSION = 1
+EMBEDDING_DIM = 384  # all-MiniLM-L6-v2 dim. Bump + reindex to switch models.
 
 
 # --- Allowed enum values (kept in code, not as SQL CHECK constraints, so we can
@@ -204,6 +207,23 @@ CREATE INDEX IF NOT EXISTS idx_queries_ts ON queries(ts DESC);
 """
 
 
+# Vec-extension schema is created lazily on first call to a vec method, so
+# tests that don't touch embeddings don't pay the extension load cost.
+VEC_SCHEMA_SQL = f"""
+CREATE VIRTUAL TABLE IF NOT EXISTS vec_chunks USING vec0(embedding float[{EMBEDDING_DIM}]);
+
+CREATE TABLE IF NOT EXISTS chunk_meta (
+  vec_rowid  INTEGER PRIMARY KEY,
+  node_id    TEXT NOT NULL,
+  chunk_idx  INTEGER NOT NULL,
+  chunk_text TEXT NOT NULL,
+  FOREIGN KEY (node_id) REFERENCES nodes(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_chunk_meta_node ON chunk_meta(node_id);
+"""
+
+
 # --- Store ------------------------------------------------------------------
 
 
@@ -222,6 +242,7 @@ class Store:
         self.conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self._lock = threading.RLock()
+        self._vec_initialized = False
         with self._lock:
             self.conn.execute("PRAGMA foreign_keys = ON")
             self.conn.execute("PRAGMA journal_mode = WAL")
@@ -325,6 +346,10 @@ class Store:
         return [self._row_to_node(r) for r in rows]
 
     def delete_node(self, node_id: str) -> None:
+        # Vec rows are not FK-linked (virtual table), so clean them up explicitly
+        # before the cascade fires on chunk_meta.
+        if self._vec_initialized:
+            self.delete_chunks(node_id)
         with self._lock:
             self.conn.execute("DELETE FROM nodes WHERE id = ?", (node_id,))
             self.conn.commit()
@@ -514,6 +539,124 @@ class Store:
             rows = self.conn.execute(
                 "SELECT * FROM queries ORDER BY ts DESC, rowid DESC LIMIT ?", (limit,)
             ).fetchall()
+        return [
+            Query(
+                id=r["id"],
+                prompt=r["prompt"],
+                intent_tags=json.loads(r["intent_tags"]) if r["intent_tags"] else [],
+                retrieved_ids=json.loads(r["retrieved_ids"]) if r["retrieved_ids"] else [],
+                scores=json.loads(r["scores"]) if r["scores"] else {},
+                ts=r["ts"],
+            )
+            for r in rows
+        ]
+
+    # --- Vector index (sqlite-vec) ----------------------------------------
+
+    def ensure_vec(self) -> None:
+        """Lazily load the sqlite-vec extension and create vec/meta tables.
+
+        Called automatically by all vec methods. Safe to call multiple times.
+        """
+        if self._vec_initialized:
+            return
+        with self._lock:
+            if self._vec_initialized:
+                return
+            self.conn.enable_load_extension(True)
+            sqlite_vec.load(self.conn)
+            self.conn.enable_load_extension(False)
+            self.conn.executescript(VEC_SCHEMA_SQL)
+            self.conn.commit()
+            self._vec_initialized = True
+
+    def upsert_chunks(self, node_id: str, chunks: list[tuple[int, list[float], str]]) -> None:
+        """Replace all chunks for ``node_id``. ``chunks`` = [(idx, vector, text), ...]."""
+        self.ensure_vec()
+        with self._lock:
+            # Remove old chunks (cascade-safe; both tables get their entries cleared)
+            old = self.conn.execute(
+                "SELECT vec_rowid FROM chunk_meta WHERE node_id = ?", (node_id,)
+            ).fetchall()
+            for row in old:
+                self.conn.execute("DELETE FROM vec_chunks WHERE rowid = ?", (row["vec_rowid"],))
+            self.conn.execute("DELETE FROM chunk_meta WHERE node_id = ?", (node_id,))
+
+            # Insert new chunks
+            for chunk_idx, vector, text in chunks:
+                if len(vector) != EMBEDDING_DIM:
+                    raise ValueError(f"vector dim {len(vector)} != expected {EMBEDDING_DIM}")
+                vec_blob = sqlite_vec.serialize_float32(vector)
+                cur = self.conn.execute(
+                    "INSERT INTO vec_chunks (embedding) VALUES (?)", (vec_blob,)
+                )
+                self.conn.execute(
+                    """INSERT INTO chunk_meta (vec_rowid, node_id, chunk_idx, chunk_text)
+                       VALUES (?, ?, ?, ?)""",
+                    (cur.lastrowid, node_id, chunk_idx, text),
+                )
+            self.conn.commit()
+
+    def delete_chunks(self, node_id: str) -> None:
+        self.ensure_vec()
+        with self._lock:
+            old = self.conn.execute(
+                "SELECT vec_rowid FROM chunk_meta WHERE node_id = ?", (node_id,)
+            ).fetchall()
+            for row in old:
+                self.conn.execute("DELETE FROM vec_chunks WHERE rowid = ?", (row["vec_rowid"],))
+            self.conn.execute("DELETE FROM chunk_meta WHERE node_id = ?", (node_id,))
+            self.conn.commit()
+
+    def list_embedded_node_ids(self) -> set[str]:
+        self.ensure_vec()
+        with self._lock:
+            rows = self.conn.execute("SELECT DISTINCT node_id FROM chunk_meta").fetchall()
+        return {r["node_id"] for r in rows}
+
+    def vec_search(
+        self,
+        query_vec: list[float],
+        *,
+        k: int = 20,
+        type_filter: list[str] | None = None,
+        project_key: str | None = None,
+    ) -> list[tuple[str, int, str, float]]:
+        """Return ``k`` nearest chunks as (node_id, chunk_idx, chunk_text, distance).
+
+        Sorted ascending by distance (lower = more similar; sqlite-vec uses L2
+        distance on normalized vectors, so it's monotonic in cosine distance).
+        Optional filters are applied via JOIN on the nodes table.
+        """
+        self.ensure_vec()
+        if len(query_vec) != EMBEDDING_DIM:
+            raise ValueError(f"query dim {len(query_vec)} != expected {EMBEDDING_DIM}")
+        vec_blob = sqlite_vec.serialize_float32(query_vec)
+
+        # Oversample if filters are present so we have enough survivors after filtering.
+        oversample = 4 if (type_filter or project_key) else 1
+        sql = """
+            SELECT m.node_id, m.chunk_idx, m.chunk_text, v.distance
+            FROM vec_chunks v
+            JOIN chunk_meta m ON v.rowid = m.vec_rowid
+            JOIN nodes n      ON m.node_id = n.id
+            WHERE v.embedding MATCH ?
+              AND k = ?
+        """
+        params: list[object] = [vec_blob, k * oversample]
+        if type_filter:
+            placeholders = ",".join(["?"] * len(type_filter))
+            sql += f" AND n.type IN ({placeholders})"
+            params.extend(type_filter)
+        if project_key is not None:
+            sql += " AND n.project_key = ?"
+            params.append(project_key)
+        sql += " ORDER BY v.distance LIMIT ?"
+        params.append(k)
+
+        with self._lock:
+            rows = self.conn.execute(sql, params).fetchall()
+        return [(r["node_id"], r["chunk_idx"], r["chunk_text"], float(r["distance"])) for r in rows]
         return [
             Query(
                 id=r["id"],

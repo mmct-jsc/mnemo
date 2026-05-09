@@ -248,11 +248,17 @@ def _path_under_source(node_path: str, src_path: str, src_kind: str) -> bool:
         return False
 
 
-def reindex(store: Store, *, sources: list[Source] | None = None) -> ReindexReport:
+def reindex(
+    store: Store,
+    *,
+    sources: list[Source] | None = None,
+    embedder: object | None = None,
+) -> ReindexReport:
     """Reindex enabled sources. Idempotent.
 
     For each source, parse all files; upsert new and changed nodes; delete
-    nodes whose source files have vanished. Returns a tally.
+    nodes whose source files have vanished. If ``embedder`` is supplied, also
+    re-embed any node that was added or updated. Returns a tally.
     """
     report = ReindexReport()
     src_list = sources if sources is not None else store.list_sources(only_enabled=True)
@@ -264,19 +270,20 @@ def reindex(store: Store, *, sources: list[Source] | None = None) -> ReindexRepo
                 seen_paths.add(str(parsed.path))
                 existing = store.get_node_by_source(str(parsed.path))
                 if existing is None:
-                    store.upsert_node(
-                        Node.new(
-                            type=parsed.type,
-                            name=parsed.name,
-                            body=parsed.body,
-                            source_path=str(parsed.path),
-                            source_kind=parsed.source_kind,
-                            description=parsed.description,
-                            project_key=parsed.project_key,
-                            frontmatter_json=parsed.frontmatter_json,
-                            hash=parsed.hash,
-                        )
+                    new_node = Node.new(
+                        type=parsed.type,
+                        name=parsed.name,
+                        body=parsed.body,
+                        source_path=str(parsed.path),
+                        source_kind=parsed.source_kind,
+                        description=parsed.description,
+                        project_key=parsed.project_key,
+                        frontmatter_json=parsed.frontmatter_json,
+                        hash=parsed.hash,
                     )
+                    store.upsert_node(new_node)
+                    if embedder is not None:
+                        _embed(store, new_node, embedder)
                     report.added += 1
                 elif existing.hash != parsed.hash:
                     existing.type = parsed.type
@@ -289,6 +296,8 @@ def reindex(store: Store, *, sources: list[Source] | None = None) -> ReindexRepo
                     existing.hash = parsed.hash
                     existing.updated_at = int(time.time())
                     store.upsert_node(existing)
+                    if embedder is not None:
+                        _embed(store, existing, embedder)
                     report.updated += 1
                 else:
                     report.unchanged += 1
@@ -322,3 +331,10 @@ def register_default_sources(store: Store, claude_home: Path) -> int:
             n_new += 1
         store.register_source(str(d.path), d.kind, project_key=d.project_key)
     return n_new
+
+
+def _embed(store: Store, node: Node, embedder: object) -> None:
+    """Internal hook so ingest.py doesn't depend on mnemo.embed at import time."""
+    from mnemo.embed import embed_node
+
+    embed_node(store, node, embedder)  # type: ignore[arg-type]
