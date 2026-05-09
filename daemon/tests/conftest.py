@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -18,3 +19,35 @@ def store(tmp_path: Path) -> Iterator[Store]:
         yield s
     finally:
         s.close()
+
+
+class FakeEmbedder:
+    """Deterministic, instant embedder for tests that don't need real semantics.
+
+    Maps each input string to a 384-d vector by spreading its MD5 digest across
+    a fixed-shape array and zero-padding the rest. Output isn't unit-normalized
+    but sqlite-vec only cares that the dimension matches.
+    """
+
+    dim = 384
+    _model = None  # so server.health reports embedding_loaded=False
+
+    def embed_text(self, text: str) -> list[float]:
+        digest = hashlib.md5(text.encode("utf-8"), usedforsecurity=False).digest()
+        head = [(b - 128) / 128.0 for b in digest]  # 16 floats in [-1, 1]
+        return head + [0.0] * (self.dim - len(head))
+
+    def embed_batch(self, texts: list[str]) -> list[list[float]]:
+        return [self.embed_text(t) for t in texts]
+
+
+@pytest.fixture
+def fake_embedder() -> FakeEmbedder:
+    return FakeEmbedder()
+
+
+@pytest.fixture
+def isolated_mnemo_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    """Point MNEMO_HOME at a tmp dir so CLI / daemon tests stay sandboxed."""
+    monkeypatch.setenv("MNEMO_HOME", str(tmp_path))
+    return tmp_path

@@ -70,9 +70,7 @@ def main() -> None:
                 for hit in result.hits:
                     name = _safe(hit.name[:35])
                     desc = _safe((hit.description or "")[:55].replace("\n", " "))
-                    print(
-                        f"  s={hit.score:.3f}  [{hit.type:18}] {name:35}  {desc}"
-                    )
+                    print(f"  s={hit.score:.3f}  [{hit.type:18}] {name:35}  {desc}")
         finally:
             store.close()
 
