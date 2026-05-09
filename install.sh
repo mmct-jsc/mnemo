@@ -1,0 +1,133 @@
+#!/usr/bin/env bash
+# mnemo installer (Linux / macOS).
+#
+# Idempotent: rerunning on an already-installed setup is a no-op.
+#
+# Steps:
+#   1. Verify Python 3.11+ and `uv` are available.
+#   2. Sync the daemon's dependencies via `uv sync`.
+#   3. Symlink the venv's `mnemo` binary into ~/.local/bin so it's on PATH.
+#   4. Symlink the plugin scaffold into ~/.claude/plugins/mnemo so Claude
+#      Code picks up the hooks, commands, and skills.
+#   5. Run `mnemo init` to register Scope B sources.
+#
+# Flags:
+#   --no-init          Skip step 5.
+#   --no-plugin-link   Skip step 4.
+#   --bin-dir=<path>   Override the install dir for the `mnemo` shim.
+
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
+DAEMON_DIR="$REPO_ROOT/daemon"
+DEFAULT_BIN_DIR="$HOME/.local/bin"
+PLUGIN_DEST="$HOME/.claude/plugins/mnemo"
+
+DO_INIT=1
+DO_PLUGIN_LINK=1
+BIN_DIR="$DEFAULT_BIN_DIR"
+
+for arg in "$@"; do
+    case "$arg" in
+        --no-init) DO_INIT=0 ;;
+        --no-plugin-link) DO_PLUGIN_LINK=0 ;;
+        --bin-dir=*) BIN_DIR="${arg#--bin-dir=}" ;;
+        --help|-h)
+            grep '^#' "$0" | sed 's/^# \?//'
+            exit 0
+            ;;
+        *)
+            echo "unknown flag: $arg (try --help)" >&2
+            exit 2
+            ;;
+    esac
+done
+
+log()   { printf '\033[36m[mnemo]\033[0m %s\n' "$*"; }
+ok()    { printf '\033[32m[ok]\033[0m    %s\n' "$*"; }
+warn()  { printf '\033[33m[warn]\033[0m  %s\n' "$*" >&2; }
+fail()  { printf '\033[31m[fail]\033[0m  %s\n' "$*" >&2; exit 1; }
+
+# --- 1. Prerequisites -----------------------------------------------------
+
+if ! command -v python3 >/dev/null 2>&1; then
+    fail "python3 not found. Install Python 3.11+ first."
+fi
+
+PY_VERSION=$(python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])')
+PY_MAJOR=${PY_VERSION%.*}
+PY_MINOR=${PY_VERSION#*.}
+if [ "$PY_MAJOR" -lt 3 ] || { [ "$PY_MAJOR" -eq 3 ] && [ "$PY_MINOR" -lt 11 ]; }; then
+    fail "Python 3.11+ required (found $PY_VERSION)."
+fi
+ok "Python $PY_VERSION"
+
+if ! command -v uv >/dev/null 2>&1; then
+    warn "uv not found. Install with:"
+    warn "  curl -LsSf https://astral.sh/uv/install.sh | sh"
+    fail "Install uv, then re-run this script."
+fi
+ok "uv $(uv --version | awk '{print $2}')"
+
+# --- 2. Sync daemon deps --------------------------------------------------
+
+log "syncing daemon dependencies (this may take a minute on first run)"
+( cd "$DAEMON_DIR" && uv sync )
+ok "daemon deps installed"
+
+# --- 3. Shim the mnemo binary onto PATH -----------------------------------
+
+VENV_MNEMO="$DAEMON_DIR/.venv/bin/mnemo"
+if [ ! -x "$VENV_MNEMO" ]; then
+    fail "expected venv binary at $VENV_MNEMO but it's missing"
+fi
+
+mkdir -p "$BIN_DIR"
+SHIM="$BIN_DIR/mnemo"
+
+if [ -L "$SHIM" ] && [ "$(readlink "$SHIM")" = "$VENV_MNEMO" ]; then
+    ok "mnemo shim already present at $SHIM"
+else
+    ln -sf "$VENV_MNEMO" "$SHIM"
+    ok "mnemo shim -> $SHIM"
+fi
+
+if ! echo ":$PATH:" | grep -q ":$BIN_DIR:"; then
+    warn "$BIN_DIR is not on PATH."
+    warn "Add this to your shell profile (.bashrc / .zshrc / etc.):"
+    warn "  export PATH=\"$BIN_DIR:\$PATH\""
+fi
+
+# --- 4. Plugin link -------------------------------------------------------
+
+if [ "$DO_PLUGIN_LINK" -eq 1 ]; then
+    mkdir -p "$(dirname "$PLUGIN_DEST")"
+    if [ -L "$PLUGIN_DEST" ] && [ "$(readlink "$PLUGIN_DEST")" = "$REPO_ROOT" ]; then
+        ok "plugin already linked at $PLUGIN_DEST"
+    elif [ -e "$PLUGIN_DEST" ]; then
+        warn "$PLUGIN_DEST exists and is not our symlink; leaving it alone."
+        warn "Move or remove it, then rerun, or pass --no-plugin-link."
+    else
+        ln -s "$REPO_ROOT" "$PLUGIN_DEST"
+        ok "plugin linked: $PLUGIN_DEST -> $REPO_ROOT"
+    fi
+fi
+
+# --- 5. Register default sources ------------------------------------------
+
+if [ "$DO_INIT" -eq 1 ]; then
+    log "registering default Scope B sources"
+    "$SHIM" init || warn "mnemo init failed (you can run it manually later)"
+fi
+
+# --- Done -----------------------------------------------------------------
+
+cat <<EOF
+
+Done. Next steps:
+
+  - If you saw the PATH warning above, add $BIN_DIR to PATH and re-source your shell.
+  - Run 'mnemo reindex' to ingest your existing memory (downloads MiniLM ~22MB on first run).
+  - Run 'mnemo daemon start' to enable the web UI at http://127.0.0.1:7373/.
+  - Restart Claude Code so the plugin loads its hooks and slash commands.
+EOF
