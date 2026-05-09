@@ -1,6 +1,6 @@
-"""End-to-end smoke test: index + embed real memory, then query.
+"""End-to-end smoke test: index + embed real memory, then run retrieval.
 
-Run after ingestion / embed / store changes:
+Run after ingestion / embed / retrieve changes:
 
     uv run python scripts/smoke_ingest.py
 """
@@ -12,7 +12,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from mnemo import ingest, paths
+from mnemo import ingest, paths, retrieve
 from mnemo.embed import Embedder, embed_all_unembedded
 from mnemo.store import Store
 
@@ -32,9 +32,7 @@ def main() -> None:
             t0 = time.time()
             n_new = ingest.register_default_sources(store, paths.claude_home())
             print(f"Registered {n_new} new sources")
-
-            sources = store.list_sources()
-            print(f"Total sources: {len(sources)}")
+            print(f"Total sources: {len(store.list_sources())}")
 
             report = ingest.reindex(store)
             print(
@@ -44,36 +42,37 @@ def main() -> None:
             )
             for path, err in report.errors[:5]:
                 print(f"  ERROR {_safe(path)}: {_safe(err)}")
-
-            counts = store.count_nodes()
-            print(f"Node counts: {counts}")
-
+            print(f"Node counts: {store.count_nodes()}")
             t1 = time.time()
             print(f"Ingestion: {t1 - t0:.2f}s")
 
             embedder = Embedder()
             n_embedded = embed_all_unembedded(store, embedder)
             t2 = time.time()
-            print(f"Embedded {n_embedded} nodes in {t2 - t1:.2f}s "
-                  f"(includes {embedder.dim}-d MiniLM model load)")
+            print(
+                f"Embedded {n_embedded} nodes in {t2 - t1:.2f}s "
+                f"(includes {embedder.dim}-d MiniLM model load)"
+            )
 
-            # Three sample queries hitting different parts of the memory.
             queries = [
                 "no co-author trailer in commit messages",
                 "MQTT broker authentication credentials",
                 "godot child timer cinematic safety",
+                "where do we keep deployment files",
+                "should I always prefer terse responses",
             ]
             for q in queries:
-                vec = embedder.embed_text(q)
-                results = store.vec_search(vec, k=3)
-                print(f"\nQuery: {_safe(q)!r}")
-                for node_id, _idx, _text, dist in results:
-                    node = store.get_node(node_id)
-                    if node is None:
-                        continue
-                    desc = _safe((node.description or "")[:60].replace("\n", " "))
-                    name = _safe(node.name[:35])
-                    print(f"  d={dist:.3f}  [{node.type:18}] {name:35}  {desc}")
+                result = retrieve.query(store, embedder, q, k=5, budget_tokens=400)
+                print(
+                    f"\nQuery: {_safe(q)!r}"
+                    f"   intent={result.intent_tags} tokens_used={result.tokens_used}"
+                )
+                for hit in result.hits:
+                    name = _safe(hit.name[:35])
+                    desc = _safe((hit.description or "")[:55].replace("\n", " "))
+                    print(
+                        f"  s={hit.score:.3f}  [{hit.type:18}] {name:35}  {desc}"
+                    )
         finally:
             store.close()
 
