@@ -2,31 +2,44 @@
 {% block title %} - audit{% endblock %}
 {% block content %}
 <section class="audit">
-  <h2>Recent queries ({{ queries | length }})</h2>
+  <div class="section-head">
+    <h2>Recent queries ({{ queries | length }})</h2>
+    <span class="hint">every retrieval mnemo has run is logged here</span>
+  </div>
   {% if not queries %}
-    <p class="empty">No queries yet. Try the <a href="/">search</a> page.</p>
-  {% endif %}
+    <div class="empty">
+      <p>No queries yet.</p>
+      <p class="hint">Try the <a href="/">search</a> page or run <code>mnemo query</code> from the CLI.</p>
+    </div>
+  {% else %}
   <ul class="query-log">
     {% for q in queries %}
       <li class="query">
         <header>
-          <code class="ts">{{ q.ts }}</code>
-          {% for tag in q.intent_tags %}<span class="tag">{{ tag }}</span>{% endfor %}
+          <code class="ts">#{{ loop.index }}</code>
+          <code class="ts">ts={{ q.ts }}</code>
+          {% for tag in q.intent_tags %}
+            {% if tag != 'none' %}<span class="tag">{{ tag }}</span>{% endif %}
+          {% endfor %}
+          <span class="hint" style="margin-left:auto;">{{ q.retrieved_ids | length }} hit{% if q.retrieved_ids | length != 1 %}s{% endif %}</span>
         </header>
-        <p class="prompt">{{ q.prompt }}</p>
+        <p class="prompt">"{{ q.prompt }}"</p>
+        {% if q.retrieved_ids %}
         <details>
-          <summary>{{ q.retrieved_ids | length }} hits</summary>
+          <summary>Show hits</summary>
           <ul class="hits">
             {% for nid in q.retrieved_ids %}
               <li>
-                <a href="/node/{{ nid }}">{{ nid[:12] }}</a>
                 {% if nid in q.scores %}<span class="score">{{ '%.3f' % q.scores[nid] }}</span>{% endif %}
+                <a href="/node/{{ nid }}">{{ nid[:12] }}</a>
               </li>
             {% endfor %}
           </ul>
         </details>
+        {% endif %}
       </li>
     {% endfor %}
   </ul>
+  {% endif %}
 </section>
 {% endblock %}

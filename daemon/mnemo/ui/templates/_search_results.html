@@ -1,21 +1,28 @@
 <div class="search-meta">
-  intent: {{ result.intent_tags | join(', ') }} &middot;
-  tokens: {{ result.tokens_used }} &middot;
-  hits: {{ result.hits | length }}
+  <span><strong>{{ result.hits | length }}</strong> hits</span>
+  <span><strong>{{ result.tokens_used }}</strong> tokens used</span>
+  <span>intent: <strong>{{ result.intent_tags | join(', ') }}</strong></span>
 </div>
+{% if not result.hits %}
+  <div class="search-empty">
+    <p>No matching memory yet.</p>
+    <p class="hint">Try simpler keywords or rephrase the question.</p>
+  </div>
+{% else %}
 <ul class="hits">
   {% for h in result.hits %}
     <li class="hit">
       <a href="/node/{{ h.node_id }}">
         <span class="score">{{ '%.3f' % h.score }}</span>
-        <span class="badge type-{{ h.type }}">{{ h.type }}</span>
+        <span class="badge type-{{ h.type }}">{{ h.type | replace('memory_','') | replace('_',' ') }}</span>
         <span class="name">{{ h.name }}</span>
       </a>
-      <p class="desc">{{ h.description or "" }}</p>
+      {% if h.description %}<p class="desc">{{ h.description }}</p>{% endif %}
       {% if h.body %}
-        <details class="body"><summary>body</summary><pre>{{ h.body }}</pre></details>
+        <details class="body"><summary>Show body</summary><pre>{{ h.body }}</pre></details>
       {% endif %}
       <code class="cite">{{ h.citation }}</code>
     </li>
   {% endfor %}
 </ul>
+{% endif %}

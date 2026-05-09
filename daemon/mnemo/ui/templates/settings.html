@@ -4,17 +4,17 @@
 <section class="settings">
   <h2>Retrieval settings</h2>
   <p class="hint">
-    These are read-only in the UI for now. Override via module attributes
-    in <code>mnemo.retrieve</code> or via daemon environment.
+    Read-only here for now. Override via module attributes in
+    <code>mnemo.retrieve</code> or via daemon environment.
   </p>
 
   <h3>Scoring weights</h3>
   <table>
-    <tr><td>alpha (vector)</td><td>{{ '%.2f' % weights.alpha }}</td></tr>
-    <tr><td>beta (graph)</td><td>{{ '%.2f' % weights.beta }}</td></tr>
+    <tr><td>alpha (vector cosine)</td><td>{{ '%.2f' % weights.alpha }}</td></tr>
+    <tr><td>beta (graph proximity)</td><td>{{ '%.2f' % weights.beta }}</td></tr>
     <tr><td>gamma (recency)</td><td>{{ '%.2f' % weights.gamma }}</td></tr>
-    <tr><td>delta (type)</td><td>{{ '%.2f' % weights.delta }}</td></tr>
-    <tr><td>epsilon (project)</td><td>{{ '%.2f' % weights.epsilon }}</td></tr>
+    <tr><td>delta (type priority)</td><td>{{ '%.2f' % weights.delta }}</td></tr>
+    <tr><td>epsilon (project scope)</td><td>{{ '%.2f' % weights.epsilon }}</td></tr>
   </table>
 
   <h3>Defaults</h3>

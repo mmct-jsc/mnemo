@@ -3,17 +3,22 @@
 {% block content %}
 <section class="sources" x-data="{ running: false, msg: '' }">
   <header>
-    <h2>Sources ({{ sources | length }})</h2>
-    <button @click="
+    <h2>Sources</h2>
+    <span class="hint">{{ sources | length }} registered</span>
+    <button class="primary" @click="
       running = true; msg = 'reindexing...';
       fetch('/reindex', { method: 'POST' })
         .then(r => r.json())
         .then(d => { msg = `added=${d.added} updated=${d.updated} unchanged=${d.unchanged} removed=${d.removed}`; running = false; })
         .catch(e => { msg = String(e); running = false; });
-    " :disabled="running">Reindex all</button>
+    " :disabled="running">
+      <span x-show="!running">Reindex all</span>
+      <span x-show="running" x-cloak>reindexing...</span>
+    </button>
     <span class="msg" x-text="msg"></span>
   </header>
 
+  {% if sources %}
   <table>
     <thead>
       <tr>
@@ -28,7 +33,7 @@
       {% for s in sources %}
         <tr>
           <td><code>{{ s.path }}</code></td>
-          <td><span class="badge">{{ s.kind }}</span></td>
+          <td><span class="badge">{{ s.kind | replace('_',' ') }}</span></td>
           <td>{{ s.project_key or "" }}</td>
           <td>{{ s.last_indexed_at or "never" }}</td>
           <td>{{ "yes" if s.enabled else "no" }}</td>
@@ -36,9 +41,11 @@
       {% endfor %}
     </tbody>
   </table>
-
-  {% if not sources %}
-    <p class="empty">No sources registered. Add via <code>mnemo source add</code> or <code>mnemo init</code>.</p>
+  {% else %}
+    <div class="empty">
+      <p>No sources registered.</p>
+      <p class="hint">Run <code>mnemo init</code> or <code>mnemo source add &lt;path&gt; --kind memory_dir</code>.</p>
+    </div>
   {% endif %}
 </section>
 {% endblock %}

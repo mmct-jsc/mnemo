@@ -2,57 +2,199 @@
 {% block title %} - graph{% endblock %}
 {% block head_extra %}
 <script src="https://unpkg.com/cytoscape@3.30.4/dist/cytoscape.min.js"></script>
+<script src="https://unpkg.com/layout-base/layout-base.js"></script>
+<script src="https://unpkg.com/cose-base/cose-base.js"></script>
+<script src="https://unpkg.com/cytoscape-fcose/cytoscape-fcose.js"></script>
 {% endblock %}
-{% block content %}
-<section class="graph-pane" x-data="{ selected: null }">
-  <div id="cy"></div>
-  <aside class="side" x-show="selected" x-cloak>
-    <button @click="selected = null" class="close">x</button>
-    <h3 x-text="selected?.name"></h3>
-    <p class="badge" x-text="selected?.type"></p>
-    <p x-text="selected?.project"></p>
-    <a class="open" :href="'/node/' + selected?.id">Open node</a>
-  </aside>
-</section>
+{% block layout %}
+<main class="full">
+  <section class="graph-pane" x-data="{ selected: null }">
+    <div id="cy"></div>
+
+    <div class="graph-controls" x-data="{
+      types: {
+        memory_feedback: true, memory_user: true, memory_project: true,
+        memory_reference: true, project_doc: true, plan_doc: true
+      },
+      apply() {
+        const cy = window.__cy;
+        if (!cy) return;
+        cy.nodes().forEach(n => {
+          const t = n.data('type');
+          const visible = this.types[t] !== false;
+          n.style('display', visible ? 'element' : 'none');
+        });
+        cy.edges().forEach(e => {
+          e.style('display',
+            (e.source().visible() && e.target().visible()) ? 'element' : 'none');
+        });
+      }
+    }">
+      <h3>Filter by type</h3>
+      <label class="filter">
+        <input type="checkbox" x-model="types.memory_feedback" @change="apply()">
+        <span class="swatch" style="background:#f0a47c"></span> feedback
+      </label>
+      <label class="filter">
+        <input type="checkbox" x-model="types.memory_project" @change="apply()">
+        <span class="swatch" style="background:#8db6f0"></span> project
+      </label>
+      <label class="filter">
+        <input type="checkbox" x-model="types.memory_user" @change="apply()">
+        <span class="swatch" style="background:#b6e88c"></span> user
+      </label>
+      <label class="filter">
+        <input type="checkbox" x-model="types.memory_reference" @change="apply()">
+        <span class="swatch" style="background:#d790f0"></span> reference
+      </label>
+      <label class="filter">
+        <input type="checkbox" x-model="types.project_doc" @change="apply()">
+        <span class="swatch" style="background:#f0d990"></span> project doc
+      </label>
+      <label class="filter">
+        <input type="checkbox" x-model="types.plan_doc" @change="apply()">
+        <span class="swatch" style="background:#9396f0"></span> plan doc
+      </label>
+      <div class="layout-row">
+        <button @click="window.__relayout && window.__relayout('fcose')">force</button>
+        <button @click="window.__relayout && window.__relayout('concentric')">concentric</button>
+        <button @click="window.__relayout && window.__relayout('circle')">circle</button>
+      </div>
+    </div>
+
+    <div class="graph-help">
+      <strong>How to read this</strong><br>
+      Each <em>dot</em> is a memory entry. Lines between dots mean the two
+      entries surface together when you ask related questions, or are linked
+      explicitly. Click a dot for details. Drag the canvas to pan,
+      <kbd>scroll</kbd> to zoom.
+    </div>
+
+    <div class="graph-legend">
+      <strong>Edge meaning</strong>
+      <div>thicker = stronger relationship</div>
+      <div>color matches the source node</div>
+    </div>
+
+    <aside class="side" x-show="selected" x-cloak @click.outside="selected = null">
+      <button @click="selected = null" class="close">×</button>
+      <div class="badges">
+        <span class="badge" :class="'type-' + selected?.type" x-text="(selected?.type || '').replace('memory_','').replace('_',' ')"></span>
+      </div>
+      <h3 x-text="selected?.name"></h3>
+      <p class="hint" x-text="selected?.project || 'global'"></p>
+      <p x-show="selected?.description" x-text="selected?.description"></p>
+      <a class="open" :href="'/node/' + selected?.id">Open node</a>
+    </aside>
+  </section>
+</main>
+
 <script>
 (async () => {
+  if (window.cytoscape && window.cytoscapeFcose) {
+    cytoscape.use(cytoscapeFcose);
+  }
   const r = await fetch("/ui/graph-data");
   const data = await r.json();
+
+  const TYPE_COLORS = {
+    memory_feedback:  '#f0a47c',
+    memory_user:      '#b6e88c',
+    memory_project:   '#8db6f0',
+    memory_reference: '#d790f0',
+    project_doc:      '#f0d990',
+    plan_doc:         '#9396f0',
+    session_summary:  '#7ee7e0',
+  };
+
+  // Pre-compute degree so we can size nodes proportionally.
+  const degree = {};
+  for (const e of data.elements) {
+    if (e.data.source) {
+      degree[e.data.source] = (degree[e.data.source] || 0) + 1;
+      degree[e.data.target] = (degree[e.data.target] || 0) + 1;
+    }
+  }
+  for (const e of data.elements) {
+    if (e.data.id !== undefined) {
+      e.data.deg = degree[e.data.id] || 0;
+    }
+  }
+
   const cy = cytoscape({
     container: document.getElementById("cy"),
     elements: data.elements,
+    minZoom: 0.2,
+    maxZoom: 3,
     style: [
-      { selector: "node", style: {
-          label: "data(label)",
-          "background-color": "#5d8aa8",
-          "color": "#e6edf3",
-          "font-size": "10px",
-          "text-valign": "bottom",
-          "text-margin-y": 4,
+      { selector: 'node', style: {
+          label: 'data(label)',
+          'background-color': (n) => TYPE_COLORS[n.data('type')] || '#7ee7e0',
+          'background-opacity': 0.92,
+          color: '#e6edf3',
+          'font-size': '11px',
+          'font-family': 'ui-monospace, Menlo, Consolas, monospace',
+          'text-valign': 'bottom',
+          'text-margin-y': 6,
+          'text-outline-color': '#0b0d10',
+          'text-outline-width': 2,
+          width: (n) => 18 + Math.min(36, (n.data('deg') || 0) * 1.5),
+          height: (n) => 18 + Math.min(36, (n.data('deg') || 0) * 1.5),
+          'border-width': 0,
+          'transition-property': 'background-color, border-color, border-width, opacity',
+          'transition-duration': '180ms',
       }},
-      { selector: "node[type='memory_feedback']", style: { "background-color": "#d97757" }},
-      { selector: "node[type='memory_user']",     style: { "background-color": "#a8d97c" }},
-      { selector: "node[type='memory_project']",  style: { "background-color": "#5d8aa8" }},
-      { selector: "node[type='memory_reference']", style: { "background-color": "#c777d9" }},
-      { selector: "node[type='project_doc']",     style: { "background-color": "#d9c777" }},
-      { selector: "node[type='plan_doc']",        style: { "background-color": "#777ad9" }},
-      { selector: "edge", style: {
-          width: 1,
-          "line-color": "#444",
-          "curve-style": "bezier",
-          "target-arrow-shape": "triangle",
-          "target-arrow-color": "#444",
+      { selector: 'node:selected', style: {
+          'border-color': '#7ee7e0',
+          'border-width': 3,
       }},
-      { selector: "edge[relation='applies_to']",     style: { "line-color": "#5d8aa8", "target-arrow-color": "#5d8aa8" }},
-      { selector: "edge[relation='supersedes']",     style: { "line-color": "#d97757", "target-arrow-color": "#d97757" }},
-      { selector: "edge[relation='co_occurs_with']", style: { "line-color": "#666", "target-arrow-color": "#666" }},
+      { selector: 'node.dim', style: { opacity: 0.18 }},
+      { selector: 'node.hl',  style: { 'border-color': '#7ee7e0', 'border-width': 3 }},
+
+      { selector: 'edge', style: {
+          width: (e) => 0.6 + Math.min(2.8, (e.data('weight') || 0.1) * 0.8),
+          'line-color': (e) => {
+              const src = e.source();
+              return TYPE_COLORS[src.data('type')] || '#444';
+          },
+          'line-opacity': 0.55,
+          'curve-style': 'bezier',
+          'target-arrow-shape': 'none',
+          'transition-property': 'line-opacity, line-color, width',
+          'transition-duration': '180ms',
+      }},
+      { selector: 'edge.dim', style: { 'line-opacity': 0.05 }},
+      { selector: 'edge.hl',  style: { 'line-opacity': 0.95, width: 2.5 }},
     ],
-    layout: { name: "cose", animate: false, padding: 20 },
+    layout: { name: 'fcose', animate: true, animationDuration: 500,
+              nodeRepulsion: 8000, idealEdgeLength: 100, padding: 40 },
   });
-  cy.on("tap", "node", (e) => {
+
+  window.__cy = cy;
+  window.__relayout = (name) => {
+    cy.layout({
+      name,
+      animate: true, animationDuration: 500, padding: 40,
+      ...(name === 'fcose' ? { nodeRepulsion: 8000, idealEdgeLength: 100 } : {}),
+      ...(name === 'concentric' ? { concentric: (n) => n.degree(), levelWidth: () => 1 } : {}),
+    }).run();
+  };
+
+  cy.on('tap', 'node', (e) => {
     const d = e.target.data();
-    const root = document.querySelector("[x-data]");
+    const root = document.querySelector('[x-data]');
     Alpine.$data(root).selected = d;
+
+    // Highlight neighbors, dim everything else.
+    cy.elements().removeClass('hl').addClass('dim');
+    e.target.removeClass('dim').addClass('hl');
+    e.target.connectedEdges().removeClass('dim').addClass('hl');
+    e.target.neighborhood().nodes().removeClass('dim').addClass('hl');
+  });
+  cy.on('tap', (e) => {
+    if (e.target === cy) {
+      cy.elements().removeClass('hl dim');
+    }
   });
 })();
 </script>
