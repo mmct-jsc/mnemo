@@ -321,6 +321,54 @@ class Store:
             ).fetchone()
             return self._row_to_node(row) if row else None
 
+    def get_nodes_by_ids(self, ids: list[str]) -> dict[str, Node]:
+        """Batched lookup. Returns ``{id: Node}`` for ids that exist.
+
+        One SELECT instead of N. Use in retrieval scoring loops where a
+        per-candidate ``get_node`` call would be O(K) round-trips.
+        """
+        if not ids:
+            return {}
+        with self._lock:
+            placeholders = ",".join("?" * len(ids))
+            rows = self.conn.execute(
+                f"SELECT * FROM nodes WHERE id IN ({placeholders})", ids
+            ).fetchall()
+        return {row["id"]: self._row_to_node(row) for row in rows}
+
+    def get_edges_for_nodes(
+        self,
+        node_ids: list[str],
+        *,
+        relations: tuple[str, ...] | None = None,
+    ) -> list[Edge]:
+        """Batched: every edge with src_id OR dst_id in ``node_ids``.
+
+        Optionally filter by relations. One SELECT regardless of fan-out.
+        """
+        if not node_ids:
+            return []
+        placeholders = ",".join("?" * len(node_ids))
+        sql = f"SELECT * FROM edges WHERE src_id IN ({placeholders}) OR dst_id IN ({placeholders})"
+        params: list[object] = list(node_ids) + list(node_ids)
+        if relations:
+            rel_ph = ",".join("?" * len(relations))
+            sql += f" AND relation IN ({rel_ph})"
+            params.extend(relations)
+        with self._lock:
+            rows = self.conn.execute(sql, params).fetchall()
+        return [
+            Edge(
+                src_id=r["src_id"],
+                dst_id=r["dst_id"],
+                relation=r["relation"],
+                weight=r["weight"],
+                source=r["source"],
+                created_at=r["created_at"],
+            )
+            for r in rows
+        ]
+
     def list_nodes(
         self,
         *,

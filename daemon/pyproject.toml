@@ -1,6 +1,6 @@
 [project]
 name = "mnemo"
-version = "0.1.0"
+version = "1.0.0"
 description = "Local-first knowledge memory system for Claude Code"
 readme = "../README.md"
 license = { text = "MIT" }

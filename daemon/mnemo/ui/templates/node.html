@@ -15,7 +15,6 @@
   </dl>
 
   <form @submit.prevent="
-    error = null; saved = false;
     fetch('/nodes/{{ node.id }}', {
       method: 'PUT',
       headers: {'Content-Type': 'application/json'},
@@ -23,7 +22,14 @@
         description: $refs.description.value,
         body: $refs.body.value
       })
-    }).then(r => r.ok ? (saved = true) : r.text().then(t => error = t));
+    }).then(r => {
+      if (r.ok) {
+        window.toast('Node saved', 'success');
+        saved = true;
+      } else {
+        return r.text().then(t => { window.toast('Save failed: ' + t, 'error'); error = t; });
+      }
+    }).catch(e => window.toast('Save failed: ' + e, 'error'));
   ">
     <label>description
       <input type="text" x-ref="description" value="{{ node.description or '' }}">

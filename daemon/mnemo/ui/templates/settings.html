@@ -57,8 +57,7 @@
       <span x-show="!saving">Save</span><span x-show="saving" x-cloak>saving...</span>
     </button>
     <button @click="reset()" :disabled="saving">Reset to defaults</button>
-    <span class="ok" x-show="message" x-text="message" x-cloak></span>
-    <span class="err" x-show="error" x-text="error" x-cloak></span>
+    <span class="hint" x-show="dirty" x-cloak>unsaved changes</span>
   </div>
 </section>
 
@@ -82,7 +81,7 @@ function settingsForm() {
     error: '',
     init() {},
     async save() {
-      this.saving = true; this.message = ''; this.error = '';
+      this.saving = true;
       try {
         const r = await fetch('/config', {
           method: 'PUT',
@@ -98,11 +97,10 @@ function settingsForm() {
         this.weights = data.scoring;
         this.defaults = data.defaults;
         this.recency_half_life_days = data.recency_half_life_days;
-        this.message = 'saved';
         this.dirty = false;
-        setTimeout(() => this.message = '', 2000);
+        window.toast('Settings saved', 'success');
       } catch (e) {
-        this.error = String(e);
+        window.toast('Save failed: ' + e, 'error');
       } finally {
         this.saving = false;
       }
@@ -116,9 +114,10 @@ function settingsForm() {
         this.weights = data.scoring;
         this.defaults = data.defaults;
         this.recency_half_life_days = data.recency_half_life_days;
-        this.message = 'reset';
         this.dirty = false;
-        setTimeout(() => this.message = '', 2000);
+        window.toast('Settings reset to defaults', 'success');
+      } catch (e) {
+        window.toast('Reset failed: ' + e, 'error');
       } finally {
         this.saving = false;
       }

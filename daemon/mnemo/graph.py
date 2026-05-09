@@ -136,15 +136,24 @@ def compute_graph_scores(
     Nodes that are themselves candidates are excluded from the result so the
     final scorer can keep vector and graph contributions cleanly separated.
     Output values are capped at 1.0 so they don't outweigh vector cosine.
+
+    Implementation: one batched SELECT to fetch every relevant edge in a
+    single round-trip, then group in Python. With K candidates and R
+    relations this used to do K*R*2 SELECTs; it now does 1.
     """
+    if not candidate_scores:
+        return {}
     out: dict[str, float] = defaultdict(float)
     symmetric = {"applies_to", "co_occurs_with"}
-    for src_id, score in candidate_scores.items():
-        for rel in relations:
-            for e in store.get_edges(src_id=src_id, relation=rel):
-                out[e.dst_id] += score * hop_decay * e.weight
-            if rel in symmetric:
-                for e in store.get_edges(dst_id=src_id, relation=rel):
-                    out[e.src_id] += score * hop_decay * e.weight
+    candidate_ids = list(candidate_scores)
+    edges = store.get_edges_for_nodes(candidate_ids, relations=relations)
+    candidate_set = set(candidate_ids)
+    for e in edges:
+        # Outgoing edges contribute to dst when src is a candidate.
+        if e.src_id in candidate_set:
+            out[e.dst_id] += candidate_scores[e.src_id] * hop_decay * e.weight
+        # Incoming edges contribute back to src for symmetric relations.
+        if e.relation in symmetric and e.dst_id in candidate_set:
+            out[e.src_id] += candidate_scores[e.dst_id] * hop_decay * e.weight
 
-    return {nid: min(v, 1.0) for nid, v in out.items() if nid not in candidate_scores}
+    return {nid: min(v, 1.0) for nid, v in out.items() if nid not in candidate_set}

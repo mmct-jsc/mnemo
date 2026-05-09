@@ -63,17 +63,68 @@ All six are editable from the UI at `/settings` and persist to
 
 ## Query latency
 
-20 sequential queries on a 38-node store, after the embedder is warm:
+40 sequential queries on a 38-node store, after the embedder is warm:
 
 | metric | value |
 |---|---|
-| min    |   18 ms |
-| median |   20 ms |
-| p95    |   23 ms |
-| max    |   23 ms |
+| min    |   15 ms |
+| median |   17 ms |
+| p95    |   22 ms |
 
 The first query in a process pays an extra ~2 s for the MiniLM model load
 (or ~22 s on first-ever run including the HuggingFace download).
+
+### Where the time goes (cProfile, 20 queries cumulative)
+
+| layer | time | per-query | comment |
+|---|---|---|---|
+| Embedder.embed_batch (PyTorch) | 382 ms | 19 ms | dominant; bound by MiniLM forward pass on CPU |
+| graph.compute_graph_scores | 7 ms | 0.4 ms | one batched SELECT, group in Python |
+| store.get_nodes_by_ids | 2 ms | 0.1 ms | one SELECT for all candidates |
+| retrieval glue (scoring, compress) | 2 ms | 0.1 ms |  |
+| **total** | ~545 ms | **~17 ms** | |
+
+87% of query time is the embedder. The rest is sub-millisecond per call.
+This means the only way to get materially faster is GPU inference or a
+cheaper model — both out of scope for v1.
+
+## Optimization tips applied
+
+The first cut of mnemo had two N+1 query patterns that each cost a few
+milliseconds per retrieval. Both are now batched:
+
+1. **`Store.get_nodes_by_ids(ids)`** — one `SELECT * FROM nodes WHERE id IN (...)`
+   instead of K per-node `SELECT`s in `retrieve.query`'s scoring loop.
+2. **`Store.get_edges_for_nodes(node_ids, relations)`** — one
+   `SELECT * FROM edges WHERE src_id IN (...) OR dst_id IN (...)` instead of
+   `K * R * 2` calls inside `graph.compute_graph_scores`. With K=40
+   candidates and R=4 relations that's 320 SELECTs collapsing into 1.
+
+Effect: median query latency went from **20.4 ms to 17.3 ms** (15%) and min
+from 18.1 ms to 15.3 ms.
+
+## Tips and tricks
+
+These are useful for tuning mnemo for *your* data and hardware:
+
+- **Adjust scoring weights** for your usage. Edit them at `/settings` or
+  in `~/.claude/mnemo/settings.json`. The audit log at `/audit-page`
+  lets you see which queries returned poor results - if zeta-friendly
+  queries (exact lexical matches) score worse than expected, raise zeta;
+  if cross-project transfer feels weak, raise beta.
+- **Drop `--no-embed` for fast reindex** when you only changed metadata
+  (frontmatter, name, description). The relational store updates without
+  re-running MiniLM.
+- **Watch your audit log** for `intent: ['none']` queries that returned
+  the wrong top hit. If a phrasing should fire `feedback-recall` or
+  `debug` but doesn't, edit the regex in `mnemo.intent.INTENT_PATTERNS`.
+- **Embed in batches** if you're indexing thousands of nodes. The current
+  per-node `embed_node` uses MiniLM's batch API internally for chunks but
+  not across nodes; for a future "bulk import" path, batch chunks across
+  nodes for ~3x throughput.
+- **Bigger machines: GPU embeddings.** sentence-transformers will use CUDA
+  automatically if `torch` sees a device. On a modest GPU this collapses
+  query latency to under 5 ms.
 
 ## Reindex throughput
 

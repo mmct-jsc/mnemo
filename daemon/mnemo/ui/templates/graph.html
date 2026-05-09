@@ -114,7 +114,6 @@
           <div class="detail-actions">
             <a class="open" :href="'/node/' + selected.id">Open node</a>
             <button @click="copyCitation()">Copy citation</button>
-            <span class="ok" x-show="copyMsg" x-text="copyMsg" x-cloak></span>
           </div>
           <code class="citation" x-text="'[mnemo:' + selected.id + ']'"></code>
         </div>
@@ -219,9 +218,8 @@ function formatRelative(ts) {
     if (!this.selected) return;
     const cite = '[mnemo:' + this.selected.id + ']';
     navigator.clipboard.writeText(cite).then(() => {
-      this.copyMsg = 'copied';
-      setTimeout(() => this.copyMsg = '', 1500);
-    });
+      window.toast('Citation copied: ' + cite, 'success');
+    }).catch(e => window.toast('Copy failed: ' + e, 'error'));
   };
 
   cy.on('tap', 'node', async (e) => {

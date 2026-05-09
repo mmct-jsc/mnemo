@@ -95,11 +95,14 @@ def query(
     graph_scores = graph.compute_graph_scores(store, vec_scores)
 
     # 4. Score each candidate (union of vector and graph).
+    # Single batched SELECT for all candidate nodes - cleaner and faster than
+    # per-candidate get_node() calls.
     now = time.time()
-    candidate_ids = set(vec_scores) | set(graph_scores)
+    candidate_ids = list(set(vec_scores) | set(graph_scores))
+    nodes_by_id = store.get_nodes_by_ids(candidate_ids)
     scored: list[ScoredHit] = []
     for nid in candidate_ids:
-        node = store.get_node(nid)
+        node = nodes_by_id.get(nid)
         if node is None:
             continue
         s = (

@@ -1,21 +1,32 @@
 {% extends "base.html" %}
 {% block title %} - sources{% endblock %}
 {% block content %}
-<section class="sources" x-data="{ running: false, msg: '' }">
+<section class="sources" x-data="{ running: false }">
   <header>
     <h2>Sources</h2>
     <span class="hint">{{ sources | length }} registered</span>
     <button class="primary" @click="
-      running = true; msg = 'reindexing...';
+      running = true;
+      window.toast('Reindexing... (re-embedding can take a few seconds per node)', 'info');
       fetch('/reindex', { method: 'POST' })
         .then(r => r.json())
-        .then(d => { msg = `added=${d.added} updated=${d.updated} unchanged=${d.unchanged} removed=${d.removed}`; running = false; })
-        .catch(e => { msg = String(e); running = false; });
+        .then(d => {
+          const total = d.added + d.updated + d.unchanged;
+          if (d.errors && d.errors.length) {
+            window.toast('Reindex finished with ' + d.errors.length + ' errors', 'warn');
+          } else if (d.added || d.updated || d.removed) {
+            window.toast('Reindex done: +' + d.added + ' new, ~' + d.updated + ' updated, -' + d.removed + ' removed', 'success');
+          } else {
+            window.toast('All ' + total + ' nodes already up to date', 'success');
+          }
+          running = false;
+          setTimeout(() => location.reload(), 600);
+        })
+        .catch(e => { window.toast('Reindex failed: ' + e, 'error'); running = false; });
     " :disabled="running">
       <span x-show="!running">Reindex all</span>
       <span x-show="running" x-cloak>reindexing...</span>
     </button>
-    <span class="msg" x-text="msg"></span>
   </header>
 
   {% if sources %}

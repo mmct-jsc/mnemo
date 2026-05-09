@@ -8,11 +8,19 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%237ee7e0'/%3E%3Ctext x='8' y='12' text-anchor='middle' fill='%230b0d10' font-family='monospace' font-weight='700' font-size='10'%3EM%3C/text%3E%3C/svg%3E">
   <script src="https://unpkg.com/htmx.org@1.9.12" defer></script>
   <script src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js" defer></script>
+  <script defer>
+    // Tiny toast bus: dispatch a CustomEvent('mnemo-toast', { detail: { message, level } })
+    // anywhere in the app. The container in base.html catches it.
+    window.toast = (message, level = 'info', duration = 10000) => {
+      document.dispatchEvent(new CustomEvent('mnemo-toast',
+        { detail: { message, level, duration } }));
+    };
+  </script>
   {% block head_extra %}{% endblock %}
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">mnemo</div>
+    <a href="/" class="brand" aria-label="mnemo home">mnemo</a>
     <nav>
       <a href="/" class="{% if page == 'index' %}active{% endif %}">Search</a>
       <a href="/graph" class="{% if page == 'graph' %}active{% endif %}">Graph</a>
@@ -29,5 +37,38 @@
     {% block content %}{% endblock %}
   </main>
   {% endblock %}
+
+  <!-- Toast container: listens for the global 'mnemo-toast' event. -->
+  <div class="toast-stack" x-data="toastStack()" @mnemo-toast.document="add($event.detail)">
+    <template x-for="t in items" :key="t.id">
+      <div class="toast" :class="'toast-' + t.level" @click="dismiss(t.id)" x-cloak>
+        <span class="toast-icon" x-text="iconFor(t.level)"></span>
+        <span class="toast-msg" x-text="t.message"></span>
+        <button class="toast-close" @click.stop="dismiss(t.id)" aria-label="dismiss">×</button>
+      </div>
+    </template>
+  </div>
+
+  <script>
+    function toastStack() {
+      return {
+        items: [],
+        nextId: 1,
+        iconFor(level) { return ({ success: '✓', error: '!', info: 'i', warn: '⚠' })[level] || 'i'; },
+        add(detail) {
+          const id = this.nextId++;
+          const t = { id, level: detail.level || 'info', message: detail.message || '' };
+          this.items.push(t);
+          const duration = detail.duration ?? 10000;
+          if (duration > 0) {
+            setTimeout(() => this.dismiss(id), duration);
+          }
+        },
+        dismiss(id) {
+          this.items = this.items.filter(x => x.id !== id);
+        }
+      };
+    }
+  </script>
 </body>
 </html>
