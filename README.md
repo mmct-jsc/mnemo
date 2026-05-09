@@ -1,5 +1,10 @@
 # mnemo
 
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Tests](https://img.shields.io/badge/tests-219_passing-brightgreen.svg)](daemon/tests/)
+[![ruff](https://img.shields.io/badge/lint-ruff-orange.svg)](https://github.com/astral-sh/ruff)
+
 Local-first knowledge memory system for Claude Code. Aggregates your Claude memory and project knowledge into a typed graph, retrieves it on demand, and ships it back as token-budgeted context.
 
 ```
@@ -34,7 +39,7 @@ Requires Python 3.11+ and [uv](https://github.com/astral-sh/uv).
 
 ```bash
 # Install
-git clone https://github.com/<your-org>/mnemo.git
+git clone https://github.com/mnemo-dev/mnemo.git
 cd mnemo
 ./install.sh    # or .\install.ps1 on Windows
 
@@ -45,7 +50,13 @@ mnemo reindex
 mnemo ui
 ```
 
-The plugin auto-registers in `~/.claude/plugins/`. Restart Claude Code; the next session will see mnemo's hooks fire automatically.
+The install script handles three things in one go:
+
+1. Syncs the daemon dependencies via `uv sync`.
+2. Drops a `mnemo` shim onto your PATH (`~/.local/bin/mnemo`).
+3. Links the plugin into `~/.claude/plugins/mnemo/` so Claude Code picks up the hooks, slash commands, and skills.
+
+Restart Claude Code after install; the next session will see mnemo's hooks fire automatically.
 
 ## Slash commands
 
@@ -72,7 +83,10 @@ mnemo ships seven systematic workflows that pull project-specific memory at ever
 
 ## Architecture
 
-See [docs/plans/2026-05-09-mnemo-design.md](docs/plans/2026-05-09-mnemo-design.md) for the full design.
+- [docs/architecture.md](docs/architecture.md) — short tour of the three tiers, data model, retrieval algorithm, and what we deliberately don't do.
+- [docs/plans/2026-05-09-mnemo-design.md](docs/plans/2026-05-09-mnemo-design.md) — full design with rationale.
+- [docs/workflows/index.md](docs/workflows/index.md) — guided summaries of the seven workflow skills.
+- [docs/examples/sample-queries.md](docs/examples/sample-queries.md) — real queries against a real `~/.claude/` memory, with the actual scored hits.
 
 ## Contributing
 
