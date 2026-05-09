@@ -1,0 +1,63 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+*.egg
+build/
+dist/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# uv
+# (commit uv.lock for reproducible installs)
+
+# Test / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.hypothesis/
+
+# Type checkers
+.mypy_cache/
+.pyre/
+.pytype/
+.ruff_cache/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+.directory
+
+# Env / secrets
+.env
+.env.local
+*.pem
+*.key
+
+# mnemo runtime artifacts (these live under ~/.claude/mnemo/, not in repo, but defense-in-depth)
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Local Claude scratch
+.claude/settings.local.json
