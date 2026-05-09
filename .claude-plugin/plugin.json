@@ -1,0 +1,50 @@
+{
+  "name": "mnemo",
+  "version": "0.1.0",
+  "description": "Local-first knowledge memory for Claude Code: aggregate memory across projects, retrieve via hybrid Graph-RAG, and inject budget-capped context into every session.",
+  "author": "mnemo contributors",
+  "license": "MIT",
+  "homepage": "https://github.com/mnemo-dev/mnemo",
+  "skills": "skills/",
+  "commands": "commands/",
+  "hooks": {
+    "SessionStart": [
+      {
+        "command": "hooks/session-start.sh",
+        "platforms": ["linux", "darwin"]
+      },
+      {
+        "command": "hooks/session-start.ps1",
+        "platforms": ["win32"]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "command": "hooks/user-prompt-submit.sh",
+        "platforms": ["linux", "darwin"]
+      },
+      {
+        "command": "hooks/user-prompt-submit.ps1",
+        "platforms": ["win32"]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "command": "hooks/post-tool-use.sh",
+        "platforms": ["linux", "darwin"]
+      },
+      {
+        "matcher": "Edit|Write",
+        "command": "hooks/post-tool-use.ps1",
+        "platforms": ["win32"]
+      }
+    ]
+  },
+  "config": {
+    "daemon_url": "http://127.0.0.1:7373",
+    "default_budget_tokens": 800,
+    "default_k": 5,
+    "auto_inject": true
+  }
+}
