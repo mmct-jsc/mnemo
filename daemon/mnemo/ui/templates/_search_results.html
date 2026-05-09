@@ -1,0 +1,21 @@
+<div class="search-meta">
+  intent: {{ result.intent_tags | join(', ') }} &middot;
+  tokens: {{ result.tokens_used }} &middot;
+  hits: {{ result.hits | length }}
+</div>
+<ul class="hits">
+  {% for h in result.hits %}
+    <li class="hit">
+      <a href="/node/{{ h.node_id }}">
+        <span class="score">{{ '%.3f' % h.score }}</span>
+        <span class="badge type-{{ h.type }}">{{ h.type }}</span>
+        <span class="name">{{ h.name }}</span>
+      </a>
+      <p class="desc">{{ h.description or "" }}</p>
+      {% if h.body %}
+        <details class="body"><summary>body</summary><pre>{{ h.body }}</pre></details>
+      {% endif %}
+      <code class="cite">{{ h.citation }}</code>
+    </li>
+  {% endfor %}
+</ul>

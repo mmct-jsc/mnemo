@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %} - graph{% endblock %}
+{% block head_extra %}
+<script src="https://unpkg.com/cytoscape@3.30.4/dist/cytoscape.min.js"></script>
+{% endblock %}
+{% block content %}
+<section class="graph-pane" x-data="{ selected: null }">
+  <div id="cy"></div>
+  <aside class="side" x-show="selected" x-cloak>
+    <button @click="selected = null" class="close">x</button>
+    <h3 x-text="selected?.name"></h3>
+    <p class="badge" x-text="selected?.type"></p>
+    <p x-text="selected?.project"></p>
+    <a class="open" :href="'/node/' + selected?.id">Open node</a>
+  </aside>
+</section>
+<script>
+(async () => {
+  const r = await fetch("/ui/graph-data");
+  const data = await r.json();
+  const cy = cytoscape({
+    container: document.getElementById("cy"),
+    elements: data.elements,
+    style: [
+      { selector: "node", style: {
+          label: "data(label)",
+          "background-color": "#5d8aa8",
+          "color": "#e6edf3",
+          "font-size": "10px",
+          "text-valign": "bottom",
+          "text-margin-y": 4,
+      }},
+      { selector: "node[type='memory_feedback']", style: { "background-color": "#d97757" }},
+      { selector: "node[type='memory_user']",     style: { "background-color": "#a8d97c" }},
+      { selector: "node[type='memory_project']",  style: { "background-color": "#5d8aa8" }},
+      { selector: "node[type='memory_reference']", style: { "background-color": "#c777d9" }},
+      { selector: "node[type='project_doc']",     style: { "background-color": "#d9c777" }},
+      { selector: "node[type='plan_doc']",        style: { "background-color": "#777ad9" }},
+      { selector: "edge", style: {
+          width: 1,
+          "line-color": "#444",
+          "curve-style": "bezier",
+          "target-arrow-shape": "triangle",
+          "target-arrow-color": "#444",
+      }},
+      { selector: "edge[relation='applies_to']",     style: { "line-color": "#5d8aa8", "target-arrow-color": "#5d8aa8" }},
+      { selector: "edge[relation='supersedes']",     style: { "line-color": "#d97757", "target-arrow-color": "#d97757" }},
+      { selector: "edge[relation='co_occurs_with']", style: { "line-color": "#666", "target-arrow-color": "#666" }},
+    ],
+    layout: { name: "cose", animate: false, padding: 20 },
+  });
+  cy.on("tap", "node", (e) => {
+    const d = e.target.data();
+    const root = document.querySelector("[x-data]");
+    Alpine.$data(root).selected = d;
+  });
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %} - search{% endblock %}
+{% block content %}
+<section class="search">
+  <input
+    type="search"
+    name="q"
+    placeholder="Ask anything... (debounced 300ms)"
+    autocomplete="off"
+    autofocus
+    hx-get="/ui/search"
+    hx-trigger="keyup changed delay:300ms, search"
+    hx-target="#results">
+  <div id="results"></div>
+</section>
+
+<section class="counts">
+  <h2>Counts by type</h2>
+  <ul class="badges">
+    {% for type, n in counts.items() %}
+      <li class="badge type-{{ type }}">{{ type }}: {{ n }}</li>
+    {% endfor %}
+  </ul>
+</section>
+
+<section class="recent">
+  <h2>Recent</h2>
+  <ul class="node-list">
+    {% for n in nodes %}
+      <li>
+        <a href="/node/{{ n.id }}">
+          <span class="badge type-{{ n.type }}">{{ n.type }}</span>
+          <span class="name">{{ n.name }}</span>
+          {% if n.project_key %}<span class="proj">{{ n.project_key }}</span>{% endif %}
+        </a>
+        <p class="desc">{{ n.description or "" }}</p>
+      </li>
+    {% endfor %}
+  </ul>
+</section>
+{% endblock %}

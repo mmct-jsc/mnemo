@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %} - audit{% endblock %}
+{% block content %}
+<section class="audit">
+  <h2>Recent queries ({{ queries | length }})</h2>
+  {% if not queries %}
+    <p class="empty">No queries yet. Try the <a href="/">search</a> page.</p>
+  {% endif %}
+  <ul class="query-log">
+    {% for q in queries %}
+      <li class="query">
+        <header>
+          <code class="ts">{{ q.ts }}</code>
+          {% for tag in q.intent_tags %}<span class="tag">{{ tag }}</span>{% endfor %}
+        </header>
+        <p class="prompt">{{ q.prompt }}</p>
+        <details>
+          <summary>{{ q.retrieved_ids | length }} hits</summary>
+          <ul class="hits">
+            {% for nid in q.retrieved_ids %}
+              <li>
+                <a href="/node/{{ nid }}">{{ nid[:12] }}</a>
+                {% if nid in q.scores %}<span class="score">{{ '%.3f' % q.scores[nid] }}</span>{% endif %}
+              </li>
+            {% endfor %}
+          </ul>
+        </details>
+      </li>
+    {% endfor %}
+  </ul>
+</section>
+{% endblock %}

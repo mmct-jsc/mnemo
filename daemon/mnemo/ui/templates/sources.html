@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %} - sources{% endblock %}
+{% block content %}
+<section class="sources" x-data="{ running: false, msg: '' }">
+  <header>
+    <h2>Sources ({{ sources | length }})</h2>
+    <button @click="
+      running = true; msg = 'reindexing...';
+      fetch('/reindex', { method: 'POST' })
+        .then(r => r.json())
+        .then(d => { msg = `added=${d.added} updated=${d.updated} unchanged=${d.unchanged} removed=${d.removed}`; running = false; })
+        .catch(e => { msg = String(e); running = false; });
+    " :disabled="running">Reindex all</button>
+    <span class="msg" x-text="msg"></span>
+  </header>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Path</th>
+        <th>Kind</th>
+        <th>Project</th>
+        <th>Last indexed</th>
+        <th>Enabled</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for s in sources %}
+        <tr>
+          <td><code>{{ s.path }}</code></td>
+          <td><span class="badge">{{ s.kind }}</span></td>
+          <td>{{ s.project_key or "" }}</td>
+          <td>{{ s.last_indexed_at or "never" }}</td>
+          <td>{{ "yes" if s.enabled else "no" }}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  {% if not sources %}
+    <p class="empty">No sources registered. Add via <code>mnemo source add</code> or <code>mnemo init</code>.</p>
+  {% endif %}
+</section>
+{% endblock %}

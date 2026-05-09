@@ -192,4 +192,9 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
     def audit(limit: int = 50, s: Store = Depends(get_store)) -> list[QueryAuditOut]:
         return [QueryAuditOut.from_query(q) for q in s.recent_queries(limit=limit)]
 
+    # UI is mounted last so JSON endpoints take precedence over any wildcards.
+    from mnemo.ui.routes import mount_ui
+
+    mount_ui(app, get_store=get_store, get_embedder=get_embedder)
+
     return app

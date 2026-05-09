@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %} - {{ node.name }}{% endblock %}
+{% block content %}
+<section class="node-edit" x-data="{ saved: false, error: null }">
+  <header class="node-head">
+    <span class="badge type-{{ node.type }}">{{ node.type }}</span>
+    <h2>{{ node.name }}</h2>
+    <code>[mnemo:{{ node.id }}]</code>
+  </header>
+  <dl class="meta">
+    <dt>source</dt><dd>{{ node.source_path }}</dd>
+    <dt>project</dt><dd>{{ node.project_key or "&mdash;" | safe }}</dd>
+    <dt>updated</dt><dd>{{ node.updated_at }}</dd>
+    <dt>hash</dt><dd><code>{{ node.hash[:12] }}</code></dd>
+  </dl>
+
+  <form @submit.prevent="
+    error = null; saved = false;
+    fetch('/nodes/{{ node.id }}', {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        description: $refs.description.value,
+        body: $refs.body.value
+      })
+    }).then(r => r.ok ? (saved = true) : r.text().then(t => error = t));
+  ">
+    <label>description
+      <input type="text" x-ref="description" value="{{ node.description or '' }}">
+    </label>
+    <label>body
+      <textarea x-ref="body" rows="12">{{ node.body }}</textarea>
+    </label>
+    <div class="actions">
+      <button type="submit">Save</button>
+      <span x-show="saved" class="ok">saved</span>
+      <span x-show="error" class="err" x-text="error"></span>
+    </div>
+  </form>
+
+  <section class="edges">
+    <h3>Outgoing edges ({{ outgoing | length }})</h3>
+    <ul>
+      {% for e in outgoing %}
+        <li>
+          <code>{{ e.relation }}</code> &rarr;
+          <a href="/node/{{ e.dst_id }}">{{ e.dst_id[:8] }}</a>
+          <span class="weight">w={{ '%.2f' % e.weight }}</span>
+          <span class="src">[{{ e.source }}]</span>
+        </li>
+      {% endfor %}
+    </ul>
+    <h3>Incoming edges ({{ incoming | length }})</h3>
+    <ul>
+      {% for e in incoming %}
+        <li>
+          <a href="/node/{{ e.src_id }}">{{ e.src_id[:8] }}</a>
+          &rarr; <code>{{ e.relation }}</code>
+          <span class="weight">w={{ '%.2f' % e.weight }}</span>
+        </li>
+      {% endfor %}
+    </ul>
+  </section>
+</section>
+{% endblock %}

@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>mnemo{% block title %}{% endblock %}</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="https://unpkg.com/htmx.org@1.9.12" defer></script>
+  <script src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js" defer></script>
+  {% block head_extra %}{% endblock %}
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">mnemo</div>
+    <nav>
+      <a href="/" class="{% if page == 'index' %}active{% endif %}">Search</a>
+      <a href="/graph" class="{% if page == 'graph' %}active{% endif %}">Graph</a>
+      <a href="/sources-page" class="{% if page == 'sources' %}active{% endif %}">Sources</a>
+      <a href="/audit-page" class="{% if page == 'audit' %}active{% endif %}">Audit</a>
+      <a href="/settings" class="{% if page == 'settings' %}active{% endif %}">Settings</a>
+    </nav>
+  </header>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

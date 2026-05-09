@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %} - settings{% endblock %}
+{% block content %}
+<section class="settings">
+  <h2>Retrieval settings</h2>
+  <p class="hint">
+    These are read-only in the UI for now. Override via module attributes
+    in <code>mnemo.retrieve</code> or via daemon environment.
+  </p>
+
+  <h3>Scoring weights</h3>
+  <table>
+    <tr><td>alpha (vector)</td><td>{{ '%.2f' % weights.alpha }}</td></tr>
+    <tr><td>beta (graph)</td><td>{{ '%.2f' % weights.beta }}</td></tr>
+    <tr><td>gamma (recency)</td><td>{{ '%.2f' % weights.gamma }}</td></tr>
+    <tr><td>delta (type)</td><td>{{ '%.2f' % weights.delta }}</td></tr>
+    <tr><td>epsilon (project)</td><td>{{ '%.2f' % weights.epsilon }}</td></tr>
+  </table>
+
+  <h3>Defaults</h3>
+  <table>
+    <tr><td>budget_tokens</td><td>{{ budget }}</td></tr>
+    <tr><td>k</td><td>{{ k }}</td></tr>
+  </table>
+</section>
+{% endblock %}
