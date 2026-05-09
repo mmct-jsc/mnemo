@@ -20,25 +20,33 @@ daemon and tests can tune them.
 from __future__ import annotations
 
 import math
+import re
 import time
 from dataclasses import dataclass
 
-from mnemo import compress, graph
+from mnemo import compress, config, graph
 from mnemo.compress import CompressedHit, ScoredHit
 from mnemo.embed import Embedder
 from mnemo.intent import classify_intent, type_priority_for
-from mnemo.store import Store
+from mnemo.store import Node, Store
 
-# Scoring weights (design doc s 6.3)
-ALPHA = 0.45  # vector cosine
-BETA = 0.20  # graph proximity
-GAMMA = 0.15  # recency
-DELTA = 0.15  # type priority
+# Scoring weights are now in mnemo.config (editable via UI / API).
+# These module attributes are kept for backwards-compatible imports and
+# tests; on every query we re-read from the config file.
+ALPHA = 0.40  # vector cosine
+BETA = 0.15  # graph proximity
+GAMMA = 0.10  # recency
+DELTA = 0.10  # type priority
 EPSILON = 0.05  # project scope
+ZETA = 0.20  # lexical overlap (name + description)
 
 RECENCY_HALF_LIFE_DAYS = 90.0
 DEFAULT_K = 20
 DEFAULT_BUDGET_TOKENS = 800
+
+# Lexical scorer: tokenize alpha-word-ish things of >= 3 chars. Substring
+# match (not exact) so "co-auth" matches "co-authored-by".
+_TOKEN_RE = re.compile(r"[a-zA-Z][a-zA-Z0-9-]+")
 
 
 @dataclass
@@ -54,13 +62,21 @@ def query(
     embedder: Embedder,
     prompt: str,
     *,
-    budget_tokens: int = DEFAULT_BUDGET_TOKENS,
-    k: int = DEFAULT_K,
+    budget_tokens: int | None = None,
+    k: int | None = None,
     active_project: str | None = None,
     update_graph: bool = True,
 ) -> RetrievalResult:
+    cfg = config.load()
+    if k is None:
+        k = cfg.defaults.k
+    if budget_tokens is None:
+        budget_tokens = cfg.defaults.budget_tokens
+    sw = cfg.scoring
+
     tags = classify_intent(prompt)
     type_pri = type_priority_for(tags)
+    q_tokens = _tokenize(prompt)
 
     # 1. Vector search (oversample to leave room for dedup + graph).
     query_vec = embedder.embed_text(prompt)
@@ -87,11 +103,12 @@ def query(
         if node is None:
             continue
         s = (
-            ALPHA * vec_scores.get(nid, 0.0)
-            + BETA * graph_scores.get(nid, 0.0)
-            + GAMMA * _recency_score(node.updated_at, now)
-            + DELTA * type_pri.get(node.type, 0.0)
-            + EPSILON * _project_score(node.project_key, active_project)
+            sw.alpha * vec_scores.get(nid, 0.0)
+            + sw.beta * graph_scores.get(nid, 0.0)
+            + sw.gamma * _recency_score(node.updated_at, now, cfg.recency_half_life_days)
+            + sw.delta * type_pri.get(node.type, 0.0)
+            + sw.epsilon * _project_score(node.project_key, active_project)
+            + sw.zeta * _lexical_score(q_tokens, node)
         )
         idx, text = chunk_info.get(nid, (None, None))
         scored.append(ScoredHit(node=node, score=s, chunk_idx=idx, chunk_text=text))
@@ -134,13 +151,33 @@ def _l2_distance_to_cosine(distance: float) -> float:
     return sim
 
 
-def _recency_score(updated_at: int, now: float) -> float:
+def _recency_score(updated_at: int, now: float, half_life_days: float | None = None) -> float:
+    half = half_life_days if half_life_days is not None else RECENCY_HALF_LIFE_DAYS
     age_seconds = max(0.0, now - updated_at)
     age_days = age_seconds / 86400.0
-    return math.exp(-age_days / RECENCY_HALF_LIFE_DAYS)
+    return math.exp(-age_days / half)
 
 
 def _project_score(node_project: str | None, active_project: str | None) -> float:
     if active_project is None or node_project is None:
         return 0.0
     return 1.0 if node_project == active_project else 0.0
+
+
+def _tokenize(text: str) -> list[str]:
+    """Return query tokens of >= 3 characters, lowercased."""
+    return [t.lower() for t in _TOKEN_RE.findall(text) if len(t) >= 3]
+
+
+def _lexical_score(query_tokens: list[str], node: Node) -> float:
+    """Fraction of query tokens that appear (as substrings) in the node's
+    name + description. This catches exact-term matches the embedding
+    tends to dilute on short queries.
+    """
+    if not query_tokens:
+        return 0.0
+    haystack = (node.name + " " + (node.description or "")).lower()
+    if not haystack.strip():
+        return 0.0
+    matches = sum(1 for t in query_tokens if t in haystack)
+    return min(1.0, matches / len(query_tokens))

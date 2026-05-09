@@ -1,26 +1,143 @@
 {% extends "base.html" %}
 {% block title %} - settings{% endblock %}
 {% block content %}
-<section class="settings">
-  <h2>Retrieval settings</h2>
+<section class="settings" x-data="settingsForm()" x-init="init()">
+  <div class="section-head">
+    <h2>Retrieval settings</h2>
+    <span class="hint">edits save to <code>~/.claude/mnemo/settings.json</code></span>
+  </div>
+
   <p class="hint">
-    Read-only here for now. Override via module attributes in
-    <code>mnemo.retrieve</code> or via daemon environment.
+    Each query's score = <strong>alpha</strong> &middot; vector
+    + <strong>beta</strong> &middot; graph
+    + <strong>gamma</strong> &middot; recency
+    + <strong>delta</strong> &middot; type
+    + <strong>epsilon</strong> &middot; project
+    + <strong>zeta</strong> &middot; lexical.
+    Weights don't have to sum to 1.0; ordering is what matters.
   </p>
 
   <h3>Scoring weights</h3>
-  <table>
-    <tr><td>alpha (vector cosine)</td><td>{{ '%.2f' % weights.alpha }}</td></tr>
-    <tr><td>beta (graph proximity)</td><td>{{ '%.2f' % weights.beta }}</td></tr>
-    <tr><td>gamma (recency)</td><td>{{ '%.2f' % weights.gamma }}</td></tr>
-    <tr><td>delta (type priority)</td><td>{{ '%.2f' % weights.delta }}</td></tr>
-    <tr><td>epsilon (project scope)</td><td>{{ '%.2f' % weights.epsilon }}</td></tr>
-  </table>
+  <div class="weight-grid">
+    <template x-for="(w, key) in weights" :key="key">
+      <label class="weight-row">
+        <span class="wlabel">
+          <span x-text="key"></span>
+          <em x-text="weightDescriptions[key]"></em>
+        </span>
+        <input type="range" min="0" max="1" step="0.01" x-model.number="weights[key]"
+               @input="dirty = true">
+        <input type="number" min="0" max="1" step="0.01" x-model.number="weights[key]"
+               @input="dirty = true" class="wvalue">
+      </label>
+    </template>
+  </div>
 
   <h3>Defaults</h3>
-  <table>
-    <tr><td>budget_tokens</td><td>{{ budget }}</td></tr>
-    <tr><td>k</td><td>{{ k }}</td></tr>
-  </table>
+  <div class="weight-grid">
+    <label class="weight-row">
+      <span class="wlabel">k <em>top hits returned</em></span>
+      <input type="range" min="1" max="50" step="1" x-model.number="defaults.k" @input="dirty = true">
+      <input type="number" min="1" max="200" step="1" x-model.number="defaults.k" @input="dirty = true" class="wvalue">
+    </label>
+    <label class="weight-row">
+      <span class="wlabel">budget_tokens <em>max tokens per response</em></span>
+      <input type="range" min="100" max="4000" step="50" x-model.number="defaults.budget_tokens" @input="dirty = true">
+      <input type="number" min="1" max="10000" step="50" x-model.number="defaults.budget_tokens" @input="dirty = true" class="wvalue">
+    </label>
+    <label class="weight-row">
+      <span class="wlabel">recency_half_life_days <em>days for recency decay</em></span>
+      <input type="range" min="7" max="365" step="1" x-model.number="recency_half_life_days" @input="dirty = true">
+      <input type="number" min="1" max="3650" step="1" x-model.number="recency_half_life_days" @input="dirty = true" class="wvalue">
+    </label>
+  </div>
+
+  <div class="actions" style="margin-top:1.5rem; display:flex; gap:0.5rem; align-items:center;">
+    <button class="primary" :disabled="!dirty || saving" @click="save()">
+      <span x-show="!saving">Save</span><span x-show="saving" x-cloak>saving...</span>
+    </button>
+    <button @click="reset()" :disabled="saving">Reset to defaults</button>
+    <span class="ok" x-show="message" x-text="message" x-cloak></span>
+    <span class="err" x-show="error" x-text="error" x-cloak></span>
+  </div>
 </section>
+
+<script>
+function settingsForm() {
+  return {
+    weights: {{ weights | tojson }},
+    defaults: { k: {{ k }}, budget_tokens: {{ budget }} },
+    recency_half_life_days: {{ recency_half_life_days }},
+    weightDescriptions: {
+      alpha: 'vector cosine',
+      beta: 'graph proximity',
+      gamma: 'recency decay',
+      delta: 'intent-type priority',
+      epsilon: 'active project boost',
+      zeta: 'lexical overlap (name+description match)',
+    },
+    dirty: false,
+    saving: false,
+    message: '',
+    error: '',
+    init() {},
+    async save() {
+      this.saving = true; this.message = ''; this.error = '';
+      try {
+        const r = await fetch('/config', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            scoring: this.weights,
+            defaults: this.defaults,
+            recency_half_life_days: this.recency_half_life_days,
+          })
+        });
+        if (!r.ok) throw new Error(await r.text());
+        const data = await r.json();
+        this.weights = data.scoring;
+        this.defaults = data.defaults;
+        this.recency_half_life_days = data.recency_half_life_days;
+        this.message = 'saved';
+        this.dirty = false;
+        setTimeout(() => this.message = '', 2000);
+      } catch (e) {
+        this.error = String(e);
+      } finally {
+        this.saving = false;
+      }
+    },
+    async reset() {
+      if (!confirm('Reset all settings to defaults?')) return;
+      this.saving = true;
+      try {
+        const r = await fetch('/config/reset', { method: 'POST' });
+        const data = await r.json();
+        this.weights = data.scoring;
+        this.defaults = data.defaults;
+        this.recency_half_life_days = data.recency_half_life_days;
+        this.message = 'reset';
+        this.dirty = false;
+        setTimeout(() => this.message = '', 2000);
+      } finally {
+        this.saving = false;
+      }
+    }
+  };
+}
+</script>
+
+<style>
+  .weight-grid { display: grid; gap: 0.6rem; max-width: 760px; }
+  .weight-row {
+    display: grid; grid-template-columns: 220px 1fr 90px; gap: 0.85rem;
+    align-items: center;
+    background: var(--panel); border: 1px solid var(--border-soft);
+    border-radius: var(--radius); padding: 0.7rem 1rem;
+  }
+  .wlabel { font-family: var(--mono); font-size: 0.85rem; color: var(--fg); }
+  .wlabel em { display: block; color: var(--fg-dim); font-size: 0.75rem; font-style: normal; }
+  .wvalue { text-align: right; font-family: var(--mono); }
+  input[type="range"] { width: 100%; accent-color: var(--accent); }
+</style>
 {% endblock %}

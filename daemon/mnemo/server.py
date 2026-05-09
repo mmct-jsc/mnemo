@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 
-from mnemo import __version__, ingest, paths, retrieve
+from mnemo import __version__, config, ingest, paths, retrieve
 from mnemo.api_schemas import (
     HealthOut,
     NodeOut,
@@ -191,6 +191,37 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
     @app.get("/audit", response_model=list[QueryAuditOut])
     def audit(limit: int = 50, s: Store = Depends(get_store)) -> list[QueryAuditOut]:
         return [QueryAuditOut.from_query(q) for q in s.recent_queries(limit=limit)]
+
+    # --- Config ----------------------------------------------------------
+
+    @app.get("/config")
+    def get_config() -> dict:
+        cfg = config.load()
+        return {
+            "scoring": {
+                "alpha": cfg.scoring.alpha,
+                "beta": cfg.scoring.beta,
+                "gamma": cfg.scoring.gamma,
+                "delta": cfg.scoring.delta,
+                "epsilon": cfg.scoring.epsilon,
+                "zeta": cfg.scoring.zeta,
+            },
+            "defaults": {
+                "k": cfg.defaults.k,
+                "budget_tokens": cfg.defaults.budget_tokens,
+            },
+            "recency_half_life_days": cfg.recency_half_life_days,
+        }
+
+    @app.put("/config")
+    def put_config(patch: dict) -> dict:
+        config.update(patch)
+        return get_config()
+
+    @app.post("/config/reset")
+    def reset_config() -> dict:
+        config.reset()
+        return get_config()
 
     # UI is mounted last so JSON endpoints take precedence over any wildcards.
     from mnemo.ui.routes import mount_ui

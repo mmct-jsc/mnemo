@@ -8,7 +8,7 @@
 {% endblock %}
 {% block layout %}
 <main class="full">
-  <section class="graph-pane" x-data="{ selected: null }">
+  <section class="graph-pane" x-data="{ selected: null, neighbors: [] }">
     <div id="cy"></div>
 
     <div class="graph-controls" x-data="{
@@ -64,10 +64,9 @@
 
     <div class="graph-help">
       <strong>How to read this</strong><br>
-      Each <em>dot</em> is a memory entry. Lines between dots mean the two
-      entries surface together when you ask related questions, or are linked
-      explicitly. Click a dot for details. Drag the canvas to pan,
-      <kbd>scroll</kbd> to zoom.
+      Each <em>dot</em> is a memory entry. Lines mean two entries surface
+      together when you ask related questions. Click a dot for details.
+      Drag to pan, <kbd>scroll</kbd> to zoom.
     </div>
 
     <div class="graph-legend">
@@ -76,20 +75,65 @@
       <div>color matches the source node</div>
     </div>
 
-    <aside class="side" x-show="selected" x-cloak @click.outside="selected = null">
+    <aside class="side detail-panel" x-show="selected" x-cloak @click.outside="selected = null">
       <button @click="selected = null" class="close">×</button>
-      <div class="badges">
-        <span class="badge" :class="'type-' + selected?.type" x-text="(selected?.type || '').replace('memory_','').replace('_',' ')"></span>
-      </div>
-      <h3 x-text="selected?.name"></h3>
-      <p class="hint" x-text="selected?.project || 'global'"></p>
-      <p x-show="selected?.description" x-text="selected?.description"></p>
-      <a class="open" :href="'/node/' + selected?.id">Open node</a>
+      <template x-if="selected">
+        <div>
+          <div class="badges">
+            <span class="badge" :class="'type-' + selected.type"
+                  x-text="(selected.type || '').replace('memory_','').replace('_',' ')"></span>
+            <span x-show="selected.project_key" class="badge" x-text="selected.project_key"></span>
+          </div>
+          <h3 class="detail-name" x-text="selected.name"></h3>
+
+          <p x-show="selected.description" class="detail-desc" x-text="selected.description"></p>
+
+          <details x-show="selected.body" class="detail-body">
+            <summary>Body preview</summary>
+            <pre x-text="(selected.body || '').slice(0, 600) + ((selected.body||'').length > 600 ? '...' : '')"></pre>
+          </details>
+
+          <dl class="detail-meta" x-show="selected.source_path">
+            <dt>source</dt><dd><code x-text="(selected.source_path || '').split(/[\\/]/).slice(-2).join('/')"></code></dd>
+            <dt>updated</dt><dd x-text="formatRelative(selected.updated_at)"></dd>
+            <dt>chunks</dt><dd x-text="selected.deg + ' connections'"></dd>
+          </dl>
+
+          <div x-show="neighbors.length" class="detail-neighbors">
+            <h4>Connected to</h4>
+            <ul>
+              <template x-for="n in neighbors.slice(0, 5)" :key="n.id">
+                <li>
+                  <a :href="'/node/' + n.id" :class="'badge type-' + n.type"
+                     x-text="n.name"></a>
+                </li>
+              </template>
+            </ul>
+          </div>
+
+          <div class="detail-actions">
+            <a class="open" :href="'/node/' + selected.id">Open node</a>
+            <button @click="copyCitation()">Copy citation</button>
+            <span class="ok" x-show="copyMsg" x-text="copyMsg" x-cloak></span>
+          </div>
+          <code class="citation" x-text="'[mnemo:' + selected.id + ']'"></code>
+        </div>
+      </template>
     </aside>
   </section>
 </main>
 
 <script>
+function formatRelative(ts) {
+  if (!ts) return '';
+  const diff = Math.floor(Date.now() / 1000) - ts;
+  if (diff < 60) return 'just now';
+  if (diff < 3600) return Math.floor(diff / 60) + ' min ago';
+  if (diff < 86400) return Math.floor(diff / 3600) + ' hr ago';
+  if (diff < 86400 * 30) return Math.floor(diff / 86400) + ' days ago';
+  return new Date(ts * 1000).toISOString().slice(0, 10);
+}
+
 (async () => {
   if (window.cytoscape && window.cytoscapeFcose) {
     cytoscape.use(cytoscapeFcose);
@@ -107,7 +151,6 @@
     session_summary:  '#7ee7e0',
   };
 
-  // Pre-compute degree so we can size nodes proportionally.
   const degree = {};
   for (const e of data.elements) {
     if (e.data.source) {
@@ -124,8 +167,7 @@
   const cy = cytoscape({
     container: document.getElementById("cy"),
     elements: data.elements,
-    minZoom: 0.2,
-    maxZoom: 3,
+    minZoom: 0.2, maxZoom: 3,
     style: [
       { selector: 'node', style: {
           label: 'data(label)',
@@ -144,19 +186,12 @@
           'transition-property': 'background-color, border-color, border-width, opacity',
           'transition-duration': '180ms',
       }},
-      { selector: 'node:selected', style: {
-          'border-color': '#7ee7e0',
-          'border-width': 3,
-      }},
+      { selector: 'node:selected', style: { 'border-color': '#7ee7e0', 'border-width': 3 }},
       { selector: 'node.dim', style: { opacity: 0.18 }},
       { selector: 'node.hl',  style: { 'border-color': '#7ee7e0', 'border-width': 3 }},
-
       { selector: 'edge', style: {
           width: (e) => 0.6 + Math.min(2.8, (e.data('weight') || 0.1) * 0.8),
-          'line-color': (e) => {
-              const src = e.source();
-              return TYPE_COLORS[src.data('type')] || '#444';
-          },
+          'line-color': (e) => TYPE_COLORS[e.source().data('type')] || '#444',
           'line-opacity': 0.55,
           'curve-style': 'bezier',
           'target-arrow-shape': 'none',
@@ -173,23 +208,46 @@
   window.__cy = cy;
   window.__relayout = (name) => {
     cy.layout({
-      name,
-      animate: true, animationDuration: 500, padding: 40,
+      name, animate: true, animationDuration: 500, padding: 40,
       ...(name === 'fcose' ? { nodeRepulsion: 8000, idealEdgeLength: 100 } : {}),
       ...(name === 'concentric' ? { concentric: (n) => n.degree(), levelWidth: () => 1 } : {}),
     }).run();
   };
 
-  cy.on('tap', 'node', (e) => {
-    const d = e.target.data();
-    const root = document.querySelector('[x-data]');
-    Alpine.$data(root).selected = d;
+  const root = document.querySelector('[x-data]');
+  Alpine.$data(root).copyCitation = function() {
+    if (!this.selected) return;
+    const cite = '[mnemo:' + this.selected.id + ']';
+    navigator.clipboard.writeText(cite).then(() => {
+      this.copyMsg = 'copied';
+      setTimeout(() => this.copyMsg = '', 1500);
+    });
+  };
 
-    // Highlight neighbors, dim everything else.
+  cy.on('tap', 'node', async (e) => {
+    const d = { ...e.target.data() };
+    const ax = Alpine.$data(root);
+    ax.selected = d;
+    ax.copyMsg = '';
+    ax.neighbors = [];
+
     cy.elements().removeClass('hl').addClass('dim');
     e.target.removeClass('dim').addClass('hl');
     e.target.connectedEdges().removeClass('dim').addClass('hl');
     e.target.neighborhood().nodes().removeClass('dim').addClass('hl');
+
+    // Fetch full node info (body, source_path, updated_at).
+    try {
+      const r = await fetch('/nodes/' + d.id);
+      if (r.ok) {
+        const full = await r.json();
+        ax.selected = { ...d, ...full };
+      }
+    } catch (_) {}
+
+    // Build a neighbor list from the local Cytoscape graph (cheap).
+    const neigh = e.target.neighborhood().nodes().map(n => n.data());
+    ax.neighbors = neigh.filter(n => n.id !== d.id);
   });
   cy.on('tap', (e) => {
     if (e.target === cy) {
@@ -198,4 +256,39 @@
   });
 })();
 </script>
+
+<style>
+  .detail-panel { width: 360px; max-height: calc(100vh - 90px); overflow-y: auto; }
+  .detail-name { margin: 0.5rem 0 0.4rem; font-size: 1.05rem; }
+  .detail-desc { color: var(--fg-muted); font-size: 0.92rem; margin: 0.4rem 0; }
+  .detail-body { margin: 0.6rem 0; }
+  .detail-body summary { cursor: pointer; color: var(--fg-dim); font-size: 0.82rem; }
+  .detail-body summary:hover { color: var(--accent); }
+  .detail-body pre {
+    margin-top: 0.5rem; font-size: 0.78rem; max-height: 180px; overflow-y: auto;
+    white-space: pre-wrap; word-break: break-word;
+  }
+  .detail-meta {
+    display: grid; grid-template-columns: 75px 1fr; gap: 0.25rem 0.85rem;
+    margin: 0.85rem 0; padding: 0.65rem 0.85rem;
+    background: var(--bg); border-radius: var(--radius);
+    font-size: 0.78rem;
+  }
+  .detail-meta dt { color: var(--fg-dim); }
+  .detail-meta dd { margin: 0; color: var(--fg); }
+  .detail-meta code { font-size: 0.78rem; word-break: break-all; }
+  .detail-neighbors { margin: 0.85rem 0; }
+  .detail-neighbors h4 { color: var(--fg-dim); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.5px; margin: 0 0 0.4rem; }
+  .detail-neighbors ul { list-style: none; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: 0.3rem; }
+  .detail-neighbors a.badge { font-size: 0.75rem; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .detail-actions { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; margin-top: 0.85rem; }
+  .detail-actions .open {
+    padding: 0.45rem 0.85rem; background: var(--accent); color: var(--bg);
+    border-radius: var(--radius); font-weight: 500; font-size: 0.85rem;
+  }
+  .detail-actions button { padding: 0.45rem 0.85rem; font-size: 0.85rem; }
+  .citation { display: block; margin-top: 0.85rem; padding: 0.4rem 0.65rem;
+              background: var(--bg); border-radius: 4px; color: var(--fg-dim);
+              font-size: 0.75rem; word-break: break-all; }
+</style>
 {% endblock %}

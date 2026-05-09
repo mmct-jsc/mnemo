@@ -16,7 +16,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from mnemo import retrieve
+from mnemo import config, retrieve
 from mnemo.embed import Embedder
 from mnemo.store import Store
 
@@ -93,20 +93,23 @@ def mount_ui(
 
     @app.get("/settings", response_class=HTMLResponse)
     def settings_page(request: Request) -> Any:
+        cfg = config.load()
         return templates.TemplateResponse(
             request,
             "settings.html",
             _ctx(
                 page="settings",
                 weights={
-                    "alpha": retrieve.ALPHA,
-                    "beta": retrieve.BETA,
-                    "gamma": retrieve.GAMMA,
-                    "delta": retrieve.DELTA,
-                    "epsilon": retrieve.EPSILON,
+                    "alpha": cfg.scoring.alpha,
+                    "beta": cfg.scoring.beta,
+                    "gamma": cfg.scoring.gamma,
+                    "delta": cfg.scoring.delta,
+                    "epsilon": cfg.scoring.epsilon,
+                    "zeta": cfg.scoring.zeta,
                 },
-                budget=retrieve.DEFAULT_BUDGET_TOKENS,
-                k=retrieve.DEFAULT_K,
+                budget=cfg.defaults.budget_tokens,
+                k=cfg.defaults.k,
+                recency_half_life_days=cfg.recency_half_life_days,
             ),
         )
 

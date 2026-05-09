@@ -19,7 +19,8 @@ INTENT_PATTERNS: dict[str, re.Pattern[str]] = {
         re.IGNORECASE,
     ),
     "feedback-recall": re.compile(
-        r"\b(prefer|preference|always|never|don'?t|do not|hard rule|reminder|remember|recall)\b",
+        r"\b(prefer|preference|always|never|don'?t|do not|hard rule|reminder|remember|"
+        r"recall|no co-auth|no trailer|no co-?author|user wants|user prefers)\b",
         re.IGNORECASE,
     ),
     "project-context": re.compile(
