@@ -146,6 +146,33 @@ def query(
 
 
 @app.command()
+def ui(
+    host: str = typer.Option(daemon.DEFAULT_HOST, "--host"),
+    port: int = typer.Option(daemon.DEFAULT_PORT, "--port"),
+    no_start: bool = typer.Option(False, "--no-start", help="Don't auto-start the daemon"),
+) -> None:
+    """Open the mnemo web UI in the default browser. Auto-starts the daemon."""
+    import webbrowser
+
+    url = f"http://{host}:{port}/"
+    d = daemon.status()
+    if not d.running and not no_start:
+        typer.echo("daemon not running; starting...")
+        try:
+            pid = daemon.start(host=host, port=port)
+            typer.echo(f"daemon started (pid {pid})")
+        except RuntimeError as exc:
+            typer.echo(f"failed to start daemon: {exc}", err=True)
+            typer.echo(f"open {url} manually after starting it.", err=True)
+            raise typer.Exit(code=1) from exc
+    elif d.running:
+        typer.echo(f"daemon already running (pid {d.pid})")
+
+    typer.echo(f"opening {url}")
+    webbrowser.open(url)
+
+
+@app.command()
 def status() -> None:
     """Show node/source counts and daemon status."""
     store = _open_store()
