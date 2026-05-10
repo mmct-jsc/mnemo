@@ -1,6 +1,6 @@
 ---
 name: mnemo-retro
-description: Use at the end of a working session to extract durable lessons into mnemo memory. Sweeps the recent audit log, file edits, and design docs; surfaces 0-N candidate memory entries; lets the user accept, edit, or reject each; writes accepted entries as memory files and reindexes.
+description: Use when finishing a working session and you need to extract durable lessons into mnemo memory. Sweeps the recent audit log, file edits, and design docs; surfaces 0-N candidate memory entries; lets the user accept, edit, or reject each; writes accepted entries as memory files and reindexes.
 ---
 
 # Retro

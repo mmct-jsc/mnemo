@@ -1,6 +1,6 @@
 ---
 name: mnemo-incident
-description: Use during a production fire. Drives the stabilize -> investigate -> RCA -> post-mortem flow with aggressive prior-incident memory pull. Distinct from mnemo:debug because incident cadence is different (severity tracking, hard time-pressure on stabilization, formal post-mortem doc).
+description: Use when handling a production fire / outage. Drives the stabilize -> investigate -> RCA -> post-mortem flow with aggressive prior-incident memory pull. Distinct from mnemo:debug because incident cadence is different (severity tracking, hard time-pressure on stabilization, formal post-mortem doc).
 ---
 
 # Incident
