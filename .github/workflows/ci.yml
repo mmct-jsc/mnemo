@@ -70,7 +70,7 @@ jobs:
           enable-cache: true
           cache-dependency-glob: daemon/uv.lock
       - name: Cache MiniLM model
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.claude/mnemo/cache
           key: minilm-l6-v2-${{ runner.os }}-v1
@@ -146,7 +146,7 @@ jobs:
           enable-cache: true
           cache-dependency-glob: daemon/uv.lock
       - name: Cache MiniLM model
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.claude/mnemo/cache
           key: minilm-l6-v2-${{ runner.os }}-v1
