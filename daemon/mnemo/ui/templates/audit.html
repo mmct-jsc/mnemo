@@ -2,48 +2,113 @@
 {% block title %} - audit{% endblock %}
 {% block content %}
 <section class="audit">
-  <div class="section-head">
-    <h2>Audit log</h2>
-    <span class="hint">{{ pagination.total }} total queries</span>
-  </div>
+  <header class="page-hero">
+    <div class="hero-text">
+      <h1>Audit log</h1>
+      <p>Every query mnemo has answered, with the hits it returned and the intent it inferred.</p>
+    </div>
+    <div class="hero-actions">
+      <span class="hint">{{ pagination.total }} total queries</span>
+    </div>
+  </header>
+
   {% if not queries %}
     <div class="empty">
       <p>No queries yet.</p>
-      <p class="hint">Try the <a href="/nodes">Nodes search</a> page or run <code>mnemo query</code> from the CLI.</p>
+      <p class="hint">Try the <a href="/nodes-page">Nodes</a> page or run <code>mnemo query</code> from the CLI.</p>
     </div>
   {% else %}
-  <div class="hint pagination-summary">
-    Showing {{ pagination.offset + 1 }}-{{ pagination.offset + queries | length }} of {{ pagination.total }}
-  </div>
-  <ul class="query-log">
-    {% for q in queries %}
-      <li class="query">
-        <header>
-          <code class="ts">#{{ pagination.offset + loop.index }}</code>
-          <code class="ts">ts={{ q.ts }}</code>
-          {% for tag in q.intent_tags %}
-            {% if tag != 'none' %}<span class="tag">{{ tag }}</span>{% endif %}
-          {% endfor %}
-          <span class="hint" style="margin-left:auto;">{{ q.retrieved_ids | length }} hit{% if q.retrieved_ids | length != 1 %}s{% endif %}</span>
-        </header>
-        <p class="prompt">"{{ q.prompt }}"</p>
-        {% if q.retrieved_ids %}
-        <details>
-          <summary>Show hits</summary>
-          <ul class="hits">
-            {% for nid in q.retrieved_ids %}
-              <li>
-                {% if nid in q.scores %}<span class="score">{{ '%.3f' % q.scores[nid] }}</span>{% endif %}
-                <a href="/node/{{ nid }}">{{ nid[:12] }}</a>
-              </li>
+
+  <section class="dash-grid">
+    <div class="stat-card flat">
+      <div class="stat-num">{{ pagination.total }}</div>
+      <div class="stat-label">total queries</div>
+    </div>
+    <div class="stat-card flat">
+      <div class="stat-num">{{ total_hits }}</div>
+      <div class="stat-label">hits delivered</div>
+    </div>
+    <div class="stat-card flat">
+      <div class="stat-num">{{ '%.1f' % avg_hits }}</div>
+      <div class="stat-label">avg hits / query</div>
+    </div>
+    <div class="stat-card flat">
+      <div class="stat-num">
+        {% if last_ts %}<time data-ts="{{ last_ts }}" data-fmt="relative">…</time>{% else %}—{% endif %}
+      </div>
+      <div class="stat-label">last query</div>
+    </div>
+  </section>
+
+  <section class="dash-row split-2">
+    <div>
+      <div class="hint pagination-summary">
+        Showing {{ pagination.offset + 1 }}-{{ pagination.offset + queries | length }} of {{ pagination.total }}
+      </div>
+      <ul class="query-log">
+        {% for q in queries %}
+          <li class="query">
+            <header>
+              <code class="ts">#{{ pagination.offset + loop.index }}</code>
+              <time data-ts="{{ q.ts }}" data-fmt="datetime">{{ q.ts }}</time>
+              {% for tag in q.intent_tags %}
+                {% if tag != 'none' %}<span class="tag">{{ tag }}</span>{% endif %}
+              {% endfor %}
+              <span class="hint" style="margin-left:auto;">{{ q.retrieved_ids | length }} hit{% if q.retrieved_ids | length != 1 %}s{% endif %}</span>
+            </header>
+            <p class="prompt">"{{ q.prompt }}"</p>
+            {% if q.retrieved_ids %}
+            <details>
+              <summary>Show hits</summary>
+              <ul class="hits">
+                {% for nid in q.retrieved_ids %}
+                  <li>
+                    {% if nid in q.scores %}<span class="score">{{ '%.3f' % q.scores[nid] }}</span>{% endif %}
+                    <a href="/node/{{ nid }}">{{ nid[:12] }}</a>
+                  </li>
+                {% endfor %}
+              </ul>
+            </details>
+            {% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+      {% include "_pagination.html" %}
+    </div>
+
+    <aside class="node-detail-side">
+      <div class="audit-summary">
+        <h3>Top intents</h3>
+        {% if top_tags %}
+          <dl>
+            {% for tag, n in top_tags %}
+              <dt>{{ tag }}</dt>
+              <dd>{{ n }}</dd>
             {% endfor %}
-          </ul>
-        </details>
+          </dl>
+        {% else %}
+          <p class="hint" style="margin: 0;">No tagged intents in this window.</p>
         {% endif %}
-      </li>
-    {% endfor %}
-  </ul>
-  {% include "_pagination.html" %}
+      </div>
+
+      <div class="audit-summary">
+        <h3>Activity window</h3>
+        <dl>
+          <dt>Earliest</dt>
+          <dd>
+            {% if first_ts %}<time data-ts="{{ first_ts }}" data-fmt="date">…</time>{% else %}—{% endif %}
+          </dd>
+          <dt>Latest</dt>
+          <dd>
+            {% if last_ts %}<time data-ts="{{ last_ts }}" data-fmt="date">…</time>{% else %}—{% endif %}
+          </dd>
+          <dt>Span</dt>
+          <dd>{{ span_days }} day{% if span_days != 1 %}s{% endif %}</dd>
+        </dl>
+      </div>
+    </aside>
+  </section>
+
   {% endif %}
 </section>
 {% endblock %}
