@@ -2,6 +2,166 @@
 
 All notable changes to mnemo are documented here.
 
+## [1.1.0] - 2026-05-10
+
+**Beyond Claude Code.** mnemo now serves any IDE / any LLM SDK / any
+common workflow, while staying local-first, token-budgeted, and
+citation-back. Everything in this release is additive on top of the
+v1.0.x line; existing Claude Code plugin users see no breakage.
+
+### Added
+
+#### Public protocol (versioned)
+
+- **All HTTP endpoints under `/v1/...`** with auto-published OpenAPI
+  spec at `/v1/openapi.json`. Internal UI/HTMX routes excluded from
+  the spec via `include_in_schema=False`.
+- **`X-Mnemo-Api-Version: 1` header** on every response so adapters
+  can sanity-check the daemon they're talking to.
+- **Legacy paths return 308** to their `/v1/...` equivalents
+  (`/health`, `/sources`, `/reindex`, `/nodes`, `/query`, `/audit`,
+  `/config`). Method + body preserved so adapters that haven't
+  migrated keep working. The redirects are scheduled for removal in
+  **v1.2**.
+- **New endpoints:** `POST /v1/projects/resolve`,
+  `GET|POST|DELETE /v1/projects/active`, `GET /v1/projects/known`,
+  `PATCH /v1/sources`, `GET /v1/fs/suggest` (filesystem path
+  suggestions for the UI).
+- **`docs/protocol.md`** spec doc + canonical project_key derivation
+  algorithm with a 40+ entry fixture file for cross-adapter drift
+  detection.
+
+#### Active-project state + project-key resolver
+
+- Singleton `active_project` table with a hybrid contract: per-call
+  `project_key` overrides the persisted active project; absence
+  falls back to it.
+- Active-project pill in the UI topbar with a popover for set /
+  clear, accent-color when set.
+
+#### Source patterns + management
+
+- New `nodes.include` and `nodes.exclude` columns -- comma-separated
+  gitignore-style globs -- compiled into `pathspec.PathSpec` at scan
+  time. Defaults to `**/*.{md,markdown,txt,pdf}` for `memory_dir`
+  sources; per-source overrides supported.
+- `PATCH /v1/sources` for partial updates; UI `Add source` /
+  per-row `edit` / `remove` flows on the Sources page with autocomplete
+  for path (live filesystem suggestions + recents) and project_key
+  (known-keys-from-DB).
+
+#### File-format expansion
+
+- New parser registry under `mnemo/parsers/`. Adding a format in
+  v1.2+ is a 2-line change.
+- **PDF parsing** via `pypdf`. Per-page `--- page N ---` headers so
+  retrieval can cite specific pages. Corrupt PDFs degrade
+  gracefully (log + empty body, no pipeline crash).
+- **Plain text** (`.txt`, `.markdown`) parsing.
+
+#### BASE knowledge + project isolation
+
+- New `nodes.base` column. Frontmatter `base: true` flags a node as
+  BASE. BASE nodes bypass project isolation and surface in every
+  project's queries.
+- `retrieve.query()` hard-filters to `(project_key == active OR
+  base)` when an active project is set. Behavior gated by new
+  `config.project_isolation_mode = 'strict' | 'boost'` (defaults to
+  `strict`; `boost` restores v1.0 behavior).
+- `Store.list_nodes` and `count_nodes` honor BASE inclusion. Nodes
+  page type counts respect the project filter.
+- BASE pill toggle on the node detail page; gold "base" badge in
+  lists.
+
+#### Workflow skills
+
+- **`mnemo:plan`** (rigid, 6 phases): pull mnemo context ->
+  brainstorm -> 2-3 approaches -> decisions -> emit
+  `docs/plans/<date>-<topic>-design.md` -> done-criteria. Closes
+  the gap between idea and `mnemo:implement-platform`.
+- **`mnemo:retro`** (flexible, 4 phases): sweep recent activity ->
+  propose 0-N candidate memory entries -> user triages
+  accept / edit / reject -> write + reindex.
+- **`mnemo:incident`** (rigid, 7 phases): severity + post-mortem
+  stub -> pull priors -> stabilize BEFORE investigate -> RCA ->
+  post-mortem doc -> promote durable lesson to memory_feedback.
+
+#### `mnemo-middleware` Python package (PyPI)
+
+- `clients/middleware-py/` with separate pyproject.toml. Single
+  runtime dep: `httpx`. Provider SDKs are opt-in extras.
+- **`retrieve_context(prompt, ...)`** helper. Returns a markdown
+  block formatted like the Claude Code hook output. Always additive:
+  daemon down / timeout / invalid JSON returns `""` so the caller
+  drops the result into a system message unconditionally.
+- **`patch(client, mode='auto'|'once'|'every')`** monkey-patcher
+  with provider shims for OpenAI, Anthropic, Google (Gemini), and
+  Ollama. `auto` (default) re-injects only on new conversations or
+  topic shifts; `once` for persistent agents; `every` for one-shot
+  evaluators. Anthropic shim emits `cache_control: ephemeral` on
+  the system block when it's >= ~1024 tokens for the 90% cache
+  discount.
+- 20 unit tests against `httpx.MockTransport` + a fake openai-shaped
+  client.
+
+#### `mnemo-vscode` extension
+
+- New `extensions/vscode/` TypeScript project. Ready to package
+  with `vsce`; no marketplace publish in v1.1 (`.vsix` GitHub
+  release artifact only -- marketplace is v1.2).
+- Status bar pill (daemon health + active project), palette
+  commands (Query / Add Note / Set Active Project / Open UI /
+  Reindex), sidebar TreeView, **`@mnemo` chat participant** with
+  slash subcommands `/recall`, `/sources`, `/add`. Hits stream as
+  chat references with `[mnemo:<id>]` citations.
+
+#### UI polish
+
+- Custom-themed `<input type="checkbox">` + `<select>` (URL-encoded
+  inline-SVG caret, `color-scheme: dark` for native popups).
+- Source management table shows include / exclude patterns inline.
+- Always-visible filter Clear button (disabled when no filter)
+  instead of mounting/unmounting per toggle.
+
+### Changed
+
+- Default include patterns for memory_dir / plan_dir / transcripts
+  widened to `**/*.{md,markdown,txt,pdf}`.
+- `Store.count_nodes(project_key=...)` filter respects active
+  project + BASE union.
+- `_LegacyRedirectMiddleware` and `_ApiVersionHeaderMiddleware`
+  added to the FastAPI app. Order matters: header middleware must
+  be added **last** so it stamps headers on the inner middleware's
+  308 short-circuit responses (captured the lesson in
+  `feedback_starlette_middleware_order.md`).
+
+### Fixed
+
+- Filter empty-string normalization on the Nodes page
+  (`?project=` no longer SQL-matches zero rows; route normalizes
+  empty form values to None).
+- Type-counts dropdown was showing global counts when the project
+  filter was active. Now scoped to the project + BASE union.
+- pathspec deprecation: switched from the deprecated
+  `'gitwildmatch'` pattern style to `'gitignore'`.
+
+### Hard rules (carry-over)
+
+- No `Co-Authored-By` trailers on commits, ever.
+- No emojis in code, docs, commits.
+- Conventional commit prefixes.
+- Daemon binds to `127.0.0.1` only.
+
+### Migration notes
+
+- The `nodes.base`, `sources.include`, `sources.exclude` columns
+  are added by an idempotent SQLite migration on first daemon start
+  after the upgrade. Existing nodes default to `base = 0`. Existing
+  sources default to NULL include/exclude (treated as "use the kind
+  default").
+- Adapters can keep calling unversioned paths for the v1.1 series;
+  in v1.2 these will be removed.
+
 ## [1.0.5] - 2026-05-10
 
 Polish on top of 1.0.4. Three real bugs and two ergonomic upgrades.
