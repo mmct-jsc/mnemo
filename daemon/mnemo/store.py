@@ -144,6 +144,20 @@ class Query:
     ts: int
 
 
+@dataclass
+class ActiveProject:
+    """Singleton row in the ``active_project`` table.
+
+    Tracks which project the daemon should treat as 'active' when a query
+    arrives without an explicit ``project_key``. v1.1 hybrid contract:
+    a per-call ``project_key`` overrides this; absence falls back to it.
+    """
+
+    project_key: str
+    path: str
+    since: int
+
+
 # --- SQL --------------------------------------------------------------------
 
 
@@ -204,6 +218,15 @@ CREATE TABLE IF NOT EXISTS queries (
 );
 
 CREATE INDEX IF NOT EXISTS idx_queries_ts ON queries(ts DESC);
+
+-- Active project state. Singleton row enforced via a CHECK constraint so
+-- multiple-row inserts fail fast. Empty when no project is active.
+CREATE TABLE IF NOT EXISTS active_project (
+  singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
+  project_key  TEXT NOT NULL,
+  path         TEXT NOT NULL,
+  since        INTEGER NOT NULL
+);
 """
 
 
@@ -549,6 +572,37 @@ class Store:
     def remove_source(self, path: str) -> None:
         with self._lock:
             self.conn.execute("DELETE FROM sources WHERE path = ?", (path,))
+            self.conn.commit()
+
+    # --- Active project (singleton) ---------------------------------------
+
+    def get_active_project(self) -> ActiveProject | None:
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT project_key, path, since FROM active_project WHERE singleton_id = 1"
+            ).fetchone()
+        if row is None:
+            return None
+        return ActiveProject(project_key=row["project_key"], path=row["path"], since=row["since"])
+
+    def set_active_project(self, *, project_key: str, path: str) -> ActiveProject:
+        ts = int(time.time())
+        with self._lock:
+            # UPSERT on the singleton row. SQLite supports ON CONFLICT REPLACE
+            # via INSERT OR REPLACE; the CHECK keeps rows from multiplying.
+            self.conn.execute(
+                """
+                INSERT OR REPLACE INTO active_project (singleton_id, project_key, path, since)
+                VALUES (1, ?, ?, ?)
+                """,
+                (project_key, path, ts),
+            )
+            self.conn.commit()
+        return ActiveProject(project_key=project_key, path=path, since=ts)
+
+    def clear_active_project(self) -> None:
+        with self._lock:
+            self.conn.execute("DELETE FROM active_project WHERE singleton_id = 1")
             self.conn.commit()
 
     # --- Query audit log ---------------------------------------------------

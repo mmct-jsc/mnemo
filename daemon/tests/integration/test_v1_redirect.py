@@ -23,7 +23,8 @@ from mnemo.store import Store
 
 
 class _FakeEmbedder(Embedder):
-    """Embedder stub: skip the heavy MiniLM load. Returns deterministic vectors."""
+    """Embedder stub: skip the heavy MiniLM load. Returns deterministic
+    384-dim vectors so the store's vec_search dim assertion passes."""
 
     def __init__(self) -> None:  # type: ignore[no-untyped-def]
         # Don't call parent __init__ -- it would try to set up the cache dir.
@@ -33,10 +34,11 @@ class _FakeEmbedder(Embedder):
 
     @property
     def dim(self) -> int:
-        return 8
+        return 384
 
     def embed_text(self, text: str) -> list[float]:
-        return [float(len(text) % 7) for _ in range(8)]
+        v = float(len(text) % 7)
+        return [v for _ in range(384)]
 
     def embed_batch(self, texts: list[str]) -> list[list[float]]:
         return [self.embed_text(t) for t in texts]

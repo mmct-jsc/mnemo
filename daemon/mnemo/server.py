@@ -30,9 +30,13 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from mnemo import __version__, config, ingest, paths, retrieve
 from mnemo.api_schemas import (
+    ActiveProjectOut,
     HealthOut,
     NodeOut,
     NodeUpdateIn,
+    ProjectActivateIn,
+    ProjectResolveIn,
+    ProjectResolveOut,
     QueryAuditOut,
     QueryIn,
     QueryOut,
@@ -248,15 +252,52 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
         s: Store = Depends(get_store),
         e: Embedder = Depends(get_embedder),
     ) -> QueryOut:
+        # v1.1 hybrid: explicit project_key in the request body wins, then
+        # legacy 'active_project' field, then the persisted active project.
+        proj = body.project_key or body.active_project
+        if proj is None:
+            active = s.get_active_project()
+            if active is not None:
+                proj = active.project_key
         result = retrieve.query(
             s,
             e,
             body.prompt,
             budget_tokens=body.budget_tokens,
             k=body.k,
-            active_project=body.active_project,
+            active_project=proj,
         )
         return QueryOut.from_result(result)
+
+    # --- Projects (v1.1) --------------------------------------------------
+
+    @v1.post("/projects/resolve", response_model=ProjectResolveOut)
+    def resolve_project(body: ProjectResolveIn) -> ProjectResolveOut:
+        """Canonical project-key derivation. Adapter clients use this to
+        avoid drift with the daemon's algorithm."""
+        key = paths.resolve_project_key(body.path)
+        return ProjectResolveOut(project_key=key, path=body.path)
+
+    @v1.get(
+        "/projects/active",
+        response_model=ActiveProjectOut | None,  # type: ignore[arg-type]
+    )
+    def get_active_project(s: Store = Depends(get_store)) -> ActiveProjectOut | None:
+        active = s.get_active_project()
+        return ActiveProjectOut.from_active(active) if active else None
+
+    @v1.post("/projects/active", response_model=ActiveProjectOut)
+    def set_active_project(
+        body: ProjectActivateIn, s: Store = Depends(get_store)
+    ) -> ActiveProjectOut:
+        key = paths.resolve_project_key(body.path)
+        active = s.set_active_project(project_key=key, path=body.path)
+        return ActiveProjectOut.from_active(active)
+
+    @v1.delete("/projects/active")
+    def clear_active_project(s: Store = Depends(get_store)) -> JSONResponse:
+        s.clear_active_project()
+        return JSONResponse({"ok": True})
 
     # --- Audit ------------------------------------------------------------
 
