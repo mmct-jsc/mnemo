@@ -43,6 +43,7 @@ from mnemo.api_schemas import (
     ReindexReportOut,
     SourceIn,
     SourceOut,
+    SourceUpdateIn,
 )
 from mnemo.embed import Embedder
 from mnemo.store import Store
@@ -172,14 +173,39 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
     def add_source(body: SourceIn, s: Store = Depends(get_store)) -> SourceOut:
         try:
             s.register_source(
-                body.path, body.kind, project_key=body.project_key, enabled=body.enabled
+                body.path,
+                body.kind,
+                project_key=body.project_key,
+                enabled=body.enabled,
+                include=body.include,
+                exclude=body.exclude,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        for src in s.list_sources():
-            if src.path == body.path:
-                return SourceOut.from_source(src)
-        raise HTTPException(status_code=500, detail="register_source failed")
+        src = s.get_source(body.path)
+        if src is None:
+            raise HTTPException(status_code=500, detail="register_source failed")
+        return SourceOut.from_source(src)
+
+    @v1.patch("/sources", response_model=SourceOut)
+    def patch_source(body: SourceUpdateIn, s: Store = Depends(get_store)) -> SourceOut:
+        # Only forward fields the client actually sent. exclude_unset=True
+        # keeps "field omitted" distinct from "field explicitly null".
+        patch = body.model_dump(exclude_unset=True)
+        patch.pop("path", None)
+        kwargs: dict[str, object] = {}
+        if "project_key" in patch:
+            kwargs["project_key"] = patch["project_key"]
+        if "enabled" in patch:
+            kwargs["enabled"] = patch["enabled"]
+        if "include" in patch:
+            kwargs["include"] = patch["include"]
+        if "exclude" in patch:
+            kwargs["exclude"] = patch["exclude"]
+        src = s.update_source(body.path, **kwargs)  # type: ignore[arg-type]
+        if src is None:
+            raise HTTPException(status_code=404, detail="source not found")
+        return SourceOut.from_source(src)
 
     @v1.delete("/sources")
     def remove_source(path: str, s: Store = Depends(get_store)) -> JSONResponse:

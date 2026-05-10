@@ -63,6 +63,8 @@ class SourceOut(BaseModel):
     project_key: str | None
     last_indexed_at: int | None
     enabled: bool
+    include: str | None = None
+    exclude: str | None = None
 
     @classmethod
     def from_source(cls, s: Source) -> SourceOut:
@@ -72,6 +74,8 @@ class SourceOut(BaseModel):
             project_key=s.project_key,
             last_indexed_at=s.last_indexed_at,
             enabled=s.enabled,
+            include=s.include,
+            exclude=s.exclude,
         )
 
 
@@ -80,6 +84,20 @@ class SourceIn(BaseModel):
     kind: str
     project_key: str | None = None
     enabled: bool = True
+    include: str | None = None
+    exclude: str | None = None
+
+
+class SourceUpdateIn(BaseModel):
+    """PATCH body. Identifies the source by ``path``; any other fields
+    sent are applied. Send ``null`` to explicitly clear ``project_key``,
+    ``include``, or ``exclude``."""
+
+    path: str
+    project_key: str | None = None
+    enabled: bool | None = None
+    include: str | None = None
+    exclude: str | None = None
 
 
 # --- Queries --------------------------------------------------------------

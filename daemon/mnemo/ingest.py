@@ -213,12 +213,53 @@ def parse_file(path: Path, *, kind: str, project_key: str | None = None) -> Pars
 # --- Scanning --------------------------------------------------------------
 
 
+def _default_include_for_kind(kind: str) -> list[str]:
+    """Default include patterns when a source's ``include`` field is unset.
+
+    memory_dir / plan_dir / transcripts: match the file types ingest
+    knows how to parse. Phase 3 (this commit) ships only markdown;
+    phase 4 widens this to also include ``**/*.txt`` and ``**/*.pdf``
+    once their parsers land.
+    claude_md: always matches its single configured file -- no walk.
+    """
+    if kind in ("memory_dir", "plan_dir", "transcripts"):
+        return ["**/*.md"]
+    return []
+
+
+def _parse_pattern_field(raw: str | None) -> list[str]:
+    """Parse a comma-separated glob list. Empty -> []."""
+    if not raw:
+        return []
+    return [p.strip() for p in raw.split(",") if p.strip()]
+
+
+def _build_pathspec(patterns: list[str]):  # type: ignore[no-untyped-def]
+    """Compile glob patterns to a pathspec.PathSpec, or None if empty.
+
+    We import pathspec lazily so test harnesses that stub out ingest don't
+    have to install it.
+    """
+    if not patterns:
+        return None
+    import pathspec
+
+    return pathspec.PathSpec.from_lines("gitignore", patterns)
+
+
 def scan_source(source: Source) -> Iterator[ParsedFile]:
     """Walk a source's path and yield one ParsedFile per indexable file.
 
-    - ``claude_md`` source: yields the single file (if it still exists).
-    - ``memory_dir`` / ``plan_dir`` / ``transcripts``: yields all ``*.md`` files
-      under the directory (recursively), excluding ``MEMORY.md`` index files.
+    Honors per-source ``include`` and ``exclude`` glob patterns
+    (gitignore-style via the pathspec library). Empty/unset include falls
+    back to the kind's default include set.
+
+    - ``claude_md`` source: always yields the single file (if it exists).
+      Patterns are ignored for single-file sources.
+    - ``memory_dir`` / ``plan_dir`` / ``transcripts``: walks the directory
+      and yields files that match include AND don't match exclude. Default
+      include matches ``*.md``, ``*.txt``, and ``*.pdf``.
+    - Index files named ``MEMORY.md`` are always skipped.
     """
     p = Path(source.path)
     if not p.exists():
@@ -226,11 +267,25 @@ def scan_source(source: Source) -> Iterator[ParsedFile]:
     if p.is_file():
         yield parse_file(p, kind=source.kind, project_key=source.project_key)
         return
-    for md_file in sorted(p.rglob("*.md")):
-        if md_file.name == "MEMORY.md":
-            # Index files are derivable; skip to avoid duplicate body content.
+
+    include_patterns = _parse_pattern_field(source.include) or _default_include_for_kind(
+        source.kind
+    )
+    exclude_patterns = _parse_pattern_field(source.exclude)
+    include_spec = _build_pathspec(include_patterns)
+    exclude_spec = _build_pathspec(exclude_patterns)
+
+    for f in sorted(p.rglob("*")):
+        if not f.is_file():
             continue
-        yield parse_file(md_file, kind=source.kind, project_key=source.project_key)
+        if f.name == "MEMORY.md":
+            continue
+        rel = f.relative_to(p).as_posix()
+        if include_spec is not None and not include_spec.match_file(rel):
+            continue
+        if exclude_spec is not None and exclude_spec.match_file(rel):
+            continue
+        yield parse_file(f, kind=source.kind, project_key=source.project_key)
 
 
 # --- Reconciliation --------------------------------------------------------

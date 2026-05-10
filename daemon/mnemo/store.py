@@ -132,6 +132,12 @@ class Source:
     project_key: str | None
     last_indexed_at: int | None
     enabled: bool
+    # v1.1: comma-separated glob patterns for include/exclude. None means
+    # "use the kind's default include set" (see ingest.iter_files). Stored
+    # as TEXT; UI input is comma-separated; ingest layer parses into a
+    # pathspec.PathSpec.
+    include: str | None = None
+    exclude: str | None = None
 
 
 @dataclass
@@ -205,7 +211,9 @@ CREATE TABLE IF NOT EXISTS sources (
   kind            TEXT NOT NULL,
   project_key     TEXT,
   last_indexed_at INTEGER,
-  enabled         INTEGER NOT NULL DEFAULT 1
+  enabled         INTEGER NOT NULL DEFAULT 1,
+  include         TEXT,
+  exclude         TEXT
 );
 
 CREATE TABLE IF NOT EXISTS queries (
@@ -273,10 +281,27 @@ class Store:
 
     def _init_schema(self) -> None:
         self.conn.executescript(SCHEMA_SQL)
+        # Lightweight migrations for tables that grew columns after a release
+        # was already in users' hands. SQLite supports ALTER TABLE ADD COLUMN
+        # idempotently only if we check first -- it errors on existing column.
+        self._ensure_columns(
+            "sources",
+            {
+                "include": "TEXT",
+                "exclude": "TEXT",
+            },
+        )
         row = self.conn.execute("SELECT version FROM schema_version").fetchone()
         if row is None:
             self.conn.execute("INSERT INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,))
         self.conn.commit()
+
+    def _ensure_columns(self, table: str, columns: dict[str, str]) -> None:
+        """Add missing columns to ``table``. ``columns`` maps name -> SQL type."""
+        existing = {r["name"] for r in self.conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        for name, sql_type in columns.items():
+            if name not in existing:
+                self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {sql_type}")
 
     def schema_version(self) -> int:
         with self._lock:
@@ -529,20 +554,24 @@ class Store:
         *,
         project_key: str | None = None,
         enabled: bool = True,
+        include: str | None = None,
+        exclude: str | None = None,
     ) -> None:
         if kind not in SOURCE_KINDS:
             raise ValueError(f"unknown source kind: {kind!r}")
         with self._lock:
             self.conn.execute(
                 """
-                INSERT INTO sources (path, kind, project_key, enabled)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO sources (path, kind, project_key, enabled, include, exclude)
+                VALUES (?, ?, ?, ?, ?, ?)
                 ON CONFLICT(path) DO UPDATE SET
                   kind        = excluded.kind,
                   project_key = excluded.project_key,
-                  enabled     = excluded.enabled
+                  enabled     = excluded.enabled,
+                  include     = excluded.include,
+                  exclude     = excluded.exclude
                 """,
-                (path, kind, project_key, 1 if enabled else 0),
+                (path, kind, project_key, 1 if enabled else 0, include, exclude),
             )
             self.conn.commit()
 
@@ -559,9 +588,68 @@ class Store:
                 project_key=r["project_key"],
                 last_indexed_at=r["last_indexed_at"],
                 enabled=bool(r["enabled"]),
+                include=r["include"],
+                exclude=r["exclude"],
             )
             for r in rows
         ]
+
+    def get_source(self, path: str) -> Source | None:
+        with self._lock:
+            row = self.conn.execute("SELECT * FROM sources WHERE path = ?", (path,)).fetchone()
+        if row is None:
+            return None
+        return Source(
+            path=row["path"],
+            kind=row["kind"],
+            project_key=row["project_key"],
+            last_indexed_at=row["last_indexed_at"],
+            enabled=bool(row["enabled"]),
+            include=row["include"],
+            exclude=row["exclude"],
+        )
+
+    def update_source(
+        self,
+        path: str,
+        *,
+        project_key: str | None = ...,  # type: ignore[assignment]
+        enabled: bool | None = None,
+        include: str | None = ...,  # type: ignore[assignment]
+        exclude: str | None = ...,  # type: ignore[assignment]
+    ) -> Source | None:
+        """Patch an existing source. Sentinel ``...`` = "leave field alone";
+        ``None`` for nullable fields means "explicitly clear".
+
+        Returns the updated source, or None if no row with that path exists.
+        """
+        existing = self.get_source(path)
+        if existing is None:
+            return None
+        sets: list[str] = []
+        params: list[object] = []
+        if project_key is not ...:
+            sets.append("project_key = ?")
+            params.append(project_key)
+        if enabled is not None:
+            sets.append("enabled = ?")
+            params.append(1 if enabled else 0)
+        if include is not ...:
+            sets.append("include = ?")
+            params.append(include)
+        if exclude is not ...:
+            sets.append("exclude = ?")
+            params.append(exclude)
+        if not sets:
+            return existing
+        params.append(path)
+        with self._lock:
+            self.conn.execute(
+                f"UPDATE sources SET {', '.join(sets)} WHERE path = ?",
+                params,
+            )
+            self.conn.commit()
+        return self.get_source(path)
 
     def mark_source_indexed(self, path: str, *, when: int | None = None) -> None:
         ts = when if when is not None else int(time.time())
