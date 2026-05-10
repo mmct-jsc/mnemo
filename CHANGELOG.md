@@ -2,6 +2,46 @@
 
 All notable changes to mnemo are documented here.
 
+## [1.0.3] - 2026-05-10
+
+Bug-fix release for issues caught after 1.0.2 went out.
+
+### Fixed
+
+- **Graph node click did nothing** (no detail panel, no highlight).
+  The inline ``x-data`` on ``.graph-pane`` defined methods using
+  shorthand syntax that Alpine's expression parser was tripping on,
+  silently failing to set up the component. Refactored into a
+  named ``graphPane()`` factory function so x-data is just
+  ``x-data="graphPane()"``. All state and methods (selectFromCanvas,
+  copyCitation, typeColor) are now defined cleanly in one place.
+- **Race condition between Cytoscape init and Alpine init**.
+  The IIFE used to start before Alpine had hydrated, so
+  ``Alpine.$data(graphRoot)`` returned ``undefined`` and clicks
+  silently failed. Now wrapped in ``alpine:initialized`` so cy
+  handlers only register after Alpine is ready.
+- **Stale ``Alpine.$data(root)`` reference** in the post-1.0.2 graph
+  script - ``root`` was never defined, threw on every node tap.
+  Removed; replaced with the ``graphPane`` component's own methods.
+- **Bell unread badge flickered on every page load** - the badge
+  rendered before Alpine hydrated state from localStorage, briefly
+  showing the wrong (or no) count. Added ``x-cloak`` so the badge
+  is hidden until Alpine is ready.
+
+### Added
+
+- **Smooth page-load fade-in**: ``main`` containers animate in with
+  a 240ms cubic-bezier translate+fade. Subtle but makes navigation
+  feel less jarring.
+- **Active navbar item now has an animated underline accent** that
+  scales in when the page loads, so the active state is more
+  noticeable.
+- **Card hover micro-interaction**: stat cards and hit cards lift
+  slightly and gain a soft shadow on hover (was just border color).
+- **``prefers-reduced-motion``** honored everywhere - all
+  animations and transitions collapse to ~0ms when the user has
+  reduce-motion set.
+
 ## [1.0.2] - 2026-05-10
 
 UI restructure release. Adds a dashboard, paginated lists, and a
