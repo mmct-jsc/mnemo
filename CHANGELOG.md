@@ -2,6 +2,42 @@
 
 All notable changes to mnemo are documented here.
 
+## [1.0.1] - 2026-05-10
+
+UI enhancement release. No backend changes.
+
+### Added
+
+- **Custom scrollbar styling**: thin, themed scrollbars across all
+  scrollable surfaces (Webkit + Firefox via `scrollbar-color`). Track
+  is transparent, thumb uses the muted border color and brightens to
+  the accent on hover. Inside dark panels (cards, code blocks,
+  textarea, the graph detail panel) the thumb border blends with the
+  panel background instead of the page background.
+- **Themed modal component** (`window.modal()`) that returns a
+  `Promise<boolean>`. Drop-in replacement for `window.alert` /
+  `window.confirm` with consistent dark-theme styling, escape-to-
+  cancel, click-backdrop-to-cancel, and focus-trap on the confirm
+  button. Supports `level: 'danger'` for destructive actions.
+
+### Changed
+
+- `settings.html` "Reset to defaults" now uses `window.modal()` with a
+  danger-styled confirm button instead of the browser's `confirm()`.
+  Going forward, every confirm/alert in the UI uses the themed modal.
+
+### How to use
+
+```js
+const ok = await window.modal({
+  title: 'Delete this node?',
+  body:  'This is permanent.',
+  confirm: { text: 'Delete', level: 'danger' },
+  cancel:  { text: 'Cancel' },
+});
+if (ok) { /* user confirmed */ }
+```
+
 ## [1.0.0] - 2026-05-10
 
 First stable release. mnemo is a local-first knowledge memory system for
