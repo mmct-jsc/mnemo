@@ -79,6 +79,11 @@ class Node:
     hash: str
     created_at: int
     updated_at: int
+    # v1.1: BASE knowledge bypasses project isolation. A BASE-flagged
+    # node surfaces in every project's queries regardless of the
+    # active project. Frontmatter `base: true` sets it on parse; the
+    # node detail UI exposes a toggle.
+    base: bool = False
 
     @classmethod
     def new(
@@ -93,6 +98,7 @@ class Node:
         project_key: str | None = None,
         frontmatter_json: str | None = None,
         hash: str = "",
+        base: bool = False,
     ) -> Node:
         if type not in NODE_TYPES:
             raise ValueError(f"unknown node type: {type!r}")
@@ -112,6 +118,7 @@ class Node:
             hash=hash,
             created_at=now,
             updated_at=now,
+            base=base,
         )
 
 
@@ -182,7 +189,8 @@ CREATE TABLE IF NOT EXISTS nodes (
   frontmatter_json TEXT,
   hash             TEXT NOT NULL,
   created_at       INTEGER NOT NULL,
-  updated_at       INTEGER NOT NULL
+  updated_at       INTEGER NOT NULL,
+  base             INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_nodes_type    ON nodes(type);
@@ -291,6 +299,12 @@ class Store:
                 "exclude": "TEXT",
             },
         )
+        self._ensure_columns(
+            "nodes",
+            {
+                "base": "INTEGER NOT NULL DEFAULT 0",
+            },
+        )
         row = self.conn.execute("SELECT version FROM schema_version").fetchone()
         if row is None:
             self.conn.execute("INSERT INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,))
@@ -326,8 +340,8 @@ class Store:
                 """
                 INSERT INTO nodes
                   (id, type, name, description, body, source_path, source_kind,
-                   project_key, frontmatter_json, hash, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   project_key, frontmatter_json, hash, created_at, updated_at, base)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                   type             = excluded.type,
                   name             = excluded.name,
@@ -338,7 +352,8 @@ class Store:
                   project_key      = excluded.project_key,
                   frontmatter_json = excluded.frontmatter_json,
                   hash             = excluded.hash,
-                  updated_at       = excluded.updated_at
+                  updated_at       = excluded.updated_at,
+                  base             = excluded.base
                 """,
                 (
                     node.id,
@@ -353,6 +368,7 @@ class Store:
                     node.hash,
                     node.created_at,
                     node.updated_at,
+                    1 if node.base else 0,
                 ),
             )
             self.conn.commit()
@@ -423,7 +439,15 @@ class Store:
         type: str | None = None,
         project_key: str | None = None,
         limit: int = 100,
+        include_base: bool = True,
     ) -> list[Node]:
+        """List nodes with optional filters.
+
+        When ``project_key`` is set, the result includes nodes whose
+        project_key matches **plus** any BASE-flagged nodes (since BASE
+        knowledge applies to every project). Pass ``include_base=False``
+        to suppress that union (admin / debugging use only).
+        """
         sql = "SELECT * FROM nodes"
         clauses: list[str] = []
         params: list[object] = []
@@ -431,8 +455,13 @@ class Store:
             clauses.append("type = ?")
             params.append(type)
         if project_key is not None:
-            clauses.append("project_key = ?")
-            params.append(project_key)
+            if include_base:
+                # Project's nodes OR any BASE node, regardless of project.
+                clauses.append("(project_key = ? OR base = 1)")
+                params.append(project_key)
+            else:
+                clauses.append("project_key = ?")
+                params.append(project_key)
         if clauses:
             sql += " WHERE " + " AND ".join(clauses)
         sql += " ORDER BY updated_at DESC LIMIT ?"
@@ -450,17 +479,27 @@ class Store:
             self.conn.execute("DELETE FROM nodes WHERE id = ?", (node_id,))
             self.conn.commit()
 
-    def count_nodes(self, *, project_key: str | None = None) -> dict[str, int]:
+    def count_nodes(
+        self,
+        *,
+        project_key: str | None = None,
+        include_base: bool = True,
+    ) -> dict[str, int]:
         """Count nodes by type, optionally restricted to one project.
 
         v1.1: when a project filter is active in the UI, the type-counts
         dropdown should reflect that scope -- otherwise picking a project
         and seeing 'project (29)' (the global total) misleads the user.
+        BASE-flagged nodes are included by default since they apply to
+        every project.
         """
         sql = "SELECT type, COUNT(*) AS n FROM nodes"
         params: list[object] = []
         if project_key is not None:
-            sql += " WHERE project_key = ?"
+            if include_base:
+                sql += " WHERE (project_key = ? OR base = 1)"
+            else:
+                sql += " WHERE project_key = ?"
             params.append(project_key)
         sql += " GROUP BY type"
         with self._lock:
@@ -469,6 +508,14 @@ class Store:
 
     @staticmethod
     def _row_to_node(row: sqlite3.Row) -> Node:
+        # `base` column was added by an idempotent migration; rows from
+        # databases that haven't been re-opened since the migration have
+        # the column as 0. Defensive get() so test fixtures with bare
+        # SELECT * still work.
+        try:
+            base_val = bool(row["base"])
+        except (KeyError, IndexError):
+            base_val = False
         return Node(
             id=row["id"],
             type=row["type"],
@@ -482,6 +529,7 @@ class Store:
             hash=row["hash"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
+            base=base_val,
         )
 
     # --- Edges -------------------------------------------------------------

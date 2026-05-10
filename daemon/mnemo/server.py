@@ -264,6 +264,8 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
             n.type = body.type
         if body.project_key is not None:
             n.project_key = body.project_key
+        if body.base is not None:
+            n.base = body.base
         n.updated_at = int(time.time())
         s.upsert_node(n)
         return NodeOut.from_node(n)

@@ -405,6 +405,40 @@ tr:hover td { background: var(--panel); }
 .badge.type-project_doc::before      { background: var(--type-doc); }
 .badge.type-plan_doc         { color: var(--type-plan); border-color: rgba(147,150,240,0.3); }
 .badge.type-plan_doc::before         { background: var(--type-plan); }
+/* BASE flag: knowledge that applies across all projects.
+   Distinct visual from type badges -- gold for "universal". */
+.badge.base-badge {
+  background: rgba(240, 217, 144, 0.16);
+  color: #f0d990;
+  border-color: rgba(240, 217, 144, 0.4);
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.badge.base-badge::before { background: #f0d990; }
+
+/* Inline toggle for BASE flag in node detail page hero. */
+.base-toggle {
+  display: inline-flex; align-items: center; gap: 0.4rem;
+  padding: 0.35rem 0.75rem;
+  background: var(--panel-2);
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-family: var(--mono);
+  letter-spacing: 0.05em;
+  color: var(--fg-muted);
+  cursor: pointer;
+  transition: var(--transition);
+  user-select: none;
+}
+.base-toggle:hover { border-color: #f0d990; color: #f0d990; }
+.base-toggle:has(input:checked) {
+  background: rgba(240, 217, 144, 0.16);
+  border-color: rgba(240, 217, 144, 0.45);
+  color: #f0d990;
+}
+.base-toggle input { margin: 0; }
 
 .badges { list-style: none; padding: 0; margin: 0.5rem 0; display: flex; gap: 0.5rem; flex-wrap: wrap; }
 .badges li { background: none; padding: 0; margin: 0; border: 0; }
