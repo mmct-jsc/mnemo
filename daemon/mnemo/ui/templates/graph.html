@@ -88,14 +88,18 @@
 
           <p x-show="selected.description" class="detail-desc" x-text="selected.description"></p>
 
-          <details x-show="selected.body" class="detail-body">
+          <details x-show="selected.body" class="detail-body" @toggle="renderBody()">
             <summary>Body preview</summary>
-            <pre x-text="(selected.body || '').slice(0, 600) + ((selected.body||'').length > 600 ? '...' : '')"></pre>
+            <div class="md-body" x-ref="mdPreview"></div>
           </details>
 
           <dl class="detail-meta" x-show="selected.source_path">
             <dt>source</dt><dd><code x-text="(selected.source_path || '').split(/[\\/]/).slice(-2).join('/')"></code></dd>
-            <dt>updated</dt><dd x-text="formatRelative(selected.updated_at)"></dd>
+            <dt>updated</dt>
+            <dd>
+              <span class="md-updated" x-text="formatRelative(selected.updated_at)"></span>
+              <span class="md-updated-abs" x-text="formatAbs(selected.updated_at)"></span>
+            </dd>
             <dt>chunks</dt><dd x-text="selected.deg + ' connections'"></dd>
           </dl>
 
@@ -118,9 +122,9 @@
                     x-text="'Show ' + (neighbors.length - 6) + ' more'"></button>
           </div>
 
-          <div class="detail-actions">
-            <a class="open" :href="'/node/' + selected.id">Open node</a>
-            <button @click="copyCitation()">Copy citation</button>
+          <div class="btn-row detail-actions">
+            <a class="primary" :href="'/node/' + selected.id">Open node</a>
+            <button type="button" @click="copyCitation()">Copy citation</button>
           </div>
           <code class="citation" x-text="'[mnemo:' + selected.id + ']'"></code>
         </div>
@@ -131,13 +135,10 @@
 
 <script>
 function formatRelative(ts) {
-  if (!ts) return '';
-  const diff = Math.floor(Date.now() / 1000) - ts;
-  if (diff < 60) return 'just now';
-  if (diff < 3600) return Math.floor(diff / 60) + ' min ago';
-  if (diff < 86400) return Math.floor(diff / 3600) + ' hr ago';
-  if (diff < 86400 * 30) return Math.floor(diff / 86400) + ' days ago';
-  return new Date(ts * 1000).toISOString().slice(0, 10);
+  return window.mnemoFormatTs ? window.mnemoFormatTs(ts, 'relative') : '';
+}
+function formatAbs(ts) {
+  return window.mnemoFormatTs ? window.mnemoFormatTs(ts, 'datetime') : '';
 }
 
 const TYPE_COLORS = {
@@ -163,6 +164,7 @@ function graphPane() {
       this.selected = d;
       this.neighbors = [];
       this.showAllNeighbors = false;
+      this._clearMd();
 
       const cy = window.__cy;
       cy.elements().removeClass('hl').addClass('dim');
@@ -172,12 +174,32 @@ function graphPane() {
 
       // Hydrate body / source / updated_at from the JSON API.
       fetch('/nodes/' + d.id).then(r => r.ok ? r.json() : null).then(full => {
-        if (full) this.selected = { ...d, ...full };
+        if (full) {
+          this.selected = { ...d, ...full };
+          // If the body preview <details> is already open, re-render it
+          // with the fresh body. Otherwise wait for the user to open it.
+          this.$nextTick(() => this.renderBody());
+        }
       }).catch(() => {});
 
       this.neighbors = node.neighborhood().nodes()
         .map(n => n.data())
         .filter(n => n.id !== d.id);
+    },
+    renderBody() {
+      const el = this.$refs.mdPreview;
+      if (!el) return;
+      const body = (this.selected && this.selected.body) || '';
+      // Clip very long bodies in the side panel; full body lives on
+      // the node detail page.
+      const clipped = body.length > 1800
+        ? body.slice(0, 1800) + '\n\n*…body truncated; open the node for full content.*'
+        : body;
+      el.innerHTML = window.mnemoMd ? window.mnemoMd(clipped) : '';
+    },
+    _clearMd() {
+      const el = this.$refs.mdPreview;
+      if (el) el.innerHTML = '';
     },
     copyCitation() {
       if (!this.selected) return;
@@ -283,15 +305,20 @@ document.addEventListener('alpine:initialized', async () => {
 </script>
 
 <style>
-  .detail-panel { width: 360px; max-height: calc(100vh - 90px); overflow-y: auto; }
+  .detail-panel { width: 380px; max-height: calc(100vh - 90px); overflow-y: auto; }
   .detail-name { margin: 0.5rem 0 0.4rem; font-size: 1.05rem; }
   .detail-desc { color: var(--fg-muted); font-size: 0.92rem; margin: 0.4rem 0; }
   .detail-body { margin: 0.6rem 0; }
   .detail-body summary { cursor: pointer; color: var(--fg-dim); font-size: 0.82rem; }
   .detail-body summary:hover { color: var(--accent); }
-  .detail-body pre {
-    margin-top: 0.5rem; font-size: 0.78rem; max-height: 180px; overflow-y: auto;
-    white-space: pre-wrap; word-break: break-word;
+  .detail-body .md-body {
+    margin-top: 0.5rem;
+    max-height: 280px; overflow-y: auto;
+    padding: 0.6rem 0.85rem;
+    background: var(--bg);
+    border: 1px solid var(--border-soft);
+    border-radius: var(--radius);
+    font-size: 0.82rem;
   }
   .detail-meta {
     display: grid; grid-template-columns: 75px 1fr; gap: 0.25rem 0.85rem;
@@ -302,6 +329,8 @@ document.addEventListener('alpine:initialized', async () => {
   .detail-meta dt { color: var(--fg-dim); }
   .detail-meta dd { margin: 0; color: var(--fg); }
   .detail-meta code { font-size: 0.78rem; word-break: break-all; }
+  .md-updated { display: block; }
+  .md-updated-abs { display: block; font-size: 0.7rem; color: var(--fg-dim); }
   .detail-neighbors { margin: 0.85rem 0; }
   .detail-neighbors h4 {
     color: var(--fg-dim); font-size: 0.78rem;
@@ -341,12 +370,7 @@ document.addEventListener('alpine:initialized', async () => {
     color: var(--accent); cursor: pointer; font-size: 0.8rem;
   }
   .link-button:hover { color: var(--accent-hover); text-decoration: underline; }
-  .detail-actions { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; margin-top: 0.85rem; }
-  .detail-actions .open {
-    padding: 0.45rem 0.85rem; background: var(--accent); color: var(--bg);
-    border-radius: var(--radius); font-weight: 500; font-size: 0.85rem;
-  }
-  .detail-actions button { padding: 0.45rem 0.85rem; font-size: 0.85rem; }
+  .detail-actions { margin-top: 0.85rem; }
   .citation { display: block; margin-top: 0.85rem; padding: 0.4rem 0.65rem;
               background: var(--bg); border-radius: 4px; color: var(--fg-dim);
               font-size: 0.75rem; word-break: break-all; }

@@ -8,10 +8,72 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%237ee7e0'/%3E%3Ctext x='8' y='12' text-anchor='middle' fill='%230b0d10' font-family='monospace' font-weight='700' font-size='10'%3EM%3C/text%3E%3C/svg%3E">
   <script src="https://unpkg.com/htmx.org@1.9.12" defer></script>
   <script src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js" defer></script>
+  <!-- Markdown renderer for body previews (node detail + graph side panel). -->
+  <script src="https://cdn.jsdelivr.net/npm/marked@11.1.1/marked.min.js" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.8/dist/purify.min.js" defer></script>
   <script defer>
     // Toast bus + localStorage-backed notification history.
     const TOAST_HISTORY_KEY = 'mnemo.toast.history';
     const TOAST_DEFER_KEY   = 'mnemo.toast.deferred';
+
+    // ---- Shared markdown renderer ----------------------------------
+    // Renders a markdown string to sanitized HTML. Falls back to a
+    // <pre>-escaped block if marked / DOMPurify haven't loaded yet.
+    window.mnemoMd = (text) => {
+      if (!text) return '';
+      try {
+        if (window.marked && window.DOMPurify) {
+          const raw = window.marked.parse(String(text), {
+            breaks: false, gfm: true, mangle: false, headerIds: false,
+          });
+          return window.DOMPurify.sanitize(raw);
+        }
+      } catch (_) { /* fall through */ }
+      const esc = String(text)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      return '<pre class="md-fallback">' + esc + '</pre>';
+    };
+
+    // ---- Shared timestamp formatter --------------------------------
+    // Server emits Unix timestamps; we render them in the user's local
+    // timezone. Three formats: 'datetime' (default), 'date', 'relative'.
+    window.mnemoFormatTs = (ts, fmt = 'datetime') => {
+      const n = Number(ts);
+      if (!ts || Number.isNaN(n) || n <= 0) return '';
+      const d = new Date(n * 1000);
+      if (Number.isNaN(d.getTime())) return '';
+      if (fmt === 'relative') {
+        const diff = Math.floor(Date.now() / 1000) - n;
+        if (diff < 60) return 'just now';
+        if (diff < 3600) return Math.floor(diff / 60) + ' min ago';
+        if (diff < 86400) return Math.floor(diff / 3600) + ' hr ago';
+        if (diff < 86400 * 30) return Math.floor(diff / 86400) + ' days ago';
+      }
+      if (fmt === 'date') {
+        return d.toLocaleDateString(undefined,
+          { year: 'numeric', month: 'short', day: '2-digit' });
+      }
+      // datetime (default)
+      return d.toLocaleString(undefined, {
+        year: 'numeric', month: 'short', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit',
+      });
+    };
+
+    // Walk the DOM and rewrite <time data-ts="..."> elements to local time.
+    // Re-run this after HTMX swaps so fragments also get formatted.
+    window.mnemoApplyTimes = (root = document) => {
+      const els = root.querySelectorAll('time[data-ts]');
+      els.forEach((el) => {
+        const ts = el.getAttribute('data-ts');
+        const fmt = el.getAttribute('data-fmt') || 'datetime';
+        const out = window.mnemoFormatTs(ts, fmt);
+        if (out) {
+          el.textContent = out;
+          el.setAttribute('title', new Date(Number(ts) * 1000).toISOString());
+        }
+      });
+    };
 
     window.toast = (message, level = 'info', duration = 10000) => {
       document.dispatchEvent(new CustomEvent('mnemo-toast',
@@ -50,6 +112,12 @@
         sessionStorage.removeItem(TOAST_DEFER_KEY);
         for (const t of queue) window.toast(t.message, t.level, t.duration);
       } catch (_) {}
+      // Format Unix timestamps as local datetime everywhere.
+      window.mnemoApplyTimes(document);
+    });
+    // Re-apply to HTMX-swapped content (search results, etc.)
+    document.addEventListener('htmx:afterSwap', (e) => {
+      if (e.target) window.mnemoApplyTimes(e.target);
     });
   </script>
   {% block head_extra %}{% endblock %}
