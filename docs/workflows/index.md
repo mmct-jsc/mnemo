@@ -1,16 +1,19 @@
 # Workflow skills
 
-mnemo ships seven systematic workflows as Claude Code skills. Each lives
+mnemo ships ten systematic workflows as Claude Code skills. Each lives
 under [skills/](../../skills/) as a `SKILL.md`. Use them when you start a
 task that fits the trigger description; Claude will surface the relevant
 phases and run the right `mnemo` queries at each step.
 
 | Skill | Type | Use when... |
 |---|---|---|
+| [mnemo-plan](../../skills/mnemo-plan/SKILL.md) | rigid | Planning a feature **before** any code (v1.1+) |
 | [mnemo-implement-platform](../../skills/mnemo-implement-platform/SKILL.md) | rigid | Starting a new feature/platform from scratch |
 | [mnemo-debug](../../skills/mnemo-debug/SKILL.md) | rigid | Hitting a bug, test failure, or unexpected behavior |
+| [mnemo-incident](../../skills/mnemo-incident/SKILL.md) | rigid | Production fire / outage (v1.1+) |
 | [mnemo-refactor](../../skills/mnemo-refactor/SKILL.md) | flexible | Restructuring code without changing behavior |
 | [mnemo-add-knowledge](../../skills/mnemo-add-knowledge/SKILL.md) | flexible | Capturing a new insight as a memory node |
+| [mnemo-retro](../../skills/mnemo-retro/SKILL.md) | flexible | End-of-session lesson extraction (v1.1+) |
 | [mnemo-query-knowledge](../../skills/mnemo-query-knowledge/SKILL.md) | rigid | Recalling memory on demand (not via auto-injection) |
 | [mnemo-onboard-project](../../skills/mnemo-onboard-project/SKILL.md) | flexible | First scan of a new repository |
 | [mnemo-review](../../skills/mnemo-review/SKILL.md) | flexible | Reviewing code (PR / diff / branch) |
@@ -99,3 +102,31 @@ execution -> findings -> capture novel lessons`
 
 The skill turns code review into a learning loop: each review can both
 apply prior project lessons and add new ones.
+
+### plan (6 phases, v1.1+)
+
+`pull context -> brainstorm -> approaches -> decisions -> write design
+-> done-criteria`
+
+Closes the gap between "I have an idea" and `implement-platform`.
+Output is a design doc at `docs/plans/<date>-<topic>-design.md` with a
+phased roadmap. No code is written in this skill.
+
+### incident (7 phases, v1.1+)
+
+`severity -> pull priors -> stabilize -> investigate -> RCA ->
+post-mortem -> memory promotion`
+
+Production-incident workflow. Stabilization comes BEFORE investigation
+(stop the bleeding first). Stubs `docs/incidents/<date>-<name>.md`
+with a real-time timeline and ends with a `memory_feedback` node so
+the next on-call can find the fix one query away.
+
+### retro (4 phases, v1.1+)
+
+`sweep -> propose -> triage -> write + reindex`
+
+End-of-session lesson extraction. Reads the audit log, recent file
+edits, and any new design / incident docs to surface 0-N candidate
+memory entries. The user accept / edit / rejects each. Quality over
+quantity -- a good retro proposes 1-3 strong entries, not 10 weak ones.
