@@ -2,6 +2,69 @@
 
 All notable changes to mnemo are documented here.
 
+## [1.0.2] - 2026-05-10
+
+UI restructure release. Adds a dashboard, paginated lists, and a
+notification history. Fixes several UI bugs from 1.0.1.
+
+### Added
+
+- **Dashboard at `/`** — overview screen with stat cards (memory,
+  sources, learned connections, queries logged), a type-distribution
+  bar chart, top connected nodes, recent queries, and a quick-search
+  input.
+- **`/nodes-page`** — dedicated nodes list with full-text search,
+  filter by type and project, and pagination (25 per page).
+- **Server-side pagination** on the audit log and the nodes list,
+  rendered through a shared `_pagination.html` partial. Pagination
+  preserves filter query params across pages.
+- **Notification history** — bell icon in the topbar with an unread
+  count badge. Click to open a dropdown of past toasts (last 50,
+  localStorage-backed). Click "Clear" to wipe history.
+- **Toast-after-reload** — `window.toastAfterReload(...)` queues a
+  toast via sessionStorage so it shows after the next page load.
+
+### Changed
+
+- **Navigation restructure**: the topbar is now Dashboard / Nodes /
+  Graph / Sources / Audit / Settings (was Search / Graph / ...).
+  Search is a feature of the Nodes page, not its own item.
+- **Active state fix**: when on a node detail page (`/node/<id>`),
+  the navbar correctly highlights "Nodes".
+- **Node detail page**: edges now render with the target/source
+  node's badge + name (resolved server-side via the new
+  `Store.get_nodes_by_ids` batched lookup), not just their truncated
+  ID.
+
+### Fixed
+
+- **Graph 'Connected to' showed only colored dots** — the template
+  bound to `n.name` but the Cytoscape node data field is `label`.
+  Now also displays the type as a small mono label.
+- **Connected-node click redirected away from the graph** — clicking
+  an entry in the side panel's "Connected to" list now focuses that
+  node on the canvas (animates pan + zoom + highlight + selects),
+  rather than navigating to its detail page. The "Open node" CTA
+  still goes to the detail page when you want it.
+- **Reindex success toast disappeared instantly** — the page reload
+  fired before the toast could render. Now uses
+  `window.toastAfterReload()` so the toast surfaces after the new
+  page loads.
+- **Custom scrollbar inside dark panels** — thumb border now blends
+  with the panel background instead of the page background, so the
+  scrollbar doesn't have a halo around it inside cards / textareas /
+  the graph detail panel.
+- **Bell dropdown was empty + graph node click stopped working**
+  (caught in self-test before push): a duplicate
+  `const TOAST_HISTORY_KEY` declaration in two `<script>` blocks
+  threw a SyntaxError that disabled all other UI scripts. Fixed by
+  declaring it once, in the deferred head script.
+- **Graph node click resolved to the wrong Alpine component** after
+  the bell wrapper was added to the topbar:
+  `document.querySelector('[x-data]')` returned the bell, not the
+  graph pane. Now scoped to `.graph-pane` so node clicks correctly
+  populate the side panel again.
+
 ## [1.0.1] - 2026-05-10
 
 UI enhancement release. No backend changes.

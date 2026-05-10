@@ -12,15 +12,21 @@
         .then(r => r.json())
         .then(d => {
           const total = d.added + d.updated + d.unchanged;
+          let msg, level;
           if (d.errors && d.errors.length) {
-            window.toast('Reindex finished with ' + d.errors.length + ' errors', 'warn');
+            msg = 'Reindex finished with ' + d.errors.length + ' errors';
+            level = 'warn';
           } else if (d.added || d.updated || d.removed) {
-            window.toast('Reindex done: +' + d.added + ' new, ~' + d.updated + ' updated, -' + d.removed + ' removed', 'success');
+            msg = 'Reindex done: +' + d.added + ' new, ~' + d.updated + ' updated, -' + d.removed + ' removed';
+            level = 'success';
           } else {
-            window.toast('All ' + total + ' nodes already up to date', 'success');
+            msg = 'All ' + total + ' nodes already up to date';
+            level = 'success';
           }
+          // Queue the toast to fire after the reload so it actually shows.
+          window.toastAfterReload(msg, level);
           running = false;
-          setTimeout(() => location.reload(), 600);
+          setTimeout(() => location.reload(), 400);
         })
         .catch(e => { window.toast('Reindex failed: ' + e, 'error'); running = false; });
     " :disabled="running">

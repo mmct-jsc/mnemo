@@ -3,20 +3,23 @@
 {% block content %}
 <section class="audit">
   <div class="section-head">
-    <h2>Recent queries ({{ queries | length }})</h2>
-    <span class="hint">every retrieval mnemo has run is logged here</span>
+    <h2>Audit log</h2>
+    <span class="hint">{{ pagination.total }} total queries</span>
   </div>
   {% if not queries %}
     <div class="empty">
       <p>No queries yet.</p>
-      <p class="hint">Try the <a href="/">search</a> page or run <code>mnemo query</code> from the CLI.</p>
+      <p class="hint">Try the <a href="/nodes">Nodes search</a> page or run <code>mnemo query</code> from the CLI.</p>
     </div>
   {% else %}
+  <div class="hint pagination-summary">
+    Showing {{ pagination.offset + 1 }}-{{ pagination.offset + queries | length }} of {{ pagination.total }}
+  </div>
   <ul class="query-log">
     {% for q in queries %}
       <li class="query">
         <header>
-          <code class="ts">#{{ loop.index }}</code>
+          <code class="ts">#{{ pagination.offset + loop.index }}</code>
           <code class="ts">ts={{ q.ts }}</code>
           {% for tag in q.intent_tags %}
             {% if tag != 'none' %}<span class="tag">{{ tag }}</span>{% endif %}
@@ -40,6 +43,7 @@
       </li>
     {% endfor %}
   </ul>
+  {% include "_pagination.html" %}
   {% endif %}
 </section>
 {% endblock %}
