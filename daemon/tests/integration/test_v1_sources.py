@@ -148,9 +148,10 @@ def _make_tree(root: Path, files: list[str]) -> None:
         )
 
 
-def test_default_include_matches_md_only(tmp_path: Path) -> None:
-    """A source with NO include set falls back to '**/*.md' (phase 3 default).
-    .txt files should NOT be picked up yet -- phase 4 widens this."""
+def test_default_include_matches_md_and_txt(tmp_path: Path) -> None:
+    """A source with NO include set falls back to the kind's default --
+    in phase 4 that's markdown + plain text + PDF. We verify md and txt
+    here; the pdf path is exercised by tests/unit/test_parsers.py."""
     root = tmp_path / "store"
     _make_tree(root, ["a.md", "sub/b.md", "c.txt", "ignored/d.md"])
     src = Source(
@@ -163,8 +164,10 @@ def test_default_include_matches_md_only(tmp_path: Path) -> None:
         exclude=None,
     )
     paths = sorted(p.path.relative_to(root).as_posix() for p in scan_source(src))
-    assert paths == ["a.md", "ignored/d.md", "sub/b.md"]
-    assert "c.txt" not in paths  # default include is markdown-only
+    assert "a.md" in paths
+    assert "sub/b.md" in paths
+    assert "ignored/d.md" in paths
+    assert "c.txt" in paths  # phase 4: txt is supported by default
 
 
 def test_explicit_include_widens_to_txt(tmp_path: Path) -> None:
