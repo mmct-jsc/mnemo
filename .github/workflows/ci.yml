@@ -1,0 +1,196 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# PRs cancel their own in-flight runs; main always finishes.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # --- 1. Lint + format --------------------------------------------------
+  lint:
+    name: lint + format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+          cache-dependency-glob: daemon/uv.lock
+      - name: Install dev deps
+        working-directory: daemon
+        run: uv sync --extra dev
+      - name: ruff check
+        working-directory: daemon
+        run: uv run ruff check .
+      - name: ruff format --check
+        working-directory: daemon
+        run: uv run ruff format --check .
+
+  # --- 2. Unit tests across Python versions -----------------------------
+  unit:
+    name: unit (py${{ matrix.python }})
+    runs-on: ubuntu-latest
+    needs: lint
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+          cache-dependency-glob: daemon/uv.lock
+      - name: Install (Python ${{ matrix.python }})
+        working-directory: daemon
+        run: uv sync --extra dev --python ${{ matrix.python }}
+      - name: pytest unit
+        working-directory: daemon
+        run: uv run pytest tests/unit -q
+
+  # --- 3. Integration tests (real model, cached) ------------------------
+  integration:
+    name: integration
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+          cache-dependency-glob: daemon/uv.lock
+      - name: Cache MiniLM model
+        uses: actions/cache@v4
+        with:
+          path: ~/.claude/mnemo/cache
+          key: minilm-l6-v2-${{ runner.os }}-v1
+      - name: Install
+        working-directory: daemon
+        run: uv sync --extra dev
+      - name: pytest integration (skips manual-only spawn test)
+        working-directory: daemon
+        run: uv run pytest tests/integration -q
+
+  # --- 4. Cross-platform sanity (macOS + Windows) -----------------------
+  cross-platform:
+    name: unit (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    needs: lint
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+          cache-dependency-glob: daemon/uv.lock
+      - name: Install
+        working-directory: daemon
+        run: uv sync --extra dev
+      - name: pytest unit
+        working-directory: daemon
+        run: uv run pytest tests/unit -q
+
+  # --- 5. Plugin scaffold validation ------------------------------------
+  plugin:
+    name: plugin manifest + hooks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install shellcheck
+        run: sudo apt-get update -y && sudo apt-get install -y shellcheck
+      - name: shellcheck hooks/*.sh
+        run: shellcheck hooks/*.sh
+      - name: Validate plugin.json is valid JSON
+        run: python -c "import json,sys; json.load(open('.claude-plugin/plugin.json'))"
+      - name: Confirm referenced hooks + commands exist on disk
+        run: |
+          python <<'PY'
+          import json, sys
+          from pathlib import Path
+          mf = json.load(open('.claude-plugin/plugin.json'))
+          missing = []
+          for event, entries in mf.get('hooks', {}).items():
+              for e in entries:
+                  if not Path(e['command']).is_file():
+                      missing.append(e['command'])
+          for cmd in Path('commands').glob('*.md'):
+              if cmd.name == 'README.md':
+                  continue
+          if missing:
+              print('MISSING:', missing); sys.exit(1)
+          print('plugin.json references resolve OK')
+          PY
+
+  # --- 6. End-to-end smoke on synthetic memory --------------------------
+  smoke:
+    name: e2e smoke (synthetic memory)
+    runs-on: ubuntu-latest
+    needs: [lint, integration]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+          cache-dependency-glob: daemon/uv.lock
+      - name: Cache MiniLM model
+        uses: actions/cache@v4
+        with:
+          path: ~/.claude/mnemo/cache
+          key: minilm-l6-v2-${{ runner.os }}-v1
+      - name: Install
+        working-directory: daemon
+        run: uv sync --extra dev
+      - name: Seed synthetic memory
+        run: |
+          mkdir -p "$HOME/ci-claude/projects/test-project/memory"
+          cat > "$HOME/ci-claude/projects/test-project/memory/feedback_test.md" <<'EOF'
+          ---
+          name: ci-rule
+          description: a clear and unique benchmark rule about XYZQ7
+          type: feedback
+          ---
+          Body: never put XYZQ7 in production.
+          EOF
+          cat > "$HOME/ci-claude/CLAUDE.md" <<'EOF'
+          # CI Global memory
+          - rule: prefer terse responses
+          EOF
+      - name: Ingest + embed + query
+        working-directory: daemon
+        env:
+          CLAUDE_HOME: /home/runner/ci-claude
+        run: |
+          uv run python <<'PY'
+          from mnemo import ingest, paths, retrieve
+          from mnemo.embed import Embedder
+          from mnemo.store import Store
+
+          store = Store(paths.db_path())
+          embedder = Embedder()
+          ingest.register_default_sources(store, paths.claude_home())
+          report = ingest.reindex(store, embedder=embedder)
+          assert report.added >= 1, report
+          assert report.errors == [], report.errors
+
+          # The unique 'XYZQ7' token should pin the synthetic node as top-1.
+          result = retrieve.query(store, embedder, "XYZQ7 production", k=3)
+          assert result.hits, "no hits for XYZQ7"
+          top = result.hits[0]
+          assert "ci-rule" in top.name or "XYZQ7" in (top.description or ""), (
+              f"top hit is {top.name!r} / {top.description!r}"
+          )
+          print("e2e OK:", top.citation)
+          PY

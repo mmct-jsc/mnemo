@@ -1,0 +1,86 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build + GitHub release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # need history for changelog extraction
+
+      - uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+          cache-dependency-glob: daemon/uv.lock
+
+      # Re-run validation locally before publishing. This duplicates CI but
+      # guards against tagging from a branch that didn't go through CI.
+      - name: Install
+        working-directory: daemon
+        run: uv sync --extra dev
+
+      - name: ruff
+        working-directory: daemon
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+
+      - name: Unit tests
+        working-directory: daemon
+        run: uv run pytest tests/unit -q
+
+      - name: Build wheel + sdist
+        working-directory: daemon
+        run: uv build
+
+      - name: Confirm package version matches tag
+        run: |
+          TAG_VERSION="${GITHUB_REF#refs/tags/v}"
+          PKG_VERSION=$(grep '^version' daemon/pyproject.toml | head -1 | cut -d '"' -f2)
+          echo "tag=$TAG_VERSION pkg=$PKG_VERSION"
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "::error::tag $TAG_VERSION does not match pyproject version $PKG_VERSION"
+            exit 1
+          fi
+
+      - name: Extract release notes from CHANGELOG.md
+        id: notes
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          # Pull the section between '## [VERSION]' and the next '## [' header.
+          NOTES=$(awk -v v="$VERSION" '
+            /^## \[/ {
+              if (found) exit;
+              if ($0 ~ "^## \\[" v "\\]") { found=1; next }
+            }
+            found
+          ' CHANGELOG.md)
+          if [ -z "$NOTES" ]; then
+            NOTES="See CHANGELOG.md for details."
+          fi
+          {
+            echo "version=$VERSION"
+            echo "notes<<EOF_NOTES"
+            echo "$NOTES"
+            echo "EOF_NOTES"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: mnemo ${{ steps.notes.outputs.version }}
+          body: ${{ steps.notes.outputs.notes }}
+          files: |
+            daemon/dist/*.whl
+            daemon/dist/*.tar.gz
+          generate_release_notes: false
+          fail_on_unmatched_files: true

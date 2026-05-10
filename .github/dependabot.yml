@@ -1,0 +1,43 @@
+version: 2
+
+updates:
+  # Keep GitHub Actions versions current.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(ci)"
+
+  # Keep Python deps current.
+  - package-ecosystem: "pip"
+    directory: "/daemon"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+    # Group transitively-similar updates so the PR stream stays manageable.
+    groups:
+      runtime:
+        patterns:
+          - "fastapi*"
+          - "uvicorn*"
+          - "starlette*"
+          - "pydantic*"
+          - "typer*"
+          - "click*"
+        update-types: ["minor", "patch"]
+      ml:
+        patterns:
+          - "sentence-transformers*"
+          - "transformers*"
+          - "torch*"
+          - "tokenizers*"
+          - "huggingface-hub*"
+          - "safetensors*"
+        update-types: ["minor", "patch"]
+      dev:
+        dependency-type: "development"
+        update-types: ["minor", "patch"]
