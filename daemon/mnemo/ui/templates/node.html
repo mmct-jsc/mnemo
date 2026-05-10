@@ -59,7 +59,7 @@
       </dl>
 
       <form @submit.prevent="
-        fetch('/nodes/{{ node.id }}', {
+        fetch('/v1/nodes/{{ node.id }}', {
           method: 'PUT',
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({

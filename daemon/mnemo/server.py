@@ -4,6 +4,16 @@ The server holds a single ``Store`` and ``Embedder`` for the lifetime of the
 process. Both are constructed in ``lifespan`` so requests never pay setup cost.
 
 Bind to ``127.0.0.1`` only. Never listen on ``0.0.0.0``.
+
+v1.1 introduced URL versioning: every public endpoint lives under ``/v1/``.
+Legacy paths (``/health``, ``/sources``, ``/reindex``, ``/nodes``, ``/query``,
+``/audit``, ``/config``) return ``308 Permanent Redirect`` to their ``/v1/...``
+equivalent so existing clients keep working through the v1.1 series. The
+redirects are scheduled to be removed in v1.2.
+
+The OpenAPI schema is filtered to v1-only paths and exposed at both
+``/openapi.json`` (FastAPI default, used by the built-in /docs UI) and
+``/v1/openapi.json`` (canonical, intentional URL adapters consume).
 """
 
 from __future__ import annotations
@@ -13,8 +23,10 @@ import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
-from fastapi import Depends, FastAPI, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
+from fastapi.openapi.utils import get_openapi
+from fastapi.responses import JSONResponse, RedirectResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from mnemo import __version__, config, ingest, paths, retrieve
 from mnemo.api_schemas import (
@@ -32,6 +44,55 @@ from mnemo.embed import Embedder
 from mnemo.store import Store
 
 log = logging.getLogger(__name__)
+
+# Roots that should 308 to their /v1/... equivalent. Each is matched as
+# "exact" or "prefix-with-trailing-segment". UI HTML routes are NOT here --
+# they live under their own paths (/, /nodes-page, /sources-page,
+# /audit-page, /settings, /graph, /node/<id>, /static/, /ui/) and are never
+# rewritten.
+LEGACY_API_ROOTS = (
+    "/health",
+    "/sources",
+    "/reindex",
+    "/nodes",
+    "/query",
+    "/audit",
+    "/config",
+)
+
+
+class _LegacyRedirectMiddleware(BaseHTTPMiddleware):
+    """Translate legacy un-versioned API calls to /v1/... with 308.
+
+    308 preserves the request method (POST stays POST, DELETE stays DELETE)
+    and the body, which is what we need for adapters that haven't migrated.
+    Browser fetch() follows 308 transparently when ``redirect: 'follow'`` is
+    set (the default).
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        path = request.url.path
+        for root in LEGACY_API_ROOTS:
+            # Match either exact (/health) or with a path tail (/nodes/<id>).
+            if path == root or path.startswith(root + "/"):
+                target = "/v1" + path
+                if request.url.query:
+                    target += "?" + request.url.query
+                return RedirectResponse(url=target, status_code=308)
+        return await call_next(request)
+
+
+class _ApiVersionHeaderMiddleware(BaseHTTPMiddleware):
+    """Stamp ``X-Mnemo-Api-Version`` on every response.
+
+    Lets adapters sanity-check they're talking to a daemon they understand.
+    Cheap and read-only.
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        response.headers["X-Mnemo-Api-Version"] = "1"
+        return response
 
 
 @dataclass
@@ -63,6 +124,12 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
                 state.store.close()
 
     app = FastAPI(title="mnemo", version=__version__, lifespan=lifespan)
+    # Starlette runs the LAST add_middleware OUTERMOST. We want the version
+    # header to stamp every response, including 308 redirects from the
+    # legacy-path middleware. So legacy-redirect goes in first (innermost)
+    # and the version header goes in last (outermost), wrapping it.
+    app.add_middleware(_LegacyRedirectMiddleware)
+    app.add_middleware(_ApiVersionHeaderMiddleware)
 
     def get_store() -> Store:
         assert state.store is not None
@@ -72,9 +139,14 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
         assert state.embedder is not None
         return state.embedder
 
+    # ------------------------------------------------------------------
+    # v1 router -- every public HTTP endpoint lives here.
+    # ------------------------------------------------------------------
+    v1 = APIRouter(prefix="/v1", tags=["v1"])
+
     # --- Health -----------------------------------------------------------
 
-    @app.get("/health", response_model=HealthOut)
+    @v1.get("/health", response_model=HealthOut)
     def health(s: Store = Depends(get_store)) -> HealthOut:
         counts = s.count_nodes()
         return HealthOut(
@@ -88,11 +160,11 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
 
     # --- Sources ----------------------------------------------------------
 
-    @app.get("/sources", response_model=list[SourceOut])
+    @v1.get("/sources", response_model=list[SourceOut])
     def list_sources(s: Store = Depends(get_store)) -> list[SourceOut]:
         return [SourceOut.from_source(src) for src in s.list_sources()]
 
-    @app.post("/sources", response_model=SourceOut)
+    @v1.post("/sources", response_model=SourceOut)
     def add_source(body: SourceIn, s: Store = Depends(get_store)) -> SourceOut:
         try:
             s.register_source(
@@ -105,14 +177,14 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
                 return SourceOut.from_source(src)
         raise HTTPException(status_code=500, detail="register_source failed")
 
-    @app.delete("/sources")
+    @v1.delete("/sources")
     def remove_source(path: str, s: Store = Depends(get_store)) -> JSONResponse:
         s.remove_source(path)
         return JSONResponse({"ok": True})
 
     # --- Reindex ----------------------------------------------------------
 
-    @app.post("/reindex", response_model=ReindexReportOut)
+    @v1.post("/reindex", response_model=ReindexReportOut)
     def do_reindex(
         embed: bool = True,
         s: Store = Depends(get_store),
@@ -123,7 +195,7 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
 
     # --- Nodes ------------------------------------------------------------
 
-    @app.get("/nodes", response_model=list[NodeOut])
+    @v1.get("/nodes", response_model=list[NodeOut])
     def list_nodes(
         type: str | None = None,
         project_key: str | None = None,
@@ -135,14 +207,14 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
             for n in s.list_nodes(type=type, project_key=project_key, limit=limit)
         ]
 
-    @app.get("/nodes/{node_id}", response_model=NodeOut)
+    @v1.get("/nodes/{node_id}", response_model=NodeOut)
     def get_node(node_id: str, s: Store = Depends(get_store)) -> NodeOut:
         n = s.get_node(node_id)
         if n is None:
             raise HTTPException(status_code=404, detail="node not found")
         return NodeOut.from_node(n)
 
-    @app.put("/nodes/{node_id}", response_model=NodeOut)
+    @v1.put("/nodes/{node_id}", response_model=NodeOut)
     def update_node(
         node_id: str,
         body: NodeUpdateIn,
@@ -163,14 +235,14 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
         s.upsert_node(n)
         return NodeOut.from_node(n)
 
-    @app.delete("/nodes/{node_id}")
+    @v1.delete("/nodes/{node_id}")
     def delete_node(node_id: str, s: Store = Depends(get_store)) -> JSONResponse:
         s.delete_node(node_id)
         return JSONResponse({"ok": True})
 
     # --- Query ------------------------------------------------------------
 
-    @app.post("/query", response_model=QueryOut)
+    @v1.post("/query", response_model=QueryOut)
     def query(
         body: QueryIn,
         s: Store = Depends(get_store),
@@ -188,13 +260,13 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
 
     # --- Audit ------------------------------------------------------------
 
-    @app.get("/audit", response_model=list[QueryAuditOut])
+    @v1.get("/audit", response_model=list[QueryAuditOut])
     def audit(limit: int = 50, s: Store = Depends(get_store)) -> list[QueryAuditOut]:
         return [QueryAuditOut.from_query(q) for q in s.recent_queries(limit=limit)]
 
     # --- Config ----------------------------------------------------------
 
-    @app.get("/config")
+    @v1.get("/config")
     def get_config() -> dict:
         cfg = config.load()
         return {
@@ -213,15 +285,50 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
             "recency_half_life_days": cfg.recency_half_life_days,
         }
 
-    @app.put("/config")
+    @v1.put("/config")
     def put_config(patch: dict) -> dict:
         config.update(patch)
         return get_config()
 
-    @app.post("/config/reset")
+    @v1.post("/config/reset")
     def reset_config() -> dict:
         config.reset()
         return get_config()
+
+    app.include_router(v1)
+
+    # --------------------------------------------------------------------
+    # OpenAPI: filter to v1-tagged paths only. This makes /openapi.json
+    # (and the built-in /docs page) reflect the public contract, not the
+    # internal UI/HTMX routes.
+    # --------------------------------------------------------------------
+
+    def _v1_openapi_schema() -> dict:
+        if app.openapi_schema:
+            return app.openapi_schema
+        schema = get_openapi(
+            title="mnemo",
+            version=__version__,
+            description=(
+                "Local-first knowledge memory for Claude Code and other "
+                "IDE / SDK clients. All public endpoints live under /v1/. "
+                "Bind to 127.0.0.1 only."
+            ),
+            routes=app.routes,
+        )
+        # Keep only paths that start with /v1/. The default get_openapi
+        # already drops include_in_schema=False routes, but we additionally
+        # want to hide the legacy redirect handlers (which are middleware,
+        # so they don't appear) and any incidental future leakage.
+        schema["paths"] = {p: ops for p, ops in schema["paths"].items() if p.startswith("/v1/")}
+        app.openapi_schema = schema
+        return schema
+
+    app.openapi = _v1_openapi_schema  # type: ignore[method-assign]
+
+    @app.get("/v1/openapi.json", include_in_schema=False)
+    def v1_openapi() -> JSONResponse:
+        return JSONResponse(_v1_openapi_schema())
 
     # UI is mounted last so JSON endpoints take precedence over any wildcards.
     from mnemo.ui.routes import mount_ui

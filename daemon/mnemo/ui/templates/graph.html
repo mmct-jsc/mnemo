@@ -173,7 +173,7 @@ function graphPane() {
       node.neighborhood().nodes().removeClass('dim').addClass('hl');
 
       // Hydrate body / source / updated_at from the JSON API.
-      fetch('/nodes/' + d.id).then(r => r.ok ? r.json() : null).then(full => {
+      fetch('/v1/nodes/' + d.id).then(r => r.ok ? r.json() : null).then(full => {
         if (full) {
           this.selected = { ...d, ...full };
           // If the body preview <details> is already open, re-render it
