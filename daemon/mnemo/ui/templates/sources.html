@@ -2,37 +2,42 @@
 {% block title %} - sources{% endblock %}
 {% block content %}
 <section class="sources" x-data="{ running: false }">
-  <header>
-    <h2>Sources</h2>
-    <span class="hint">{{ sources | length }} registered</span>
-    <button class="primary" @click="
-      running = true;
-      window.toast('Reindexing... (re-embedding can take a few seconds per node)', 'info');
-      fetch('/reindex', { method: 'POST' })
-        .then(r => r.json())
-        .then(d => {
-          const total = d.added + d.updated + d.unchanged;
-          let msg, level;
-          if (d.errors && d.errors.length) {
-            msg = 'Reindex finished with ' + d.errors.length + ' errors';
-            level = 'warn';
-          } else if (d.added || d.updated || d.removed) {
-            msg = 'Reindex done: +' + d.added + ' new, ~' + d.updated + ' updated, -' + d.removed + ' removed';
-            level = 'success';
-          } else {
-            msg = 'All ' + total + ' nodes already up to date';
-            level = 'success';
-          }
-          // Queue the toast to fire after the reload so it actually shows.
-          window.toastAfterReload(msg, level);
-          running = false;
-          setTimeout(() => location.reload(), 400);
-        })
-        .catch(e => { window.toast('Reindex failed: ' + e, 'error'); running = false; });
-    " :disabled="running">
-      <span x-show="!running">Reindex all</span>
-      <span x-show="running" x-cloak>reindexing...</span>
-    </button>
+
+  <header class="page-hero">
+    <div class="hero-text">
+      <h1>Sources</h1>
+      <p>Directories and files mnemo watches for memory entries. Reindex pulls fresh content into the store.</p>
+    </div>
+    <div class="hero-actions">
+      <span class="hint">{{ sources | length }} registered</span>
+      <button class="primary" @click="
+        running = true;
+        window.toast('Reindexing... (re-embedding can take a few seconds per node)', 'info');
+        fetch('/reindex', { method: 'POST' })
+          .then(r => r.json())
+          .then(d => {
+            const total = d.added + d.updated + d.unchanged;
+            let msg, level;
+            if (d.errors && d.errors.length) {
+              msg = 'Reindex finished with ' + d.errors.length + ' errors';
+              level = 'warn';
+            } else if (d.added || d.updated || d.removed) {
+              msg = 'Reindex done: +' + d.added + ' new, ~' + d.updated + ' updated, -' + d.removed + ' removed';
+              level = 'success';
+            } else {
+              msg = 'All ' + total + ' nodes already up to date';
+              level = 'success';
+            }
+            window.toastAfterReload(msg, level);
+            running = false;
+            setTimeout(() => location.reload(), 400);
+          })
+          .catch(e => { window.toast('Reindex failed: ' + e, 'error'); running = false; });
+      " :disabled="running">
+        <span x-show="!running">Reindex all</span>
+        <span x-show="running" x-cloak>reindexing...</span>
+      </button>
+    </div>
   </header>
 
   {% if sources %}
@@ -52,7 +57,13 @@
           <td><code>{{ s.path }}</code></td>
           <td><span class="badge">{{ s.kind | replace('_',' ') }}</span></td>
           <td>{{ s.project_key or "" }}</td>
-          <td>{{ s.last_indexed_at or "never" }}</td>
+          <td>
+            {% if s.last_indexed_at %}
+              <time data-ts="{{ s.last_indexed_at }}" data-fmt="datetime">{{ s.last_indexed_at }}</time>
+            {% else %}
+              <span class="hint">never</span>
+            {% endif %}
+          </td>
           <td>{{ "yes" if s.enabled else "no" }}</td>
         </tr>
       {% endfor %}
