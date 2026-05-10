@@ -40,11 +40,12 @@
     </div>
   </section>
 
+  <div class="hint pagination-summary" style="margin: 0 0 1rem;">
+    Showing {{ pagination.offset + 1 }}-{{ pagination.offset + queries | length }} of {{ pagination.total }}
+  </div>
+
   <section class="dash-row split-2">
     <div>
-      <div class="hint pagination-summary">
-        Showing {{ pagination.offset + 1 }}-{{ pagination.offset + queries | length }} of {{ pagination.total }}
-      </div>
       <ul class="query-log">
         {% for q in queries %}
           <li class="query">

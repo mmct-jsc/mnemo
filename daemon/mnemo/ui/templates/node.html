@@ -2,7 +2,7 @@
 {% block title %} - {{ node.name }}{% endblock %}
 {% block content %}
 <section class="node-edit"
-         x-data="nodePage({ raw: {{ node.body | tojson }} })"
+         x-data='nodePage({ raw: {{ node.body | tojson }} })'
          x-init="init()">
 
   <div class="back-row">
