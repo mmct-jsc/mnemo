@@ -13,7 +13,7 @@
       <button class="primary" @click="
         running = true;
         window.toast('Reindexing... (re-embedding can take a few seconds per node)', 'info');
-        fetch('/reindex', { method: 'POST' })
+        fetch('/v1/reindex', { method: 'POST' })
           .then(r => r.json())
           .then(d => {
             const total = d.added + d.updated + d.unchanged;
