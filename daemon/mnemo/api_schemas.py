@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 from mnemo.compress import CompressedHit
 from mnemo.ingest import ReindexReport
 from mnemo.retrieve import RetrievalResult
-from mnemo.store import Node, Query, Source
+from mnemo.store import ActiveProject, Node, Query, Source
 
 # --- Nodes ----------------------------------------------------------------
 
@@ -89,6 +89,10 @@ class QueryIn(BaseModel):
     prompt: str
     budget_tokens: int = Field(default=800, ge=1, le=10000)
     k: int = Field(default=20, ge=1, le=200)
+    # v1.1 added ``project_key`` as the canonical name. ``active_project`` is
+    # kept for one minor version of backward-compat with pre-1.1 clients.
+    # If both are sent, ``project_key`` wins.
+    project_key: str | None = None
     active_project: str | None = None
 
 
@@ -186,3 +190,40 @@ class HealthOut(BaseModel):
     source_count: int
     counts_by_type: dict[str, int]
     embedding_loaded: bool
+
+
+# --- Project resolution + active project (v1.1) ---------------------------
+
+
+class ProjectResolveIn(BaseModel):
+    """Input for ``POST /v1/projects/resolve``: the path to derive a key for."""
+
+    path: str
+
+
+class ProjectResolveOut(BaseModel):
+    """Output: the canonical project key for the supplied path."""
+
+    project_key: str
+    path: str
+
+
+class ProjectActivateIn(BaseModel):
+    """Input for ``POST /v1/projects/active``: a workspace path. The daemon
+    resolves it to a canonical project key and persists it as the active
+    project. Subsequent queries without an explicit ``project_key`` use this.
+    """
+
+    path: str
+
+
+class ActiveProjectOut(BaseModel):
+    """The currently-active project (or ``null`` body when none is set)."""
+
+    project_key: str
+    path: str
+    since: int
+
+    @classmethod
+    def from_active(cls, a: ActiveProject) -> ActiveProjectOut:
+        return cls(project_key=a.project_key, path=a.path, since=a.since)

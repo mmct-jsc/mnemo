@@ -51,3 +51,76 @@ def ensure_runtime_dirs() -> Path:
     cache_dir().mkdir(exist_ok=True)
     logs_dir().mkdir(exist_ok=True)
     return home
+
+
+# --- Canonical project-key derivation -----------------------------------------
+#
+# v1.1 introduced multiple clients (Claude Code plugin, VS Code extension,
+# SDK middleware) that all need to agree on the project key for a given path
+# so memory written by one client surfaces in another.
+#
+# The transformation is intentionally simple and lossless:
+#   1. Treat the input as a string-form absolute path.
+#   2. Replace ":" and both path separators with "-". This naturally produces
+#      the "D--Repository-foo" double-dash on Windows because the colon AND
+#      the backslash both substitute, which we keep -- it's distinguishing.
+#   3. Strip leading + trailing "-" (from the leading "/" on POSIX or any
+#      trailing separator).
+#
+# We deliberately do NOT collapse runs of "-" -- the double-dash after a
+# Windows drive letter is informative and matches the existing keys already
+# in user stores (e.g. "D--Repository-knowledge-base").
+#
+# We deliberately do NOT lowercase the drive letter -- existing project keys
+# preserve whatever case the user typed. Users who want case stability should
+# standardize their workspace path themselves.
+#
+# Adapters (VS Code, middleware) implement the same algorithm in their own
+# language; the daemon's ``POST /v1/projects/resolve`` endpoint is the
+# canonical source. CI runs each adapter's port against a fixture file
+# of (path, expected_key) pairs to detect drift.
+
+
+def project_key_from_abs(abs_path: str) -> str:
+    """Derive the canonical project key from an already-absolute path string.
+
+    Pure syntactic transformation. Caller is responsible for passing an
+    absolute path (use :func:`resolve_project_key` to also resolve symlinks
+    + non-existent paths).
+    """
+    s = abs_path
+    for ch in (":", "/", "\\"):
+        s = s.replace(ch, "-")
+    return s.strip("-")
+
+
+def resolve_project_key(path: str | Path) -> str:
+    """Resolve ``path`` to absolute form, then derive the canonical key.
+
+    If ``path`` is already absolute in EITHER POSIX or Windows form, we
+    pass it through without filesystem resolution. This is critical for
+    cross-platform adapter compatibility: a POSIX-style path like
+    ``/home/alice/repo`` must produce the same key whether the daemon is
+    running on Linux, macOS, or Windows. (If we called ``Path.resolve()``
+    on Windows, it would prepend the cwd's drive letter and the key
+    would diverge.)
+
+    Only relative paths fall through to filesystem resolution, against
+    the daemon's working directory.
+    """
+    s = str(path)
+    # Absolute in POSIX form ("/...") OR Windows form ("X:..."). The
+    # latter check accepts lone-drive ("D:") and drive-with-separator
+    # ("D:\\..." or "D:/...").
+    is_posix_abs = s.startswith("/")
+    is_win_abs = len(s) >= 2 and s[1] == ":" and s[0].isalpha()
+    if is_posix_abs or is_win_abs:
+        return project_key_from_abs(s)
+
+    # Relative -- resolve against the daemon's local FS (best effort).
+    p = Path(path)
+    try:
+        p = p.resolve(strict=False)
+    except (OSError, RuntimeError):
+        p = p.absolute()
+    return project_key_from_abs(str(p))
