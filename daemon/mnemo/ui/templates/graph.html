@@ -8,17 +8,7 @@
 {% endblock %}
 {% block layout %}
 <main class="full">
-  <section class="graph-pane" x-data="{
-    selected: null, neighbors: [], copyMsg: '', showAllNeighbors: false,
-    typeColor(t) {
-      return ({
-        memory_feedback: '#f0a47c', memory_user: '#b6e88c',
-        memory_project: '#8db6f0', memory_reference: '#d790f0',
-        project_doc: '#f0d990', plan_doc: '#9396f0',
-        session_summary: '#7ee7e0',
-      })[t] || '#7ee7e0';
-    }
-  }">
+  <section class="graph-pane" x-data="graphPane()">
     <div id="cy"></div>
 
     <div class="graph-controls" x-data="{
@@ -150,22 +140,61 @@ function formatRelative(ts) {
   return new Date(ts * 1000).toISOString().slice(0, 10);
 }
 
-(async () => {
+const TYPE_COLORS = {
+  memory_feedback:  '#f0a47c',
+  memory_user:      '#b6e88c',
+  memory_project:   '#8db6f0',
+  memory_reference: '#d790f0',
+  project_doc:      '#f0d990',
+  plan_doc:         '#9396f0',
+  session_summary:  '#7ee7e0',
+};
+
+// Alpine component for the graph-pane <section>. State + methods live here
+// so x-data stays trivial and Alpine's expression parser doesn't choke.
+function graphPane() {
+  return {
+    selected: null,
+    neighbors: [],
+    showAllNeighbors: false,
+    typeColor(t) { return TYPE_COLORS[t] || '#7ee7e0'; },
+    selectFromCanvas(node) {
+      const d = { ...node.data() };
+      this.selected = d;
+      this.neighbors = [];
+      this.showAllNeighbors = false;
+
+      const cy = window.__cy;
+      cy.elements().removeClass('hl').addClass('dim');
+      node.removeClass('dim').addClass('hl');
+      node.connectedEdges().removeClass('dim').addClass('hl');
+      node.neighborhood().nodes().removeClass('dim').addClass('hl');
+
+      // Hydrate body / source / updated_at from the JSON API.
+      fetch('/nodes/' + d.id).then(r => r.ok ? r.json() : null).then(full => {
+        if (full) this.selected = { ...d, ...full };
+      }).catch(() => {});
+
+      this.neighbors = node.neighborhood().nodes()
+        .map(n => n.data())
+        .filter(n => n.id !== d.id);
+    },
+    copyCitation() {
+      if (!this.selected) return;
+      const cite = '[mnemo:' + this.selected.id + ']';
+      navigator.clipboard.writeText(cite).then(() => {
+        window.toast('Citation copied: ' + cite, 'success');
+      }).catch(e => window.toast('Copy failed: ' + e, 'error'));
+    },
+  };
+}
+
+document.addEventListener('alpine:initialized', async () => {
   if (window.cytoscape && window.cytoscapeFcose) {
     cytoscape.use(cytoscapeFcose);
   }
   const r = await fetch("/ui/graph-data");
   const data = await r.json();
-
-  const TYPE_COLORS = {
-    memory_feedback:  '#f0a47c',
-    memory_user:      '#b6e88c',
-    memory_project:   '#8db6f0',
-    memory_reference: '#d790f0',
-    project_doc:      '#f0d990',
-    plan_doc:         '#9396f0',
-    session_summary:  '#7ee7e0',
-  };
 
   const degree = {};
   for (const e of data.elements) {
@@ -230,55 +259,27 @@ function formatRelative(ts) {
     }).run();
   };
 
-  Alpine.$data(graphRoot).copyCitation = function() {
-    if (!this.selected) return;
-    const cite = '[mnemo:' + this.selected.id + ']';
-    navigator.clipboard.writeText(cite).then(() => {
-      window.toast('Citation copied: ' + cite, 'success');
-    }).catch(e => window.toast('Copy failed: ' + e, 'error'));
-  };
+  // alpine:initialized has fired by the time we get here, so the
+  // graph-pane component is hydrated and Alpine.$data resolves cleanly.
+  const graphRoot = document.querySelector('.graph-pane');
+  const ax = () => Alpine.$data(graphRoot);
 
-  async function selectNode(node) {
-    const d = { ...node.data() };
-    const ax = Alpine.$data(root);
-    ax.selected = d;
-    ax.copyMsg = '';
-    ax.neighbors = [];
-    ax.showAllNeighbors = false;
-
-    cy.elements().removeClass('hl').addClass('dim');
-    node.removeClass('dim').addClass('hl');
-    node.connectedEdges().removeClass('dim').addClass('hl');
-    node.neighborhood().nodes().removeClass('dim').addClass('hl');
-
-    try {
-      const r = await fetch('/nodes/' + d.id);
-      if (r.ok) {
-        const full = await r.json();
-        ax.selected = { ...d, ...full };
-      }
-    } catch (_) {}
-
-    const neigh = node.neighborhood().nodes().map(n => n.data());
-    ax.neighbors = neigh.filter(n => n.id !== d.id);
-  }
-
-  // Expose a global so the side panel's connected-node entries can focus
-  // a node on the canvas instead of navigating away from the graph view.
-  window.__focusNode = (id) => {
-    const target = cy.getElementById(id);
-    if (!target || target.length === 0) return;
-    cy.animate({ center: { eles: target }, zoom: 1.3 }, { duration: 350 });
-    selectNode(target);
-  };
-
-  cy.on('tap', 'node', (e) => selectNode(e.target));
+  cy.on('tap', 'node', (e) => ax().selectFromCanvas(e.target));
   cy.on('tap', (e) => {
     if (e.target === cy) {
       cy.elements().removeClass('hl dim');
     }
   });
-})();
+
+  // Side-panel "Connected to" entries call this to focus a node on the
+  // canvas instead of navigating away.
+  window.__focusNode = (id) => {
+    const target = cy.getElementById(id);
+    if (!target || target.length === 0) return;
+    cy.animate({ center: { eles: target }, zoom: 1.3 }, { duration: 350 });
+    ax().selectFromCanvas(target);
+  };
+});
 </script>
 
 <style>
