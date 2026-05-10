@@ -2,6 +2,38 @@
 
 All notable changes to mnemo are documented here.
 
+## [1.0.5] - 2026-05-10
+
+Polish on top of 1.0.4. Three real bugs and two ergonomic upgrades.
+
+### Fixed
+
+- **Node-detail body would briefly show then disappear on page load.**
+  ``x-data="nodePage({ raw: {{ node.body | tojson }} })"`` produced
+  output where the JSON's inner ``"`` characters closed the HTML
+  attribute prematurely, so Alpine saw an empty ``x-data`` and ``tab``
+  was undefined -- which made ``x-show="tab === 'edit'"`` evaluate to
+  false and hide the textarea. Switched the attribute to single
+  quotes; Jinja's ``tojson`` already escapes apostrophes as
+  ``'``, so the inner string is safe inside ``x-data='...'``.
+- **Audit "Showing 1-25 of 129" pushed the right column down**, so
+  TOP INTENTS sat 1rem lower than the first query. Moved the line
+  above the dash-row and zeroed the ``query-log`` margin so both
+  columns share the same first-row baseline.
+- **Sliders had a misaligned thumb** at min/max, especially when
+  zoomed. Replaced the browser-default range styling with explicit
+  webkit/moz track + thumb styles so the thumb stays visually on the
+  track at every position.
+
+### Added
+
+- **Stepper buttons** (``[−] [value] [+]``) on every Settings weight
+  + default. Click steps the value by the natural increment for that
+  field (0.05 for weights, 1 for k / recency, 50 for budget tokens),
+  clamps to min/max, and rounds to mitigate JS float drift.
+- Native number-input spinners are hidden when the field is inside a
+  ``.stepper``; the explicit buttons are the only adjuster.
+
 ## [1.0.4] - 2026-05-10
 
 UI polish release. Pages outside the dashboard now use the same
