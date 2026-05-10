@@ -37,6 +37,29 @@
 * { box-sizing: border-box; }
 [x-cloak] { display: none !important; }
 
+/* --- Scrollbar (custom, cross-browser) --------------------------- */
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 6px;
+  border: 2px solid var(--bg);
+  transition: background-color var(--transition);
+}
+*::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+*::-webkit-scrollbar-corner { background: transparent; }
+/* Inside dark panels, blend the track edge with the panel. */
+.card *::-webkit-scrollbar-thumb,
+pre::-webkit-scrollbar-thumb,
+textarea::-webkit-scrollbar-thumb,
+.detail-body pre::-webkit-scrollbar-thumb,
+.detail-panel::-webkit-scrollbar-thumb { border-color: var(--panel); }
+
 html, body { margin: 0; padding: 0; height: 100%; }
 
 body {
@@ -678,4 +701,63 @@ dl.meta dd { margin: 0; color: var(--fg); }
 @keyframes toast-in {
   from { opacity: 0; transform: translateX(20px); }
   to   { opacity: 1; transform: translateX(0); }
+}
+
+/* --- Modal (replaces window.alert / window.confirm) -------------- */
+
+.modal-backdrop {
+  position: fixed; inset: 0;
+  background: rgba(8, 10, 13, 0.72);
+  backdrop-filter: blur(4px);
+  display: grid; place-items: center;
+  z-index: 200;
+  animation: modal-fade 140ms ease-out;
+}
+.modal {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+  width: min(440px, calc(100vw - 2rem));
+  padding: 1.5rem 1.5rem 1.25rem;
+  animation: modal-pop 160ms cubic-bezier(0.2, 0.8, 0.2, 1.05);
+}
+.modal h3 {
+  margin: 0 0 0.5rem;
+  font-size: 1.05rem;
+  color: var(--fg);
+}
+.modal p {
+  color: var(--fg-muted);
+  margin: 0;
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+.modal-actions {
+  display: flex; justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 1.25rem;
+}
+.modal-actions button {
+  min-width: 96px;
+  padding: 0.5rem 1rem;
+}
+.modal-actions .danger {
+  background: var(--warn);
+  color: var(--bg);
+  border-color: var(--warn);
+  font-weight: 600;
+}
+.modal-actions .danger:hover {
+  background: #e88a6a;
+  border-color: #e88a6a;
+  color: var(--bg);
+}
+@keyframes modal-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes modal-pop {
+  from { opacity: 0; transform: translateY(8px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
 }

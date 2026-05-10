@@ -15,6 +15,24 @@
       document.dispatchEvent(new CustomEvent('mnemo-toast',
         { detail: { message, level, duration } }));
     };
+
+    // Modal bus: window.modal({...}) returns a Promise<boolean>.
+    // Replaces window.alert / window.confirm with a themed dialog that
+    // matches the rest of the UI. The host component in the body
+    // captures the resolver and calls it when the user picks an action.
+    window.modal = (options = {}) => {
+      return new Promise((resolve) => {
+        document.dispatchEvent(new CustomEvent('mnemo-modal', {
+          detail: {
+            title:   options.title   ?? 'Confirm',
+            body:    options.body    ?? '',
+            confirm: options.confirm ?? { text: 'OK', level: 'primary' },
+            cancel:  options.cancel ?? { text: 'Cancel' },
+            resolve,
+          }
+        }));
+      });
+    };
   </script>
   {% block head_extra %}{% endblock %}
 </head>
@@ -49,6 +67,25 @@
     </template>
   </div>
 
+  <!-- Modal: themed replacement for window.alert / window.confirm. -->
+  <div x-data="modalHost()"
+       @mnemo-modal.document="open($event.detail)"
+       @keydown.escape.window="if (current) close(false)">
+    <div class="modal-backdrop" x-show="current" x-cloak @click.self="close(false)">
+      <div class="modal" role="dialog" aria-modal="true" x-show="current">
+        <h3 x-text="current?.title"></h3>
+        <p x-text="current?.body"></p>
+        <div class="modal-actions">
+          <button x-show="current?.cancel" @click="close(false)"
+                  x-text="current?.cancel?.text"></button>
+          <button :class="current?.confirm?.level === 'danger' ? 'danger' : 'primary'"
+                  x-ref="confirmBtn" @click="close(true)"
+                  x-text="current?.confirm?.text"></button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script>
     function toastStack() {
       return {
@@ -66,6 +103,28 @@
         },
         dismiss(id) {
           this.items = this.items.filter(x => x.id !== id);
+        }
+      };
+    }
+
+    function modalHost() {
+      return {
+        current: null,
+        open(detail) {
+          // If a modal is already open, resolve it as cancelled before
+          // showing the new one. Avoids dropped resolvers.
+          if (this.current) this.close(false);
+          this.current = detail;
+          this.$nextTick(() => {
+            const btn = this.$refs.confirmBtn;
+            if (btn && typeof btn.focus === 'function') btn.focus();
+          });
+        },
+        close(result) {
+          if (!this.current) return;
+          const r = this.current.resolve;
+          this.current = null;
+          if (typeof r === 'function') r(result);
         }
       };
     }

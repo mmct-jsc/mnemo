@@ -106,7 +106,13 @@ function settingsForm() {
       }
     },
     async reset() {
-      if (!confirm('Reset all settings to defaults?')) return;
+      const confirmed = await window.modal({
+        title: 'Reset all settings?',
+        body: 'This will restore the default scoring weights and defaults. The change is reversible by saving new values, but any current tuning will be lost.',
+        confirm: { text: 'Reset', level: 'danger' },
+        cancel: { text: 'Cancel' },
+      });
+      if (!confirmed) return;
       this.saving = true;
       try {
         const r = await fetch('/config/reset', { method: 'POST' });
