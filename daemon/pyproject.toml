@@ -2,7 +2,8 @@
 name = "mnemo"
 version = "1.0.0"
 description = "Local-first knowledge memory system for Claude Code"
-readme = "../README.md"
+# README lives at repo root, not inside the daemon package; see
+# https://github.com/mmct-jsc/mnemo for the full docs.
 license = { text = "MIT" }
 authors = [{ name = "mnemo contributors" }]
 requires-python = ">=3.11"
