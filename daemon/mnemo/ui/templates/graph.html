@@ -8,7 +8,17 @@
 {% endblock %}
 {% block layout %}
 <main class="full">
-  <section class="graph-pane" x-data="{ selected: null, neighbors: [] }">
+  <section class="graph-pane" x-data="{
+    selected: null, neighbors: [], copyMsg: '', showAllNeighbors: false,
+    typeColor(t) {
+      return ({
+        memory_feedback: '#f0a47c', memory_user: '#b6e88c',
+        memory_project: '#8db6f0', memory_reference: '#d790f0',
+        project_doc: '#f0d990', plan_doc: '#9396f0',
+        session_summary: '#7ee7e0',
+      })[t] || '#7ee7e0';
+    }
+  }">
     <div id="cy"></div>
 
     <div class="graph-controls" x-data="{
@@ -100,15 +110,22 @@
           </dl>
 
           <div x-show="neighbors.length" class="detail-neighbors">
-            <h4>Connected to</h4>
+            <h4 x-text="'Connected to (' + neighbors.length + ')'"></h4>
             <ul>
-              <template x-for="n in neighbors.slice(0, 5)" :key="n.id">
+              <template x-for="n in neighbors.slice(0, showAllNeighbors ? 100 : 6)" :key="n.id">
                 <li>
-                  <a :href="'/node/' + n.id" :class="'badge type-' + n.type"
-                     x-text="n.name"></a>
+                  <button class="neighbor-row" @click="window.__focusNode && window.__focusNode(n.id)">
+                    <span class="neighbor-dot" :style="`background:${typeColor(n.type)}`"></span>
+                    <span class="neighbor-name" x-text="n.label || n.name || n.id"></span>
+                    <span class="neighbor-type" x-text="(n.type || '').replace('memory_','').replace('_',' ')"></span>
+                  </button>
                 </li>
               </template>
             </ul>
+            <button x-show="neighbors.length > 6 && !showAllNeighbors"
+                    @click="showAllNeighbors = true"
+                    class="link-button"
+                    x-text="'Show ' + (neighbors.length - 6) + ' more'"></button>
           </div>
 
           <div class="detail-actions">
@@ -213,8 +230,7 @@ function formatRelative(ts) {
     }).run();
   };
 
-  const root = document.querySelector('[x-data]');
-  Alpine.$data(root).copyCitation = function() {
+  Alpine.$data(graphRoot).copyCitation = function() {
     if (!this.selected) return;
     const cite = '[mnemo:' + this.selected.id + ']';
     navigator.clipboard.writeText(cite).then(() => {
@@ -222,19 +238,19 @@ function formatRelative(ts) {
     }).catch(e => window.toast('Copy failed: ' + e, 'error'));
   };
 
-  cy.on('tap', 'node', async (e) => {
-    const d = { ...e.target.data() };
+  async function selectNode(node) {
+    const d = { ...node.data() };
     const ax = Alpine.$data(root);
     ax.selected = d;
     ax.copyMsg = '';
     ax.neighbors = [];
+    ax.showAllNeighbors = false;
 
     cy.elements().removeClass('hl').addClass('dim');
-    e.target.removeClass('dim').addClass('hl');
-    e.target.connectedEdges().removeClass('dim').addClass('hl');
-    e.target.neighborhood().nodes().removeClass('dim').addClass('hl');
+    node.removeClass('dim').addClass('hl');
+    node.connectedEdges().removeClass('dim').addClass('hl');
+    node.neighborhood().nodes().removeClass('dim').addClass('hl');
 
-    // Fetch full node info (body, source_path, updated_at).
     try {
       const r = await fetch('/nodes/' + d.id);
       if (r.ok) {
@@ -243,10 +259,20 @@ function formatRelative(ts) {
       }
     } catch (_) {}
 
-    // Build a neighbor list from the local Cytoscape graph (cheap).
-    const neigh = e.target.neighborhood().nodes().map(n => n.data());
+    const neigh = node.neighborhood().nodes().map(n => n.data());
     ax.neighbors = neigh.filter(n => n.id !== d.id);
-  });
+  }
+
+  // Expose a global so the side panel's connected-node entries can focus
+  // a node on the canvas instead of navigating away from the graph view.
+  window.__focusNode = (id) => {
+    const target = cy.getElementById(id);
+    if (!target || target.length === 0) return;
+    cy.animate({ center: { eles: target }, zoom: 1.3 }, { duration: 350 });
+    selectNode(target);
+  };
+
+  cy.on('tap', 'node', (e) => selectNode(e.target));
   cy.on('tap', (e) => {
     if (e.target === cy) {
       cy.elements().removeClass('hl dim');
@@ -276,9 +302,44 @@ function formatRelative(ts) {
   .detail-meta dd { margin: 0; color: var(--fg); }
   .detail-meta code { font-size: 0.78rem; word-break: break-all; }
   .detail-neighbors { margin: 0.85rem 0; }
-  .detail-neighbors h4 { color: var(--fg-dim); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.5px; margin: 0 0 0.4rem; }
-  .detail-neighbors ul { list-style: none; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: 0.3rem; }
-  .detail-neighbors a.badge { font-size: 0.75rem; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .detail-neighbors h4 {
+    color: var(--fg-dim); font-size: 0.78rem;
+    text-transform: uppercase; letter-spacing: 0.5px; margin: 0 0 0.5rem;
+  }
+  .detail-neighbors ul {
+    list-style: none; padding: 0; margin: 0;
+    display: flex; flex-direction: column; gap: 0.25rem;
+  }
+  .neighbor-row {
+    display: flex; align-items: center; gap: 0.55rem; width: 100%;
+    padding: 0.4rem 0.6rem; background: var(--bg);
+    border: 1px solid var(--border-soft); border-radius: var(--radius);
+    text-align: left; cursor: pointer;
+    transition: var(--transition);
+  }
+  .neighbor-row:hover {
+    border-color: var(--accent);
+    background: var(--panel-2);
+  }
+  .neighbor-dot {
+    width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+  }
+  .neighbor-name {
+    flex: 1;
+    font-size: 0.82rem; color: var(--fg);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    min-width: 0;
+  }
+  .neighbor-type {
+    color: var(--fg-dim); font-size: 0.7rem;
+    font-family: var(--mono); text-transform: lowercase;
+    flex-shrink: 0;
+  }
+  .link-button {
+    background: transparent; border: 0; padding: 0.4rem 0;
+    color: var(--accent); cursor: pointer; font-size: 0.8rem;
+  }
+  .link-button:hover { color: var(--accent-hover); text-decoration: underline; }
   .detail-actions { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; margin-top: 0.85rem; }
   .detail-actions .open {
     padding: 0.45rem 0.85rem; background: var(--accent); color: var(--bg);

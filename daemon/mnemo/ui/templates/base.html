@@ -9,17 +9,26 @@
   <script src="https://unpkg.com/htmx.org@1.9.12" defer></script>
   <script src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js" defer></script>
   <script defer>
-    // Tiny toast bus: dispatch a CustomEvent('mnemo-toast', { detail: { message, level } })
-    // anywhere in the app. The container in base.html catches it.
+    // Toast bus + localStorage-backed notification history.
+    const TOAST_HISTORY_KEY = 'mnemo.toast.history';
+    const TOAST_DEFER_KEY   = 'mnemo.toast.deferred';
+
     window.toast = (message, level = 'info', duration = 10000) => {
       document.dispatchEvent(new CustomEvent('mnemo-toast',
         { detail: { message, level, duration } }));
     };
 
+    // Queue a toast to fire after a page navigation. Used by handlers that
+    // reload or redirect right after surfacing a result.
+    window.toastAfterReload = (message, level = 'info', duration = 10000) => {
+      try {
+        const queue = JSON.parse(sessionStorage.getItem(TOAST_DEFER_KEY) || '[]');
+        queue.push({ message, level, duration });
+        sessionStorage.setItem(TOAST_DEFER_KEY, JSON.stringify(queue));
+      } catch (_) {}
+    };
+
     // Modal bus: window.modal({...}) returns a Promise<boolean>.
-    // Replaces window.alert / window.confirm with a themed dialog that
-    // matches the rest of the UI. The host component in the body
-    // captures the resolver and calls it when the user picks an action.
     window.modal = (options = {}) => {
       return new Promise((resolve) => {
         document.dispatchEvent(new CustomEvent('mnemo-modal', {
@@ -33,6 +42,15 @@
         }));
       });
     };
+
+    // On load, flush any deferred toasts (queued before a reload).
+    document.addEventListener('DOMContentLoaded', () => {
+      try {
+        const queue = JSON.parse(sessionStorage.getItem(TOAST_DEFER_KEY) || '[]');
+        sessionStorage.removeItem(TOAST_DEFER_KEY);
+        for (const t of queue) window.toast(t.message, t.level, t.duration);
+      } catch (_) {}
+    });
   </script>
   {% block head_extra %}{% endblock %}
 </head>
@@ -40,23 +58,57 @@
   <header class="topbar">
     <a href="/" class="brand" aria-label="mnemo home">mnemo</a>
     <nav>
-      <a href="/" class="{% if page == 'index' %}active{% endif %}">Search</a>
-      <a href="/graph" class="{% if page == 'graph' %}active{% endif %}">Graph</a>
+      <a href="/"             class="{% if page == 'dashboard' %}active{% endif %}">Dashboard</a>
+      <a href="/nodes-page"        class="{% if page == 'nodes' %}active{% endif %}">Nodes</a>
+      <a href="/graph"        class="{% if page == 'graph' %}active{% endif %}">Graph</a>
       <a href="/sources-page" class="{% if page == 'sources' %}active{% endif %}">Sources</a>
-      <a href="/audit-page" class="{% if page == 'audit' %}active{% endif %}">Audit</a>
-      <a href="/settings" class="{% if page == 'settings' %}active{% endif %}">Settings</a>
+      <a href="/audit-page"   class="{% if page == 'audit' %}active{% endif %}">Audit</a>
+      <a href="/settings"     class="{% if page == 'settings' %}active{% endif %}">Settings</a>
     </nav>
+
+    <!-- Notification bell + history dropdown -->
+    <div class="bell-wrap" x-data="bellHistory()" @mnemo-toast.document="record($event.detail)" @click.outside="open = false">
+      <button class="bell" @click="open = !open; if (open) markRead()"
+              :class="{ 'has-unread': unread > 0 }"
+              aria-label="notifications">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M18 16v-5a6 6 0 1 0-12 0v5l-2 2h16z"/>
+          <path d="M10 20a2 2 0 0 0 4 0"/>
+        </svg>
+        <span class="bell-badge" x-show="unread > 0" x-text="unread"></span>
+      </button>
+      <div class="bell-dropdown" x-show="open" x-cloak>
+        <header>
+          <strong>Notifications</strong>
+          <button class="link-button" x-show="items.length" @click.stop="clear()">Clear</button>
+        </header>
+        <div class="bell-empty" x-show="!items.length" x-cloak>No notifications yet.</div>
+        <ul x-show="items.length" x-cloak>
+          <template x-for="(t, i) in items.slice(0, 30)" :key="i">
+            <li :class="'bell-item bell-' + t.level">
+              <span class="bell-icon" x-text="iconFor(t.level)"></span>
+              <div>
+                <div class="bell-msg" x-text="t.message"></div>
+                <div class="bell-time" x-text="formatAgo(t.ts)"></div>
+              </div>
+            </li>
+          </template>
+        </ul>
+      </div>
+    </div>
+
     <span class="help">
       <a href="https://github.com/mmct-jsc/mnemo" target="_blank" rel="noopener">docs</a>
     </span>
   </header>
+
   {% block layout %}
   <main>
     {% block content %}{% endblock %}
   </main>
   {% endblock %}
 
-  <!-- Toast container: listens for the global 'mnemo-toast' event. -->
+  <!-- Toast stack -->
   <div class="toast-stack" x-data="toastStack()" @mnemo-toast.document="add($event.detail)">
     <template x-for="t in items" :key="t.id">
       <div class="toast" :class="'toast-' + t.level" @click="dismiss(t.id)" x-cloak>
@@ -67,7 +119,7 @@
     </template>
   </div>
 
-  <!-- Modal: themed replacement for window.alert / window.confirm. -->
+  <!-- Modal -->
   <div x-data="modalHost()"
        @mnemo-modal.document="open($event.detail)"
        @keydown.escape.window="if (current) close(false)">
@@ -87,6 +139,10 @@
   </div>
 
   <script>
+    // TOAST_HISTORY_KEY is declared in the deferred head script. Avoid
+    // re-declaring it here (would be a SyntaxError that nukes all JS).
+    const TOAST_HISTORY_LIMIT = 50;
+
     function toastStack() {
       return {
         items: [],
@@ -111,8 +167,6 @@
       return {
         current: null,
         open(detail) {
-          // If a modal is already open, resolve it as cancelled before
-          // showing the new one. Avoids dropped resolvers.
           if (this.current) this.close(false);
           this.current = detail;
           this.$nextTick(() => {
@@ -125,6 +179,55 @@
           const r = this.current.resolve;
           this.current = null;
           if (typeof r === 'function') r(result);
+        }
+      };
+    }
+
+    function bellHistory() {
+      return {
+        items: [],
+        open: false,
+        unread: 0,
+        init() {
+          try {
+            const raw = localStorage.getItem(TOAST_HISTORY_KEY);
+            this.items = raw ? JSON.parse(raw) : [];
+            this.unread = parseInt(localStorage.getItem(TOAST_HISTORY_KEY + '.unread') || '0', 10);
+          } catch (_) { this.items = []; }
+        },
+        record(detail) {
+          this.items.unshift({
+            level: detail.level || 'info',
+            message: detail.message || '',
+            ts: Math.floor(Date.now() / 1000),
+          });
+          this.items = this.items.slice(0, TOAST_HISTORY_LIMIT);
+          this.unread += 1;
+          this.persist();
+        },
+        markRead() {
+          this.unread = 0;
+          localStorage.setItem(TOAST_HISTORY_KEY + '.unread', '0');
+        },
+        clear() {
+          this.items = [];
+          this.unread = 0;
+          this.persist();
+        },
+        persist() {
+          try {
+            localStorage.setItem(TOAST_HISTORY_KEY, JSON.stringify(this.items));
+            localStorage.setItem(TOAST_HISTORY_KEY + '.unread', String(this.unread));
+          } catch (_) {}
+        },
+        iconFor(level) { return ({ success: '✓', error: '!', info: 'i', warn: '⚠' })[level] || 'i'; },
+        formatAgo(ts) {
+          if (!ts) return '';
+          const diff = Math.floor(Date.now() / 1000) - ts;
+          if (diff < 60) return 'just now';
+          if (diff < 3600) return Math.floor(diff / 60) + ' min ago';
+          if (diff < 86400) return Math.floor(diff / 3600) + ' hr ago';
+          return Math.floor(diff / 86400) + ' days ago';
         }
       };
     }

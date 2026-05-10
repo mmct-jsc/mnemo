@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block title %} - nodes{% endblock %}
+{% block content %}
+
+<section class="hero compact">
+  <h1>Nodes</h1>
+  <p>Search and browse every memory entry mnemo has indexed.</p>
+</section>
+
+<section class="search">
+  <div class="search-box">
+    <input
+      type="search"
+      name="q"
+      placeholder="Try: no co-author trailer, MQTT broker auth, deploy process..."
+      autocomplete="off"
+      autofocus
+      hx-get="/ui/search"
+      hx-trigger="keyup changed delay:300ms, search"
+      hx-target="#results"
+      hx-indicator="#search-indicator">
+  </div>
+  <div id="search-indicator" class="hint" style="text-align:center; min-height: 1.25rem;">
+    <span class="htmx-indicator">searching...</span>
+  </div>
+  <div id="results"></div>
+</section>
+
+<section>
+  <div class="section-head">
+    <h2>Browse</h2>
+    <form class="filters" method="get" action="/nodes-page">
+      <select name="type" onchange="this.form.submit()">
+        <option value="">All types</option>
+        {% for t, n in counts.items() %}
+          <option value="{{ t }}" {% if filter_type == t %}selected{% endif %}>{{ t | replace('memory_','') | replace('_',' ') }} ({{ n }})</option>
+        {% endfor %}
+      </select>
+      <select name="project" onchange="this.form.submit()">
+        <option value="">All projects</option>
+        {% for p in projects %}
+          <option value="{{ p }}" {% if filter_project == p %}selected{% endif %}>{{ p }}</option>
+        {% endfor %}
+      </select>
+      {% if filter_type or filter_project %}
+        <a class="link-button" href="/nodes-page">clear</a>
+      {% endif %}
+    </form>
+  </div>
+
+  <div class="hint pagination-summary">
+    Showing {{ pagination.offset + 1 }}-{{ pagination.offset + nodes | length }} of {{ pagination.total }}
+  </div>
+
+  {% if nodes %}
+    <ul class="node-list">
+      {% for n in nodes %}
+        <li>
+          <a href="/node/{{ n.id }}">
+            <span class="badge type-{{ n.type }}">{{ n.type | replace('memory_','') | replace('_',' ') }}</span>
+            <span class="name">{{ n.name }}</span>
+            {% if n.project_key %}<span class="proj">{{ n.project_key }}</span>{% endif %}
+          </a>
+          {% if n.description %}<p class="desc">{{ n.description }}</p>{% endif %}
+        </li>
+      {% endfor %}
+    </ul>
+
+    {% include "_pagination.html" %}
+  {% else %}
+    <div class="empty">
+      <p>No nodes match those filters.</p>
+      <p class="hint">Try widening the filters or running <code>mnemo reindex</code>.</p>
+    </div>
+  {% endif %}
+</section>
+
+{% endblock %}
