@@ -14,8 +14,8 @@ from contextlib import contextmanager
 import httpx
 import pytest
 
-from mnemo_middleware import retrieve_context
 from mnemo_middleware import retrieve as retrieve_mod
+from mnemo_middleware import retrieve_context
 
 
 @contextmanager
