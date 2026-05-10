@@ -18,7 +18,7 @@ dependencies = [
     "pydantic>=2.6",
     "jinja2>=3.1",
     "pathspec>=0.12",
-    "pypdf>=4.0",
+    "pypdf>=6.11.0",
 ]
 
 [tool.hatch.build.targets.wheel.sources]
