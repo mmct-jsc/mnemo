@@ -180,6 +180,21 @@ def mount_ui(
         all_q = s.recent_queries(limit=10_000)
         pg = _paginate(len(all_q), page, PAGE_SIZE_AUDIT)
         queries = all_q[pg["offset"] : pg["offset"] + pg["page_size"]]
+
+        # Summary stats over the FULL audit window so the side cards stay
+        # stable across pagination.
+        total_hits = sum(len(q.retrieved_ids) for q in all_q)
+        avg_hits = (total_hits / len(all_q)) if all_q else 0.0
+        first_ts = min((q.ts for q in all_q), default=0)
+        last_ts = max((q.ts for q in all_q), default=0)
+        span_days = max(0, (last_ts - first_ts) // 86400) if all_q else 0
+        tag_counter: Counter[str] = Counter()
+        for q in all_q:
+            for t in q.intent_tags or []:
+                if t and t != "none":
+                    tag_counter[t] += 1
+        top_tags = tag_counter.most_common(6)
+
         return templates.TemplateResponse(
             request,
             "audit.html",
@@ -188,6 +203,12 @@ def mount_ui(
                 queries=queries,
                 pagination=pg,
                 pagination_qs=_pagination_qs(request),
+                total_hits=total_hits,
+                avg_hits=avg_hits,
+                first_ts=first_ts,
+                last_ts=last_ts,
+                span_days=span_days,
+                top_tags=top_tags,
             ),
         )
 

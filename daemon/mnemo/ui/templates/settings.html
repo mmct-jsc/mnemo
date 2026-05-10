@@ -2,63 +2,84 @@
 {% block title %} - settings{% endblock %}
 {% block content %}
 <section class="settings" x-data="settingsForm()" x-init="init()">
-  <div class="section-head">
-    <h2>Retrieval settings</h2>
-    <span class="hint">edits save to <code>~/.claude/mnemo/settings.json</code></span>
+
+  <header class="page-hero">
+    <div class="hero-text">
+      <h1>Retrieval settings</h1>
+      <p>Tune how mnemo ranks memory entries against incoming queries. All edits save to <code>~/.claude/mnemo/settings.json</code>.</p>
+    </div>
+    <div class="hero-actions">
+      <button @click="reset()" :disabled="saving">Reset to defaults</button>
+      <button class="primary" :disabled="!dirty || saving" @click="save()">
+        <span x-show="!saving">Save</span><span x-show="saving" x-cloak>saving...</span>
+      </button>
+    </div>
+  </header>
+
+  <div class="settings-formula">
+    <strong>Score formula:</strong>
+    <code>score = alpha&middot;vector + beta&middot;graph + gamma&middot;recency + delta&middot;type + epsilon&middot;project + zeta&middot;lexical</code>
+    <p class="hint" style="margin: 0.4rem 0 0;">Weights don't have to sum to 1.0 — only the ratios between them affect ranking. <span x-show="dirty" x-cloak class="ok">unsaved changes</span></p>
   </div>
 
-  <p class="hint">
-    Each query's score = <strong>alpha</strong> &middot; vector
-    + <strong>beta</strong> &middot; graph
-    + <strong>gamma</strong> &middot; recency
-    + <strong>delta</strong> &middot; type
-    + <strong>epsilon</strong> &middot; project
-    + <strong>zeta</strong> &middot; lexical.
-    Weights don't have to sum to 1.0; ordering is what matters.
-  </p>
+  <section class="dash-row">
+    <div class="dash-card">
+      <div class="dash-card-head">
+        <h2>Scoring weights</h2>
+        <span class="hint">six terms</span>
+      </div>
+      <div class="weight-grid">
+        <template x-for="(w, key) in weights" :key="key">
+          <label class="weight-row">
+            <span class="wlabel">
+              <span x-text="key"></span>
+              <em x-text="weightDescriptions[key]"></em>
+            </span>
+            <input type="range" min="0" max="1" step="0.01" x-model.number="weights[key]"
+                   @input="dirty = true">
+            <input type="number" min="0" max="1" step="0.01" x-model.number="weights[key]"
+                   @input="dirty = true" class="wvalue">
+          </label>
+        </template>
+      </div>
+    </div>
 
-  <h3>Scoring weights</h3>
-  <div class="weight-grid">
-    <template x-for="(w, key) in weights" :key="key">
-      <label class="weight-row">
-        <span class="wlabel">
-          <span x-text="key"></span>
-          <em x-text="weightDescriptions[key]"></em>
-        </span>
-        <input type="range" min="0" max="1" step="0.01" x-model.number="weights[key]"
-               @input="dirty = true">
-        <input type="number" min="0" max="1" step="0.01" x-model.number="weights[key]"
-               @input="dirty = true" class="wvalue">
-      </label>
-    </template>
-  </div>
+    <div class="dash-card">
+      <div class="dash-card-head">
+        <h2>Defaults</h2>
+        <span class="hint">budget + decay</span>
+      </div>
+      <div class="weight-grid">
+        <label class="weight-row">
+          <span class="wlabel">k <em>top hits returned</em></span>
+          <input type="range" min="1" max="50" step="1" x-model.number="defaults.k" @input="dirty = true">
+          <input type="number" min="1" max="200" step="1" x-model.number="defaults.k" @input="dirty = true" class="wvalue">
+        </label>
+        <label class="weight-row">
+          <span class="wlabel">budget_tokens <em>max tokens / response</em></span>
+          <input type="range" min="100" max="4000" step="50" x-model.number="defaults.budget_tokens" @input="dirty = true">
+          <input type="number" min="1" max="10000" step="50" x-model.number="defaults.budget_tokens" @input="dirty = true" class="wvalue">
+        </label>
+        <label class="weight-row">
+          <span class="wlabel">recency_half_life_days <em>days for recency decay</em></span>
+          <input type="range" min="7" max="365" step="1" x-model.number="recency_half_life_days" @input="dirty = true">
+          <input type="number" min="1" max="3650" step="1" x-model.number="recency_half_life_days" @input="dirty = true" class="wvalue">
+        </label>
+      </div>
 
-  <h3>Defaults</h3>
-  <div class="weight-grid">
-    <label class="weight-row">
-      <span class="wlabel">k <em>top hits returned</em></span>
-      <input type="range" min="1" max="50" step="1" x-model.number="defaults.k" @input="dirty = true">
-      <input type="number" min="1" max="200" step="1" x-model.number="defaults.k" @input="dirty = true" class="wvalue">
-    </label>
-    <label class="weight-row">
-      <span class="wlabel">budget_tokens <em>max tokens per response</em></span>
-      <input type="range" min="100" max="4000" step="50" x-model.number="defaults.budget_tokens" @input="dirty = true">
-      <input type="number" min="1" max="10000" step="50" x-model.number="defaults.budget_tokens" @input="dirty = true" class="wvalue">
-    </label>
-    <label class="weight-row">
-      <span class="wlabel">recency_half_life_days <em>days for recency decay</em></span>
-      <input type="range" min="7" max="365" step="1" x-model.number="recency_half_life_days" @input="dirty = true">
-      <input type="number" min="1" max="3650" step="1" x-model.number="recency_half_life_days" @input="dirty = true" class="wvalue">
-    </label>
-  </div>
-
-  <div class="actions" style="margin-top:1.5rem; display:flex; gap:0.5rem; align-items:center;">
-    <button class="primary" :disabled="!dirty || saving" @click="save()">
-      <span x-show="!saving">Save</span><span x-show="saving" x-cloak>saving...</span>
-    </button>
-    <button @click="reset()" :disabled="saving">Reset to defaults</button>
-    <span class="hint" x-show="dirty" x-cloak>unsaved changes</span>
-  </div>
+      <div style="margin-top: 1.25rem;">
+        <h3 style="margin-bottom: 0.5rem;">What each term means</h3>
+        <dl class="audit-summary" style="background: transparent; border: 0; padding: 0; font-size: 0.82rem;">
+          <dt>alpha</dt><dd>cosine similarity to the query embedding</dd>
+          <dt>beta</dt><dd>boost for nodes adjacent to other top hits</dd>
+          <dt>gamma</dt><dd>recency decay (newer nodes rank higher)</dd>
+          <dt>delta</dt><dd>type priority based on inferred intent</dd>
+          <dt>epsilon</dt><dd>boost when the node is from the active project</dd>
+          <dt>zeta</dt><dd>literal token overlap on name + description</dd>
+        </dl>
+      </div>
+    </div>
+  </section>
 </section>
 
 <script>
@@ -133,12 +154,15 @@ function settingsForm() {
 </script>
 
 <style>
-  .weight-grid { display: grid; gap: 0.6rem; max-width: 760px; }
+  .weight-grid { display: grid; gap: 0.6rem; }
   .weight-row {
-    display: grid; grid-template-columns: 220px 1fr 90px; gap: 0.85rem;
+    display: grid; grid-template-columns: 200px 1fr 90px; gap: 0.85rem;
     align-items: center;
-    background: var(--panel); border: 1px solid var(--border-soft);
-    border-radius: var(--radius); padding: 0.7rem 1rem;
+    background: var(--bg); border: 1px solid var(--border-soft);
+    border-radius: var(--radius); padding: 0.6rem 0.85rem;
+  }
+  @media (max-width: 700px) {
+    .weight-row { grid-template-columns: 1fr; gap: 0.4rem; }
   }
   .wlabel { font-family: var(--mono); font-size: 0.85rem; color: var(--fg); }
   .wlabel em { display: block; color: var(--fg-dim); font-size: 0.75rem; font-style: normal; }

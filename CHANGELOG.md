@@ -2,6 +2,60 @@
 
 All notable changes to mnemo are documented here.
 
+## [1.0.4] - 2026-05-10
+
+UI polish release. Pages outside the dashboard now use the same
+full-dive layout (hero, stat cards, multi-column grid). Body previews
+render proper Markdown. Timestamps display in local time. Plus a few
+alignment fixes carried over from 1.0.3 feedback.
+
+### Added
+
+- **Markdown body preview** on the node detail page (Edit / Preview
+  tab toggle) and inside the graph side panel. Uses ``marked`` +
+  ``DOMPurify`` from CDN; rendered output picks up dark-theme styling
+  via the new ``.md-body`` class. Same renderer is reused across both
+  pages -- no duplication.
+- **Page hero** on Audit, Settings, Node detail, and Sources: title
+  with gradient + subtitle + right-aligned actions area, mirroring the
+  Dashboard's welcome header for visual consistency.
+- **Audit page summary cards** at the top (total queries, hits
+  delivered, avg hits/query, last query time) and a side rail with
+  top-intent counts and the activity-window date range.
+- **Node detail stat cards** (outgoing edges, incoming edges, body
+  chars, last updated). The page now uses a 2-column main/aside grid
+  with edges as a sticky side rail.
+- **Local-time timestamps**: every Unix ``ts`` in the UI is rendered
+  by a shared ``mnemoFormatTs(ts, fmt)`` helper into the user's
+  locale. Server emits ``<time data-ts="...">`` tags; a single
+  ``DOMContentLoaded`` pass + ``htmx:afterSwap`` hook converts them.
+  Three formats: ``datetime`` (default), ``date``, ``relative``.
+
+### Changed
+
+- **Main content max-width** bumped from 1200px to 1600px so wider
+  screens feel full instead of empty around the sides. Inner padding
+  bumped to 2rem.
+- **Settings page** restructured: full-dive hero with Save / Reset in
+  the actions area, score-formula callout, then a 50/50 split between
+  Scoring weights and Defaults -- both as ``dash-card``s with their
+  own weight-grids.
+- **Audit page** removed the ``max-width: 920px`` constraint that was
+  keeping it narrower than the rest of the UI.
+- **Graph side panel** widened to 380px so the markdown body preview
+  has room to breathe.
+
+### Fixed
+
+- **Open node / Copy citation alignment** in the graph side panel.
+  The two buttons used different box models (``<a>`` with padding vs
+  ``<button>`` with padding + border), so they never lined up. New
+  shared ``.btn-row`` class normalizes height + padding + border so
+  any mix of ``<a>`` and ``<button>`` lines up cleanly.
+- **Preview tab on node detail** sometimes rendered empty when
+  ``marked`` / ``DOMPurify`` were still loading at Alpine init time.
+  Render now retries on a short timer until both libs are hydrated.
+
 ## [1.0.3] - 2026-05-10
 
 Bug-fix release for issues caught after 1.0.2 went out.
