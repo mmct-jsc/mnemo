@@ -18,7 +18,7 @@ download, but a vulnerability in the daemon could still expose the
 user's memory to other processes on the same machine.
 
 If you find a security issue, email **security@mnemo.dev** (or open a
-[GitHub security advisory](https://github.com/mnemo-dev/mnemo/security/advisories/new)).
+[GitHub security advisory](https://github.com/mmct-jsc/mnemo/security/advisories/new)).
 Include:
 
 - A description of the issue

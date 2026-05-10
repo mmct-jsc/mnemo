@@ -1,6 +1,6 @@
 # mnemo
 
-[![CI](https://github.com/mnemo-dev/mnemo/actions/workflows/ci.yml/badge.svg)](https://github.com/mnemo-dev/mnemo/actions/workflows/ci.yml)
+[![CI](https://github.com/mmct-jsc/mnemo/actions/workflows/ci.yml/badge.svg)](https://github.com/mmct-jsc/mnemo/actions/workflows/ci.yml)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)](CHANGELOG.md)
@@ -41,7 +41,7 @@ Requires Python 3.11+ and [uv](https://github.com/astral-sh/uv).
 
 ```bash
 # Install
-git clone https://github.com/mnemo-dev/mnemo.git
+git clone https://github.com/mmct-jsc/mnemo.git
 cd mnemo
 ./install.sh    # or .\install.ps1 on Windows
 
