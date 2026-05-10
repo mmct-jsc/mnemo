@@ -42,13 +42,13 @@ def patch(client: object, *, mode: str = "auto") -> object:
     Lazy-imports the patcher so the package's import-time cost stays
     tiny (just retrieve_context); shims load only when you patch.
     """
-    from mnemo_middleware.patch import patch as _patch
+    from mnemo_middleware._patcher import patch as _patch
 
     return _patch(client, mode=mode)
 
 
 def unpatch(client: object) -> object:
     """Reverse a previous ``patch(client)``. Idempotent."""
-    from mnemo_middleware.patch import unpatch as _unpatch
+    from mnemo_middleware._patcher import unpatch as _unpatch
 
     return _unpatch(client)
