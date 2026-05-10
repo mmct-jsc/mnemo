@@ -7,7 +7,7 @@ for the v1.1 (Beyond Claude Code) design see
 [docs/plans/2026-05-10-mnemo-v1.1-design.md](plans/2026-05-10-mnemo-v1.1-design.md).
 The HTTP contract is at [docs/protocol.md](protocol.md).
 
-## Architecture (v1.1)
+## Three tiers (v1.1: clients + daemon + store)
 
 ```
                  Local machine only
