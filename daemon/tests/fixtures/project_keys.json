@@ -1,0 +1,226 @@
+{
+  "_doc": [
+    "Canonical (path, expected_project_key) pairs for the v1 project-key",
+    "derivation algorithm. The daemon's POST /v1/projects/resolve must",
+    "produce these outputs; adapter ports (VS Code, middleware) must too.",
+    "Drift fails CI.",
+    "",
+    "Each case is purely syntactic on the absolute path string. We do NOT",
+    "do filesystem resolution here -- the test passes the path AS-IS to",
+    "paths.project_key_from_abs() to keep the test cross-platform."
+  ],
+  "cases": [
+    {
+      "path": "/home/alice/work/web",
+      "expected": "home-alice-work-web",
+      "note": "POSIX absolute path"
+    },
+    {
+      "path": "/home/alice/work",
+      "expected": "home-alice-work",
+      "note": "POSIX shorter path"
+    },
+    {
+      "path": "/Users/alice/Sites/blog",
+      "expected": "Users-alice-Sites-blog",
+      "note": "macOS absolute path"
+    },
+    {
+      "path": "/Users/alice/Sites/.config",
+      "expected": "Users-alice-Sites-.config",
+      "note": "POSIX dotfile / dot-prefixed segment is preserved"
+    },
+    {
+      "path": "/var/www/html",
+      "expected": "var-www-html",
+      "note": "POSIX system path"
+    },
+    {
+      "path": "/opt/projects/my-app",
+      "expected": "opt-projects-my-app",
+      "note": "POSIX path with internal hyphen (preserved literally)"
+    },
+    {
+      "path": "/home/alice/work/web/",
+      "expected": "home-alice-work-web",
+      "note": "POSIX trailing slash stripped by trim"
+    },
+    {
+      "path": "/",
+      "expected": "",
+      "note": "POSIX root collapses to empty key (caller should treat as 'no project')"
+    },
+    {
+      "path": "/repo with spaces/sub",
+      "expected": "repo with spaces-sub",
+      "note": "POSIX spaces in path are preserved literally"
+    },
+    {
+      "path": "/repo.with.dots/sub",
+      "expected": "repo.with.dots-sub",
+      "note": "POSIX dots inside segments are preserved"
+    },
+
+    {
+      "path": "D:\\Repository\\knowledge-base",
+      "expected": "D--Repository-knowledge-base",
+      "note": "Windows: colon + backslash both become dash, hence double dash"
+    },
+    {
+      "path": "D:\\Repository\\edge-device",
+      "expected": "D--Repository-edge-device",
+      "note": "Windows another project under same drive"
+    },
+    {
+      "path": "C:\\Users\\OS\\code\\proj",
+      "expected": "C--Users-OS-code-proj",
+      "note": "Windows uppercase drive letter (case preserved)"
+    },
+    {
+      "path": "c:\\Users\\OS\\code\\proj",
+      "expected": "c--Users-OS-code-proj",
+      "note": "Windows lowercase drive letter (case preserved -- different key from uppercase variant)"
+    },
+    {
+      "path": "D:\\Repository\\knowledge-base\\",
+      "expected": "D--Repository-knowledge-base",
+      "note": "Windows trailing backslash stripped by trim"
+    },
+    {
+      "path": "D:\\Repo",
+      "expected": "D--Repo",
+      "note": "Windows short path"
+    },
+    {
+      "path": "D:\\",
+      "expected": "D",
+      "note": "Windows drive root collapses to drive letter only"
+    },
+    {
+      "path": "D:\\Game_Dev\\soi",
+      "expected": "D--Game_Dev-soi",
+      "note": "Windows underscore in segment preserved"
+    },
+    {
+      "path": "D:\\my repo\\sub",
+      "expected": "D--my repo-sub",
+      "note": "Windows space inside segment preserved"
+    },
+    {
+      "path": "D:\\repo.with.dots\\sub",
+      "expected": "D--repo.with.dots-sub",
+      "note": "Windows dots in segments preserved"
+    },
+
+    {
+      "path": "/home/alice/work/very/deep/nested/repo/with/many/segments",
+      "expected": "home-alice-work-very-deep-nested-repo-with-many-segments",
+      "note": "POSIX deep path"
+    },
+    {
+      "path": "D:\\very\\deep\\nested\\repo\\with\\many\\segments",
+      "expected": "D--very-deep-nested-repo-with-many-segments",
+      "note": "Windows deep path"
+    },
+    {
+      "path": "/_internal/private",
+      "expected": "_internal-private",
+      "note": "POSIX underscore-prefixed segment preserved"
+    },
+    {
+      "path": "D:\\_internal\\private",
+      "expected": "D--_internal-private",
+      "note": "Windows underscore-prefixed segment preserved"
+    },
+    {
+      "path": "/home/alice/UPPERCASE",
+      "expected": "home-alice-UPPERCASE",
+      "note": "POSIX preserves segment case"
+    },
+    {
+      "path": "/home/alice/CamelCase",
+      "expected": "home-alice-CamelCase",
+      "note": "POSIX CamelCase preserved"
+    },
+    {
+      "path": "D:\\CamelCase",
+      "expected": "D--CamelCase",
+      "note": "Windows CamelCase preserved"
+    },
+    {
+      "path": "/home/alice/with/numbers123",
+      "expected": "home-alice-with-numbers123",
+      "note": "POSIX digits preserved"
+    },
+    {
+      "path": "D:\\v1.1.0\\release",
+      "expected": "D--v1.1.0-release",
+      "note": "Windows version-like segment preserved (dots stay)"
+    },
+    {
+      "path": "/srv/git/repo.git",
+      "expected": "srv-git-repo.git",
+      "note": "POSIX bare-repo .git suffix preserved"
+    },
+    {
+      "path": "D:\\projects\\my-app.git",
+      "expected": "D--projects-my-app.git",
+      "note": "Windows .git suffix preserved"
+    },
+    {
+      "path": "/tmp/abc-123_def.45",
+      "expected": "tmp-abc-123_def.45",
+      "note": "POSIX mixed punctuation in segment preserved"
+    },
+    {
+      "path": "D:\\tmp\\abc-123_def.45",
+      "expected": "D--tmp-abc-123_def.45",
+      "note": "Windows mixed punctuation in segment preserved"
+    },
+    {
+      "path": "/foo/-leading-hyphen",
+      "expected": "foo--leading-hyphen",
+      "note": "POSIX segment that starts with hyphen -- internal dashes preserved (not collapsed); only outer trim"
+    },
+    {
+      "path": "/foo/trailing-hyphen-",
+      "expected": "foo-trailing-hyphen",
+      "note": "POSIX trailing hyphen on final segment is trimmed (it sits at the end of the whole key)"
+    },
+    {
+      "path": "/aaa/bbb/ccc",
+      "expected": "aaa-bbb-ccc",
+      "note": "POSIX baseline three-segment path"
+    },
+    {
+      "path": "D:\\aaa\\bbb\\ccc",
+      "expected": "D--aaa-bbb-ccc",
+      "note": "Windows baseline three-segment path"
+    },
+    {
+      "path": "/home/Alice2024/repo",
+      "expected": "home-Alice2024-repo",
+      "note": "POSIX year suffix preserved"
+    },
+    {
+      "path": "D:\\Repository\\test (1)",
+      "expected": "D--Repository-test (1)",
+      "note": "Windows parenthesized suffix preserved (parens are literal)"
+    },
+    {
+      "path": "/home/o'reilly/repo",
+      "expected": "home-o'reilly-repo",
+      "note": "POSIX apostrophe in segment preserved"
+    },
+    {
+      "path": "D:\\日本語\\repo",
+      "expected": "D--日本語-repo",
+      "note": "Windows non-ASCII segment preserved (UTF-8 throughout)"
+    },
+    {
+      "path": "/home/Olé/projet",
+      "expected": "home-Olé-projet",
+      "note": "POSIX accented letters preserved"
+    }
+  ]
+}

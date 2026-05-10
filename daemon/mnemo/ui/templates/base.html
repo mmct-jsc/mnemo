@@ -134,6 +134,40 @@
       <a href="/settings"     class="{% if page == 'settings' %}active{% endif %}">Settings</a>
     </nav>
 
+    <!-- Active-project switcher (v1.1). Compact pill shows the
+         current active project; click opens a small popover. -->
+    <div class="active-proj" x-data="activeProjectWidget()" x-init="init()" @click.outside="popoverOpen = false">
+      <button class="active-proj-pill" @click="popoverOpen = !popoverOpen" :class="{ 'is-set': active }">
+        <span class="active-proj-dot" aria-hidden="true"></span>
+        <span class="active-proj-label" x-text="active ? active.project_key : 'no project'"></span>
+      </button>
+      <div class="active-proj-pop" x-show="popoverOpen" x-cloak>
+        <header>
+          <strong>Active project</strong>
+        </header>
+        <div class="body">
+          <p class="hint" x-show="active" x-cloak>
+            Path: <code x-text="active && active.path"></code><br>
+            Set: <time :data-ts="active && active.since" data-fmt="relative">…</time>
+          </p>
+          <p class="hint" x-show="!active" x-cloak>
+            No project active. Set one so retrieval boosts hits from your current workspace.
+          </p>
+          <label>Set / change to path
+            <input type="text" x-model="newPath" placeholder="absolute path of your workspace"
+                   @keydown.enter="setActive()">
+          </label>
+          <div class="active-proj-actions">
+            <button class="primary" @click="setActive()" :disabled="busy || !newPath">
+              <span x-show="!busy">Set active</span>
+              <span x-show="busy" x-cloak>setting...</span>
+            </button>
+            <button @click="clearActive()" x-show="active" x-cloak :disabled="busy">Clear</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Notification bell + history dropdown -->
     <div class="bell-wrap" x-data="bellHistory()" @mnemo-toast.document="record($event.detail)" @click.outside="open = false">
       <button class="bell" @click="open = !open; if (open) markRead()"
@@ -248,6 +282,66 @@
           this.current = null;
           if (typeof r === 'function') r(result);
         }
+      };
+    }
+
+    function activeProjectWidget() {
+      return {
+        active: null,           // {project_key, path, since} or null
+        newPath: '',
+        popoverOpen: false,
+        busy: false,
+        async init() {
+          await this.refresh();
+        },
+        async refresh() {
+          try {
+            const r = await fetch('/v1/projects/active');
+            if (!r.ok) { this.active = null; return; }
+            const body = await r.text();
+            this.active = body ? JSON.parse(body) : null;
+            // Pre-fill the input with the active path so "set" feels
+            // like an edit when one is already set.
+            this.newPath = this.active ? this.active.path : '';
+            // Re-format the relative <time> the popover renders.
+            window.mnemoApplyTimes(document);
+          } catch (_) {
+            this.active = null;
+          }
+        },
+        async setActive() {
+          if (!this.newPath) return;
+          this.busy = true;
+          try {
+            const r = await fetch('/v1/projects/active', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ path: this.newPath }),
+            });
+            if (!r.ok) throw new Error(await r.text());
+            const data = await r.json();
+            this.active = data;
+            window.toast('Active project: ' + data.project_key, 'success');
+            this.popoverOpen = false;
+          } catch (e) {
+            window.toast('Set active failed: ' + e, 'error');
+          } finally {
+            this.busy = false;
+          }
+        },
+        async clearActive() {
+          this.busy = true;
+          try {
+            await fetch('/v1/projects/active', { method: 'DELETE' });
+            this.active = null;
+            this.newPath = '';
+            window.toast('Active project cleared', 'success');
+          } catch (e) {
+            window.toast('Clear failed: ' + e, 'error');
+          } finally {
+            this.busy = false;
+          }
+        },
       };
     }
 

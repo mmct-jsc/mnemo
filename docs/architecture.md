@@ -1,30 +1,49 @@
 # mnemo architecture (the gist)
 
-A short tour of how mnemo is put together. For the full design rationale,
-see [docs/plans/2026-05-09-mnemo-design.md](plans/2026-05-09-mnemo-design.md).
+A short tour of how mnemo is put together. For the full v1.0 design
+rationale see
+[docs/plans/2026-05-09-mnemo-design.md](plans/2026-05-09-mnemo-design.md);
+for the v1.1 (Beyond Claude Code) design see
+[docs/plans/2026-05-10-mnemo-v1.1-design.md](plans/2026-05-10-mnemo-v1.1-design.md).
+The HTTP contract is at [docs/protocol.md](protocol.md).
 
-## Three tiers
+## Three tiers (v1.1: clients + daemon + store)
 
 ```
-[Claude Code plugin]   markdown skills + hooks + slash commands
-        |
-        v   localhost HTTP / stdin pipe
-[mnemo daemon]         Python + FastAPI on 127.0.0.1:7373
-        |
-        v
-[mnemo store]          SQLite + sqlite-vec  (~/.claude/mnemo/)
+                 Local machine only
++-------------------------------------------------------------+
+|  Claude Code plugin   VS Code extension   mnemo-middleware  |
+|  (existing, hooks)   (.vsix, @mnemo chat)  (PyPI, OpenAI/   |
+|                                             Anthropic/...)  |
+|        \_____________________|_________________/            |
+|                              |                              |
+|                  HTTP, all under /v1/...                    |
+|                              v                              |
+|             mnemo daemon (FastAPI, 127.0.0.1:7373)          |
+|                              |                              |
+|                              v                              |
+|              SQLite + sqlite-vec (~/.claude/mnemo/)         |
++-------------------------------------------------------------+
 ```
 
-**Plugin** is markdown + small bash/PowerShell hooks. Zero Python
-dependencies in the plugin itself. The hooks shell out to the `mnemo`
-CLI.
+**Plugin** (Claude Code reference adapter) is markdown skills + small
+bash/PowerShell hooks. Zero Python dependencies in the plugin itself.
 
-**Daemon** is a Python process. It owns the store, the embedding model, and
-the file watcher. Started on demand via `mnemo daemon start`.
+**VS Code extension** (`extensions/vscode/`) registers a `@mnemo`
+chat participant + sidebar + status bar. Talks HTTP to the daemon.
+
+**SDK middleware** (`clients/middleware-py/`) is a PyPI package that
+patches OpenAI / Anthropic / Google / Ollama SDK clients to inject
+retrieval as a system message before the model call. Always additive
+(daemon down -> empty injection -> model call proceeds).
+
+**Daemon** is a Python FastAPI process. It owns the store, the
+embedding model, and the file watcher. Public HTTP surface lives
+under `/v1/...` with an OpenAPI spec at `/v1/openapi.json`.
 
 **Store** is two SQLite databases: `mnemo.db` (relational) and a
-`vec_chunks` virtual table (sqlite-vec) for embeddings. Plus the model
-cache and runtime logs. Everything sits under `~/.claude/mnemo/`.
+`vec_chunks` virtual table (sqlite-vec) for embeddings. Plus the
+model cache and runtime logs. Everything sits under `~/.claude/mnemo/`.
 
 ## Why local-first
 

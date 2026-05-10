@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 from mnemo.compress import CompressedHit
 from mnemo.ingest import ReindexReport
 from mnemo.retrieve import RetrievalResult
-from mnemo.store import Node, Query, Source
+from mnemo.store import ActiveProject, Node, Query, Source
 
 # --- Nodes ----------------------------------------------------------------
 
@@ -29,6 +29,7 @@ class NodeOut(BaseModel):
     hash: str
     created_at: int
     updated_at: int
+    base: bool = False
 
     @classmethod
     def from_node(cls, n: Node) -> NodeOut:
@@ -44,6 +45,7 @@ class NodeOut(BaseModel):
             hash=n.hash,
             created_at=n.created_at,
             updated_at=n.updated_at,
+            base=n.base,
         )
 
 
@@ -52,6 +54,7 @@ class NodeUpdateIn(BaseModel):
     description: str | None = None
     type: str | None = None
     project_key: str | None = None
+    base: bool | None = None
 
 
 # --- Sources --------------------------------------------------------------
@@ -63,6 +66,8 @@ class SourceOut(BaseModel):
     project_key: str | None
     last_indexed_at: int | None
     enabled: bool
+    include: str | None = None
+    exclude: str | None = None
 
     @classmethod
     def from_source(cls, s: Source) -> SourceOut:
@@ -72,6 +77,8 @@ class SourceOut(BaseModel):
             project_key=s.project_key,
             last_indexed_at=s.last_indexed_at,
             enabled=s.enabled,
+            include=s.include,
+            exclude=s.exclude,
         )
 
 
@@ -80,6 +87,20 @@ class SourceIn(BaseModel):
     kind: str
     project_key: str | None = None
     enabled: bool = True
+    include: str | None = None
+    exclude: str | None = None
+
+
+class SourceUpdateIn(BaseModel):
+    """PATCH body. Identifies the source by ``path``; any other fields
+    sent are applied. Send ``null`` to explicitly clear ``project_key``,
+    ``include``, or ``exclude``."""
+
+    path: str
+    project_key: str | None = None
+    enabled: bool | None = None
+    include: str | None = None
+    exclude: str | None = None
 
 
 # --- Queries --------------------------------------------------------------
@@ -89,6 +110,10 @@ class QueryIn(BaseModel):
     prompt: str
     budget_tokens: int = Field(default=800, ge=1, le=10000)
     k: int = Field(default=20, ge=1, le=200)
+    # v1.1 added ``project_key`` as the canonical name. ``active_project`` is
+    # kept for one minor version of backward-compat with pre-1.1 clients.
+    # If both are sent, ``project_key`` wins.
+    project_key: str | None = None
     active_project: str | None = None
 
 
@@ -186,3 +211,67 @@ class HealthOut(BaseModel):
     source_count: int
     counts_by_type: dict[str, int]
     embedding_loaded: bool
+
+
+# --- Project resolution + active project (v1.1) ---------------------------
+
+
+class ProjectResolveIn(BaseModel):
+    """Input for ``POST /v1/projects/resolve``: the path to derive a key for."""
+
+    path: str
+
+
+class ProjectResolveOut(BaseModel):
+    """Output: the canonical project key for the supplied path."""
+
+    project_key: str
+    path: str
+
+
+class ProjectActivateIn(BaseModel):
+    """Input for ``POST /v1/projects/active``: a workspace path. The daemon
+    resolves it to a canonical project key and persists it as the active
+    project. Subsequent queries without an explicit ``project_key`` use this.
+    """
+
+    path: str
+
+
+class ActiveProjectOut(BaseModel):
+    """The currently-active project (or ``null`` body when none is set)."""
+
+    project_key: str
+    path: str
+    since: int
+
+    @classmethod
+    def from_active(cls, a: ActiveProject) -> ActiveProjectOut:
+        return cls(project_key=a.project_key, path=a.path, since=a.since)
+
+
+class KnownProjectItem(BaseModel):
+    project_key: str
+    sample_path: str | None
+    node_count: int
+    source_count: int
+
+
+class KnownProjectsOut(BaseModel):
+    """Distinct project keys + their representative paths, gathered from
+    sources and nodes. Used by the UI to populate dropdowns."""
+
+    items: list[KnownProjectItem]
+
+
+class FsSuggestOut(BaseModel):
+    """Filesystem directory suggestions for the path autocomplete in the UI.
+
+    Returned candidates are absolute paths to directories that exist on the
+    daemon's local machine. The daemon is bound to 127.0.0.1 so the
+    listener is the same user, but we still cap the response size and
+    reject paths that resolve outside reasonable roots (no expansion of
+    ``..`` past the user's home, no following symlinks).
+    """
+
+    candidates: list[str]

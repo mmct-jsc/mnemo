@@ -79,6 +79,11 @@ class Node:
     hash: str
     created_at: int
     updated_at: int
+    # v1.1: BASE knowledge bypasses project isolation. A BASE-flagged
+    # node surfaces in every project's queries regardless of the
+    # active project. Frontmatter `base: true` sets it on parse; the
+    # node detail UI exposes a toggle.
+    base: bool = False
 
     @classmethod
     def new(
@@ -93,6 +98,7 @@ class Node:
         project_key: str | None = None,
         frontmatter_json: str | None = None,
         hash: str = "",
+        base: bool = False,
     ) -> Node:
         if type not in NODE_TYPES:
             raise ValueError(f"unknown node type: {type!r}")
@@ -112,6 +118,7 @@ class Node:
             hash=hash,
             created_at=now,
             updated_at=now,
+            base=base,
         )
 
 
@@ -132,6 +139,12 @@ class Source:
     project_key: str | None
     last_indexed_at: int | None
     enabled: bool
+    # v1.1: comma-separated glob patterns for include/exclude. None means
+    # "use the kind's default include set" (see ingest.iter_files). Stored
+    # as TEXT; UI input is comma-separated; ingest layer parses into a
+    # pathspec.PathSpec.
+    include: str | None = None
+    exclude: str | None = None
 
 
 @dataclass
@@ -142,6 +155,20 @@ class Query:
     retrieved_ids: list[str]
     scores: dict[str, float]
     ts: int
+
+
+@dataclass
+class ActiveProject:
+    """Singleton row in the ``active_project`` table.
+
+    Tracks which project the daemon should treat as 'active' when a query
+    arrives without an explicit ``project_key``. v1.1 hybrid contract:
+    a per-call ``project_key`` overrides this; absence falls back to it.
+    """
+
+    project_key: str
+    path: str
+    since: int
 
 
 # --- SQL --------------------------------------------------------------------
@@ -162,7 +189,8 @@ CREATE TABLE IF NOT EXISTS nodes (
   frontmatter_json TEXT,
   hash             TEXT NOT NULL,
   created_at       INTEGER NOT NULL,
-  updated_at       INTEGER NOT NULL
+  updated_at       INTEGER NOT NULL,
+  base             INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_nodes_type    ON nodes(type);
@@ -191,7 +219,9 @@ CREATE TABLE IF NOT EXISTS sources (
   kind            TEXT NOT NULL,
   project_key     TEXT,
   last_indexed_at INTEGER,
-  enabled         INTEGER NOT NULL DEFAULT 1
+  enabled         INTEGER NOT NULL DEFAULT 1,
+  include         TEXT,
+  exclude         TEXT
 );
 
 CREATE TABLE IF NOT EXISTS queries (
@@ -204,6 +234,15 @@ CREATE TABLE IF NOT EXISTS queries (
 );
 
 CREATE INDEX IF NOT EXISTS idx_queries_ts ON queries(ts DESC);
+
+-- Active project state. Singleton row enforced via a CHECK constraint so
+-- multiple-row inserts fail fast. Empty when no project is active.
+CREATE TABLE IF NOT EXISTS active_project (
+  singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
+  project_key  TEXT NOT NULL,
+  path         TEXT NOT NULL,
+  since        INTEGER NOT NULL
+);
 """
 
 
@@ -250,10 +289,33 @@ class Store:
 
     def _init_schema(self) -> None:
         self.conn.executescript(SCHEMA_SQL)
+        # Lightweight migrations for tables that grew columns after a release
+        # was already in users' hands. SQLite supports ALTER TABLE ADD COLUMN
+        # idempotently only if we check first -- it errors on existing column.
+        self._ensure_columns(
+            "sources",
+            {
+                "include": "TEXT",
+                "exclude": "TEXT",
+            },
+        )
+        self._ensure_columns(
+            "nodes",
+            {
+                "base": "INTEGER NOT NULL DEFAULT 0",
+            },
+        )
         row = self.conn.execute("SELECT version FROM schema_version").fetchone()
         if row is None:
             self.conn.execute("INSERT INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,))
         self.conn.commit()
+
+    def _ensure_columns(self, table: str, columns: dict[str, str]) -> None:
+        """Add missing columns to ``table``. ``columns`` maps name -> SQL type."""
+        existing = {r["name"] for r in self.conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        for name, sql_type in columns.items():
+            if name not in existing:
+                self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {sql_type}")
 
     def schema_version(self) -> int:
         with self._lock:
@@ -278,8 +340,8 @@ class Store:
                 """
                 INSERT INTO nodes
                   (id, type, name, description, body, source_path, source_kind,
-                   project_key, frontmatter_json, hash, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   project_key, frontmatter_json, hash, created_at, updated_at, base)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                   type             = excluded.type,
                   name             = excluded.name,
@@ -290,7 +352,8 @@ class Store:
                   project_key      = excluded.project_key,
                   frontmatter_json = excluded.frontmatter_json,
                   hash             = excluded.hash,
-                  updated_at       = excluded.updated_at
+                  updated_at       = excluded.updated_at,
+                  base             = excluded.base
                 """,
                 (
                     node.id,
@@ -305,6 +368,7 @@ class Store:
                     node.hash,
                     node.created_at,
                     node.updated_at,
+                    1 if node.base else 0,
                 ),
             )
             self.conn.commit()
@@ -375,7 +439,15 @@ class Store:
         type: str | None = None,
         project_key: str | None = None,
         limit: int = 100,
+        include_base: bool = True,
     ) -> list[Node]:
+        """List nodes with optional filters.
+
+        When ``project_key`` is set, the result includes nodes whose
+        project_key matches **plus** any BASE-flagged nodes (since BASE
+        knowledge applies to every project). Pass ``include_base=False``
+        to suppress that union (admin / debugging use only).
+        """
         sql = "SELECT * FROM nodes"
         clauses: list[str] = []
         params: list[object] = []
@@ -383,8 +455,13 @@ class Store:
             clauses.append("type = ?")
             params.append(type)
         if project_key is not None:
-            clauses.append("project_key = ?")
-            params.append(project_key)
+            if include_base:
+                # Project's nodes OR any BASE node, regardless of project.
+                clauses.append("(project_key = ? OR base = 1)")
+                params.append(project_key)
+            else:
+                clauses.append("project_key = ?")
+                params.append(project_key)
         if clauses:
             sql += " WHERE " + " AND ".join(clauses)
         sql += " ORDER BY updated_at DESC LIMIT ?"
@@ -402,15 +479,43 @@ class Store:
             self.conn.execute("DELETE FROM nodes WHERE id = ?", (node_id,))
             self.conn.commit()
 
-    def count_nodes(self) -> dict[str, int]:
+    def count_nodes(
+        self,
+        *,
+        project_key: str | None = None,
+        include_base: bool = True,
+    ) -> dict[str, int]:
+        """Count nodes by type, optionally restricted to one project.
+
+        v1.1: when a project filter is active in the UI, the type-counts
+        dropdown should reflect that scope -- otherwise picking a project
+        and seeing 'project (29)' (the global total) misleads the user.
+        BASE-flagged nodes are included by default since they apply to
+        every project.
+        """
+        sql = "SELECT type, COUNT(*) AS n FROM nodes"
+        params: list[object] = []
+        if project_key is not None:
+            if include_base:
+                sql += " WHERE (project_key = ? OR base = 1)"
+            else:
+                sql += " WHERE project_key = ?"
+            params.append(project_key)
+        sql += " GROUP BY type"
         with self._lock:
-            rows = self.conn.execute(
-                "SELECT type, COUNT(*) AS n FROM nodes GROUP BY type"
-            ).fetchall()
+            rows = self.conn.execute(sql, params).fetchall()
         return {row["type"]: row["n"] for row in rows}
 
     @staticmethod
     def _row_to_node(row: sqlite3.Row) -> Node:
+        # `base` column was added by an idempotent migration; rows from
+        # databases that haven't been re-opened since the migration have
+        # the column as 0. Defensive get() so test fixtures with bare
+        # SELECT * still work.
+        try:
+            base_val = bool(row["base"])
+        except (KeyError, IndexError):
+            base_val = False
         return Node(
             id=row["id"],
             type=row["type"],
@@ -424,6 +529,7 @@ class Store:
             hash=row["hash"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
+            base=base_val,
         )
 
     # --- Edges -------------------------------------------------------------
@@ -506,20 +612,24 @@ class Store:
         *,
         project_key: str | None = None,
         enabled: bool = True,
+        include: str | None = None,
+        exclude: str | None = None,
     ) -> None:
         if kind not in SOURCE_KINDS:
             raise ValueError(f"unknown source kind: {kind!r}")
         with self._lock:
             self.conn.execute(
                 """
-                INSERT INTO sources (path, kind, project_key, enabled)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO sources (path, kind, project_key, enabled, include, exclude)
+                VALUES (?, ?, ?, ?, ?, ?)
                 ON CONFLICT(path) DO UPDATE SET
                   kind        = excluded.kind,
                   project_key = excluded.project_key,
-                  enabled     = excluded.enabled
+                  enabled     = excluded.enabled,
+                  include     = excluded.include,
+                  exclude     = excluded.exclude
                 """,
-                (path, kind, project_key, 1 if enabled else 0),
+                (path, kind, project_key, 1 if enabled else 0, include, exclude),
             )
             self.conn.commit()
 
@@ -536,9 +646,68 @@ class Store:
                 project_key=r["project_key"],
                 last_indexed_at=r["last_indexed_at"],
                 enabled=bool(r["enabled"]),
+                include=r["include"],
+                exclude=r["exclude"],
             )
             for r in rows
         ]
+
+    def get_source(self, path: str) -> Source | None:
+        with self._lock:
+            row = self.conn.execute("SELECT * FROM sources WHERE path = ?", (path,)).fetchone()
+        if row is None:
+            return None
+        return Source(
+            path=row["path"],
+            kind=row["kind"],
+            project_key=row["project_key"],
+            last_indexed_at=row["last_indexed_at"],
+            enabled=bool(row["enabled"]),
+            include=row["include"],
+            exclude=row["exclude"],
+        )
+
+    def update_source(
+        self,
+        path: str,
+        *,
+        project_key: str | None = ...,  # type: ignore[assignment]
+        enabled: bool | None = None,
+        include: str | None = ...,  # type: ignore[assignment]
+        exclude: str | None = ...,  # type: ignore[assignment]
+    ) -> Source | None:
+        """Patch an existing source. Sentinel ``...`` = "leave field alone";
+        ``None`` for nullable fields means "explicitly clear".
+
+        Returns the updated source, or None if no row with that path exists.
+        """
+        existing = self.get_source(path)
+        if existing is None:
+            return None
+        sets: list[str] = []
+        params: list[object] = []
+        if project_key is not ...:
+            sets.append("project_key = ?")
+            params.append(project_key)
+        if enabled is not None:
+            sets.append("enabled = ?")
+            params.append(1 if enabled else 0)
+        if include is not ...:
+            sets.append("include = ?")
+            params.append(include)
+        if exclude is not ...:
+            sets.append("exclude = ?")
+            params.append(exclude)
+        if not sets:
+            return existing
+        params.append(path)
+        with self._lock:
+            self.conn.execute(
+                f"UPDATE sources SET {', '.join(sets)} WHERE path = ?",
+                params,
+            )
+            self.conn.commit()
+        return self.get_source(path)
 
     def mark_source_indexed(self, path: str, *, when: int | None = None) -> None:
         ts = when if when is not None else int(time.time())
@@ -549,6 +718,37 @@ class Store:
     def remove_source(self, path: str) -> None:
         with self._lock:
             self.conn.execute("DELETE FROM sources WHERE path = ?", (path,))
+            self.conn.commit()
+
+    # --- Active project (singleton) ---------------------------------------
+
+    def get_active_project(self) -> ActiveProject | None:
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT project_key, path, since FROM active_project WHERE singleton_id = 1"
+            ).fetchone()
+        if row is None:
+            return None
+        return ActiveProject(project_key=row["project_key"], path=row["path"], since=row["since"])
+
+    def set_active_project(self, *, project_key: str, path: str) -> ActiveProject:
+        ts = int(time.time())
+        with self._lock:
+            # UPSERT on the singleton row. SQLite supports ON CONFLICT REPLACE
+            # via INSERT OR REPLACE; the CHECK keeps rows from multiplying.
+            self.conn.execute(
+                """
+                INSERT OR REPLACE INTO active_project (singleton_id, project_key, path, since)
+                VALUES (1, ?, ?, ?)
+                """,
+                (project_key, path, ts),
+            )
+            self.conn.commit()
+        return ActiveProject(project_key=project_key, path=path, since=ts)
+
+    def clear_active_project(self) -> None:
+        with self._lock:
+            self.conn.execute("DELETE FROM active_project WHERE singleton_id = 1")
             self.conn.commit()
 
     # --- Query audit log ---------------------------------------------------

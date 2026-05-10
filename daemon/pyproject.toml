@@ -1,6 +1,6 @@
 [project]
 name = "mnemo"
-version = "1.0.5"
+version = "1.1.0"
 description = "Local-first knowledge memory system for Claude Code"
 # README lives at repo root, not inside the daemon package; see
 # https://github.com/mmct-jsc/mnemo for the full docs.
@@ -17,6 +17,8 @@ dependencies = [
     "typer>=0.9",
     "pydantic>=2.6",
     "jinja2>=3.1",
+    "pathspec>=0.12",
+    "pypdf>=4.0",
 ]
 
 [tool.hatch.build.targets.wheel.sources]

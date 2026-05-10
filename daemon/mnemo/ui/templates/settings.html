@@ -139,7 +139,7 @@ function settingsForm() {
     async save() {
       this.saving = true;
       try {
-        const r = await fetch('/config', {
+        const r = await fetch('/v1/config', {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -171,7 +171,7 @@ function settingsForm() {
       if (!confirmed) return;
       this.saving = true;
       try {
-        const r = await fetch('/config/reset', { method: 'POST' });
+        const r = await fetch('/v1/config/reset', { method: 'POST' });
         const data = await r.json();
         this.weights = data.scoring;
         this.defaults = data.defaults;

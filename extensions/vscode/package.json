@@ -1,0 +1,101 @@
+{
+  "name": "mnemo-vscode",
+  "displayName": "mnemo",
+  "description": "Local-first knowledge memory for any IDE chat. Surfaces budget-capped citations from your mnemo daemon as a @mnemo chat participant, sidebar, and palette commands.",
+  "version": "1.1.0",
+  "publisher": "mmct-jsc",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mmct-jsc/mnemo"
+  },
+  "homepage": "https://github.com/mmct-jsc/mnemo",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "AI",
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      { "command": "mnemo.query", "title": "mnemo: Query" },
+      { "command": "mnemo.addNote", "title": "mnemo: Add Note" },
+      { "command": "mnemo.setActiveProject", "title": "mnemo: Set Active Project" },
+      { "command": "mnemo.openUI", "title": "mnemo: Open UI" },
+      { "command": "mnemo.reindex", "title": "mnemo: Reindex" }
+    ],
+    "configuration": {
+      "title": "mnemo",
+      "properties": {
+        "mnemo.daemonUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:7373",
+          "description": "URL of the local mnemo daemon."
+        },
+        "mnemo.budgetTokens": {
+          "type": "number",
+          "default": 800,
+          "description": "Default token budget for retrieval responses."
+        },
+        "mnemo.k": {
+          "type": "number",
+          "default": 5,
+          "description": "Default number of hits to request."
+        },
+        "mnemo.autoActivate": {
+          "type": "boolean",
+          "default": true,
+          "description": "Set the active project to the workspace folder on extension activation."
+        }
+      }
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "mnemo",
+          "title": "mnemo",
+          "icon": "media/brain.svg"
+        }
+      ]
+    },
+    "views": {
+      "mnemo": [
+        {
+          "id": "mnemo.sidebar",
+          "name": "Memory"
+        }
+      ]
+    },
+    "chatParticipants": [
+      {
+        "id": "mmct-jsc.mnemo",
+        "name": "mnemo",
+        "fullName": "mnemo",
+        "description": "Surfaces budget-capped citations from your local mnemo store",
+        "isSticky": false,
+        "commands": [
+          { "name": "recall", "description": "Recall memory matching a query" },
+          { "name": "add", "description": "Add a new memory note" },
+          { "name": "sources", "description": "List registered mnemo sources" }
+        ]
+      }
+    ]
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "vscode:prepublish": "npm run compile",
+    "package": "vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/vscode": "^1.90.0",
+    "typescript": "^5.5.0",
+    "@vscode/vsce": "^3.0.0"
+  }
+}
