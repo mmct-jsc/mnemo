@@ -31,7 +31,10 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from mnemo import __version__, config, ingest, paths, retrieve
 from mnemo.api_schemas import (
     ActiveProjectOut,
+    FsSuggestOut,
     HealthOut,
+    KnownProjectItem,
+    KnownProjectsOut,
     NodeOut,
     NodeUpdateIn,
     ProjectActivateIn,
@@ -324,6 +327,98 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
     def clear_active_project(s: Store = Depends(get_store)) -> JSONResponse:
         s.clear_active_project()
         return JSONResponse({"ok": True})
+
+    @v1.get("/projects/known", response_model=KnownProjectsOut)
+    def known_projects(s: Store = Depends(get_store)) -> KnownProjectsOut:
+        """Distinct project keys derived from registered sources + indexed
+        nodes. UI uses this to suggest project_key values in dropdowns
+        instead of forcing free-text entry."""
+        # Sources: each source row has at most one project_key.
+        src_by_key: dict[str, str] = {}  # project_key -> sample path
+        src_count: dict[str, int] = {}
+        for src in s.list_sources():
+            if src.project_key:
+                src_by_key.setdefault(src.project_key, src.path)
+                src_count[src.project_key] = src_count.get(src.project_key, 0) + 1
+        # Nodes: aggregate by project_key.
+        node_count: dict[str, int] = {}
+        for node in s.list_nodes(limit=10_000):
+            if node.project_key:
+                node_count[node.project_key] = node_count.get(node.project_key, 0) + 1
+                src_by_key.setdefault(node.project_key, node.source_path)
+        all_keys = sorted(src_by_key.keys())
+        items = [
+            KnownProjectItem(
+                project_key=k,
+                sample_path=src_by_key.get(k),
+                node_count=node_count.get(k, 0),
+                source_count=src_count.get(k, 0),
+            )
+            for k in all_keys
+        ]
+        return KnownProjectsOut(items=items)
+
+    # --- Filesystem suggestion (v1.1) -----------------------------------
+
+    @v1.get("/fs/suggest", response_model=FsSuggestOut)
+    def fs_suggest(prefix: str = "") -> FsSuggestOut:
+        """List directories matching a partial path, for the UI's path
+        autocomplete. Daemon is 127.0.0.1-only so this runs as the user
+        and only returns dirs they can already see.
+
+        The "prefix" is interpreted as a partial absolute path. We split
+        into (parent_dir, leaf_fragment) and list parent_dir's children
+        whose names start with leaf_fragment. Capped at 50 candidates.
+        """
+        # Normalize separators per the running platform but tolerate
+        # forward-slash input even on Windows (VS Code style).
+        from pathlib import Path
+
+        if not prefix.strip():
+            # Empty prefix: suggest top-level common workspace roots.
+            roots = []
+            home = Path.home()
+            for cand in [home, home / "Documents", home / "Desktop", Path("/")]:
+                try:
+                    if cand.exists() and cand.is_dir():
+                        roots.append(str(cand))
+                except OSError:
+                    pass
+            return FsSuggestOut(candidates=roots)
+        try:
+            p = Path(prefix)
+            # If `prefix` is itself an existing dir, list its children.
+            # Otherwise treat last segment as a leaf fragment to filter.
+            if p.is_dir():
+                parent = p
+                fragment = ""
+            else:
+                parent = p.parent if str(p.parent) else Path(".")
+                fragment = p.name
+        except (OSError, ValueError):
+            return FsSuggestOut(candidates=[])
+        if not parent.is_dir():
+            return FsSuggestOut(candidates=[])
+        out: list[str] = []
+        try:
+            for child in sorted(parent.iterdir()):
+                # Only directories. Skip hidden unless the user typed `.`.
+                try:
+                    if not child.is_dir():
+                        continue
+                except OSError:
+                    continue
+                name = child.name
+                if name.startswith(".") and not fragment.startswith("."):
+                    continue
+                if fragment and not name.lower().startswith(fragment.lower()):
+                    continue
+                out.append(str(child))
+                if len(out) >= 50:
+                    break
+        except (OSError, PermissionError):
+            return FsSuggestOut(candidates=[])
+        return FsSuggestOut(candidates=out)
 
     # --- Audit ------------------------------------------------------------
 

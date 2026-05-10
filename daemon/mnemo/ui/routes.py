@@ -116,12 +116,19 @@ def mount_ui(
         project: str | None = None,
         s: Store = Depends(get_store),
     ) -> Any:
+        # Form submissions yield "" for un-selected dropdowns. Normalize to
+        # None so the store doesn't WHERE project_key = '' (which matches
+        # nothing) instead of "no filter".
+        type = type or None
+        project = project or None
         # Cheap total: list ids only and count.
         all_for_filter = s.list_nodes(type=type, project_key=project, limit=10_000)
         pg = _paginate(len(all_for_filter), page, PAGE_SIZE)
         nodes = all_for_filter[pg["offset"] : pg["offset"] + pg["page_size"]]
-        counts = s.count_nodes()
-        # Available projects for the filter dropdown.
+        # Type counts respect the active project filter -- showing the global
+        # count for "project (29)" while filtered to one project misleads.
+        counts = s.count_nodes(project_key=project)
+        # Available projects for the filter dropdown (always the full set).
         projects = sorted({n.project_key for n in s.list_nodes(limit=10_000) if n.project_key})
         return templates.TemplateResponse(
             request,

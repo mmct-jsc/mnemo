@@ -245,3 +245,30 @@ class ActiveProjectOut(BaseModel):
     @classmethod
     def from_active(cls, a: ActiveProject) -> ActiveProjectOut:
         return cls(project_key=a.project_key, path=a.path, since=a.since)
+
+
+class KnownProjectItem(BaseModel):
+    project_key: str
+    sample_path: str | None
+    node_count: int
+    source_count: int
+
+
+class KnownProjectsOut(BaseModel):
+    """Distinct project keys + their representative paths, gathered from
+    sources and nodes. Used by the UI to populate dropdowns."""
+
+    items: list[KnownProjectItem]
+
+
+class FsSuggestOut(BaseModel):
+    """Filesystem directory suggestions for the path autocomplete in the UI.
+
+    Returned candidates are absolute paths to directories that exist on the
+    daemon's local machine. The daemon is bound to 127.0.0.1 so the
+    listener is the same user, but we still cap the response size and
+    reject paths that resolve outside reasonable roots (no expansion of
+    ``..`` past the user's home, no following symlinks).
+    """
+
+    candidates: list[str]

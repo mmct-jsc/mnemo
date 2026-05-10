@@ -209,6 +209,95 @@ input:focus, textarea:focus, select:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
+
+/* --- Custom checkbox: themed dark-mode checkbox using only CSS.
+   Works on every checkbox in the app; graph + nodes filters and any
+   future ones inherit automatically. Native browser checkbox is hidden
+   via `appearance: none` and we draw the box + checkmark ourselves. ---
+*/
+input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 16px; height: 16px;
+  padding: 0;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+  display: inline-grid;
+  place-content: center;
+  flex-shrink: 0;
+  transition: var(--transition);
+}
+input[type="checkbox"]:hover {
+  border-color: var(--accent);
+}
+input[type="checkbox"]::before {
+  content: "";
+  width: 9px; height: 9px;
+  transform: scale(0);
+  transition: transform 100ms ease-out;
+  background: var(--bg);
+  /* Two-line check mark drawn as a clipped square via clip-path. */
+  clip-path: polygon(14% 44%, 0 65%, 50% 100%, 100% 16%, 80% 0, 43% 62%);
+  background: var(--accent);
+}
+input[type="checkbox"]:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+input[type="checkbox"]:checked::before {
+  transform: scale(1);
+  background: var(--bg);
+}
+input[type="checkbox"]:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+input[type="checkbox"]:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* --- Custom select: themed dropdown trigger. We strip the native
+   chrome and draw our own caret. The popped-open option list is still
+   browser-rendered (can't fully theme in CSS), but the closed state
+   matches the rest of the dark UI.
+
+   The caret is a URL-encoded inline SVG (literal `<` and `>` in a data:
+   URI break Firefox -- always %-encode them). ---
+*/
+select {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  cursor: pointer;
+  padding-right: 2.4rem;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%237ee7e0' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.85rem center;
+  /* Tell Chromium/Firefox to render the option popup with dark theme
+     when the user's browser supports color-scheme. */
+  color-scheme: dark;
+}
+select:hover {
+  border-color: var(--accent);
+}
+/* Tighter compact selects (nodes filter, audit pagination) keep the
+   custom caret but use less padding. */
+.filters select {
+  padding: 0.4rem 2rem 0.4rem 0.65rem;
+  font-size: 0.85rem;
+  background-position: right 0.6rem center;
+}
+select option {
+  background: var(--panel);
+  color: var(--fg);
+}
+select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 input[type="search"] {
   font-family: var(--mono);
   font-size: 0.95rem;
@@ -797,11 +886,27 @@ dl.meta dd { margin: 0; color: var(--fg); }
 .filters {
   display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;
 }
-.filters select {
-  background: var(--panel); color: var(--fg);
-  border: 1px solid var(--border); border-radius: var(--radius);
-  padding: 0.4rem 0.65rem; font-size: 0.85rem;
+/* .filters select is defined globally above (with the themed caret).
+   Don't redefine background here -- the shorthand would wipe the SVG. */
+
+/* Always-visible clear button. Disabled state stays visible (greyed
+   + non-interactive) instead of mounting/unmounting on every filter
+   toggle, which used to flash the layout. */
+.filter-clear {
+  text-decoration: none;
+  padding: 0.4rem 0.7rem;
+  border-radius: var(--radius);
+  font-size: 0.82rem;
+  transition: var(--transition);
 }
+.filter-clear:hover { background: var(--accent-soft); }
+.filter-clear.is-disabled {
+  color: var(--fg-dim);
+  cursor: not-allowed;
+  pointer-events: none;
+  opacity: 0.6;
+}
+
 .pagination-summary { margin: 0.5rem 0 1rem; }
 
 .pager {
@@ -829,6 +934,87 @@ dl.meta dd { margin: 0; color: var(--fg); }
   font-family: var(--mono);
   font-size: 0.82rem;
 }
+
+/* --- Active-project switcher (topbar pill + popover, v1.1) -------- */
+
+.active-proj { position: relative; }
+.active-proj-pill {
+  display: inline-flex; align-items: center; gap: 0.45rem;
+  padding: 0.35rem 0.75rem;
+  background: var(--panel-2);
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  color: var(--fg-muted);
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  cursor: pointer;
+  transition: var(--transition);
+  max-width: 280px;
+}
+.active-proj-pill:hover {
+  border-color: var(--accent);
+  color: var(--fg);
+}
+.active-proj-pill.is-set {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.active-proj-pill.is-set .active-proj-dot {
+  background: var(--accent);
+  box-shadow: 0 0 0 3px rgba(126, 231, 224, 0.18);
+}
+.active-proj-dot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--fg-dim);
+  flex-shrink: 0;
+}
+.active-proj-label {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  min-width: 0;
+}
+.active-proj-pop {
+  position: absolute; top: 110%; right: 0;
+  width: 360px; max-width: calc(100vw - 1.5rem);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  z-index: 60;
+  animation: bell-pop 140ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.active-proj-pop > header {
+  padding: 0.7rem 1rem;
+  border-bottom: 1px solid var(--border-soft);
+}
+.active-proj-pop > header strong { font-size: 0.88rem; color: var(--fg); }
+.active-proj-pop .body {
+  padding: 0.85rem 1rem 1rem;
+}
+.active-proj-pop p.hint code {
+  font-size: 0.78rem;
+  background: var(--bg);
+  padding: 0.05rem 0.35rem;
+  border-radius: 3px;
+  word-break: break-all;
+}
+.active-proj-pop label {
+  display: block;
+  color: var(--fg-muted);
+  font-size: 0.85rem;
+  margin: 0.85rem 0 0;
+}
+.active-proj-pop label input {
+  width: 100%; margin-top: 0.35rem;
+  padding: 0.5rem 0.7rem;
+  font-family: var(--mono);
+  font-size: 0.85rem;
+}
+.active-proj-actions {
+  display: flex; gap: 0.5rem;
+  margin-top: 0.85rem;
+}
+.active-proj-actions button { padding: 0.45rem 0.85rem; font-size: 0.85rem; }
 
 /* --- Notification bell ------------------------------------------ */
 

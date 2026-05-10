@@ -450,11 +450,21 @@ class Store:
             self.conn.execute("DELETE FROM nodes WHERE id = ?", (node_id,))
             self.conn.commit()
 
-    def count_nodes(self) -> dict[str, int]:
+    def count_nodes(self, *, project_key: str | None = None) -> dict[str, int]:
+        """Count nodes by type, optionally restricted to one project.
+
+        v1.1: when a project filter is active in the UI, the type-counts
+        dropdown should reflect that scope -- otherwise picking a project
+        and seeing 'project (29)' (the global total) misleads the user.
+        """
+        sql = "SELECT type, COUNT(*) AS n FROM nodes"
+        params: list[object] = []
+        if project_key is not None:
+            sql += " WHERE project_key = ?"
+            params.append(project_key)
+        sql += " GROUP BY type"
         with self._lock:
-            rows = self.conn.execute(
-                "SELECT type, COUNT(*) AS n FROM nodes GROUP BY type"
-            ).fetchall()
+            rows = self.conn.execute(sql, params).fetchall()
         return {row["type"]: row["n"] for row in rows}
 
     @staticmethod
