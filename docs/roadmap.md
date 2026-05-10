@@ -1,11 +1,31 @@
 # mnemo roadmap
 
-The 1.0 line ships a complete local-first knowledge memory system: typed
-graph store, hybrid Graph-RAG retrieval, Claude Code plugin, web UI,
-seven workflow skills, install scripts, end-to-end smoke, and benchmark
-infrastructure. Below is what's next.
+The v1.1 line generalized mnemo beyond Claude Code: versioned HTTP
+protocol, VS Code extension with `@mnemo` chat participant, generic
+PyPI middleware with provider shims, three new workflow skills,
+PDF + plain-text ingest, BASE knowledge with project-isolation
+hard-filter, in-UI source management.
+
+The 1.0 line shipped a complete local-first knowledge memory system:
+typed graph store, hybrid Graph-RAG retrieval, Claude Code plugin,
+web UI, seven workflow skills, install scripts, end-to-end smoke,
+and benchmark infrastructure.
+
+Below is what's next.
 
 Categorized by **horizon** (when) and **value** (why).
+
+## 1.2 - SaaS-side ingestion + marketplace publish
+
+- **VS Code Marketplace publish.** v1.1 ships `.vsix` to GitHub
+  releases only; v1.2 wires `vsce publish` with a `VSCE_PAT` secret.
+- **Notion / Confluence ingester**: integration token, walk a
+  database / space, parse to memory nodes.
+- **GitHub Issues ingester**: walk open + closed issues for a repo.
+- **Slack ingester** (read-only, allowlist channels).
+- **POST /v1/nodes**: full create endpoint so the VS Code "Add Note"
+  command can land memory without writing files directly.
+- **Drop the legacy 308 redirects** -- they were a v1.1-only bridge.
 
 ## 1.0.x - Bug fixes and small improvements
 

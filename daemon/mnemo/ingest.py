@@ -29,8 +29,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import frontmatter
-
+from mnemo import parsers
 from mnemo.store import NODE_TYPES, SOURCE_KINDS, Node, Source, Store
 
 log = logging.getLogger(__name__)
@@ -69,6 +68,9 @@ class ParsedFile:
     hash: str
     source_kind: str
     project_key: str | None
+    # v1.1: frontmatter ``base: true`` flag. BASE knowledge bypasses
+    # project isolation and surfaces in every project's queries.
+    base: bool = False
 
 
 @dataclass
@@ -187,15 +189,18 @@ def _resolve_project_key(fm: dict[str, object], path: Path, project_key: str | N
 
 
 def parse_file(path: Path, *, kind: str, project_key: str | None = None) -> ParsedFile:
-    """Read one file from disk and produce a ParsedFile (no DB access)."""
+    """Read one file from disk and produce a ParsedFile (no DB access).
+
+    Dispatches to the parser registry by file extension. Markdown files
+    keep their frontmatter; plain text and PDF files have empty
+    frontmatter and rely on filename + content heuristics for name
+    and description.
+    """
     if kind not in SOURCE_KINDS:
         raise ValueError(f"unknown source kind: {kind!r}")
     raw_bytes = path.read_bytes()
     file_hash = _hash_bytes(raw_bytes)
-    text = raw_bytes.decode("utf-8", errors="replace")
-    post = frontmatter.loads(text)
-    body = post.content
-    fm: dict[str, object] = dict(post.metadata)
+    fm, body = parsers.parse(raw_bytes, path)
 
     return ParsedFile(
         path=path,
@@ -207,18 +212,71 @@ def parse_file(path: Path, *, kind: str, project_key: str | None = None) -> Pars
         hash=file_hash,
         source_kind=kind,
         project_key=_resolve_project_key(fm, path, project_key),
+        base=_resolve_base_flag(fm),
     )
+
+
+def _resolve_base_flag(fm: dict[str, object]) -> bool:
+    """Read frontmatter ``base`` (truthy) -> True. Treat 'true', 'yes',
+    '1' (case-insensitive) as True. Default False."""
+    val = fm.get("base")
+    if val is None:
+        return False
+    if isinstance(val, bool):
+        return val
+    s = str(val).strip().lower()
+    return s in ("true", "yes", "1", "y", "on")
 
 
 # --- Scanning --------------------------------------------------------------
 
 
+def _default_include_for_kind(kind: str) -> list[str]:
+    """Default include patterns when a source's ``include`` field is unset.
+
+    memory_dir / plan_dir / transcripts: match every file type the
+    parser registry knows how to handle (markdown, plain text, PDF).
+    Sources that want narrower behavior set their own ``include``.
+    claude_md: always matches its single configured file -- no walk.
+    """
+    if kind in ("memory_dir", "plan_dir", "transcripts"):
+        return ["**/*.md", "**/*.markdown", "**/*.txt", "**/*.pdf"]
+    return []
+
+
+def _parse_pattern_field(raw: str | None) -> list[str]:
+    """Parse a comma-separated glob list. Empty -> []."""
+    if not raw:
+        return []
+    return [p.strip() for p in raw.split(",") if p.strip()]
+
+
+def _build_pathspec(patterns: list[str]):  # type: ignore[no-untyped-def]
+    """Compile glob patterns to a pathspec.PathSpec, or None if empty.
+
+    We import pathspec lazily so test harnesses that stub out ingest don't
+    have to install it.
+    """
+    if not patterns:
+        return None
+    import pathspec
+
+    return pathspec.PathSpec.from_lines("gitignore", patterns)
+
+
 def scan_source(source: Source) -> Iterator[ParsedFile]:
     """Walk a source's path and yield one ParsedFile per indexable file.
 
-    - ``claude_md`` source: yields the single file (if it still exists).
-    - ``memory_dir`` / ``plan_dir`` / ``transcripts``: yields all ``*.md`` files
-      under the directory (recursively), excluding ``MEMORY.md`` index files.
+    Honors per-source ``include`` and ``exclude`` glob patterns
+    (gitignore-style via the pathspec library). Empty/unset include falls
+    back to the kind's default include set.
+
+    - ``claude_md`` source: always yields the single file (if it exists).
+      Patterns are ignored for single-file sources.
+    - ``memory_dir`` / ``plan_dir`` / ``transcripts``: walks the directory
+      and yields files that match include AND don't match exclude. Default
+      include matches ``*.md``, ``*.txt``, and ``*.pdf``.
+    - Index files named ``MEMORY.md`` are always skipped.
     """
     p = Path(source.path)
     if not p.exists():
@@ -226,11 +284,25 @@ def scan_source(source: Source) -> Iterator[ParsedFile]:
     if p.is_file():
         yield parse_file(p, kind=source.kind, project_key=source.project_key)
         return
-    for md_file in sorted(p.rglob("*.md")):
-        if md_file.name == "MEMORY.md":
-            # Index files are derivable; skip to avoid duplicate body content.
+
+    include_patterns = _parse_pattern_field(source.include) or _default_include_for_kind(
+        source.kind
+    )
+    exclude_patterns = _parse_pattern_field(source.exclude)
+    include_spec = _build_pathspec(include_patterns)
+    exclude_spec = _build_pathspec(exclude_patterns)
+
+    for f in sorted(p.rglob("*")):
+        if not f.is_file():
             continue
-        yield parse_file(md_file, kind=source.kind, project_key=source.project_key)
+        if f.name == "MEMORY.md":
+            continue
+        rel = f.relative_to(p).as_posix()
+        if include_spec is not None and not include_spec.match_file(rel):
+            continue
+        if exclude_spec is not None and exclude_spec.match_file(rel):
+            continue
+        yield parse_file(f, kind=source.kind, project_key=source.project_key)
 
 
 # --- Reconciliation --------------------------------------------------------
@@ -280,6 +352,7 @@ def reindex(
                         project_key=parsed.project_key,
                         frontmatter_json=parsed.frontmatter_json,
                         hash=parsed.hash,
+                        base=parsed.base,
                     )
                     store.upsert_node(new_node)
                     if embedder is not None:
@@ -294,6 +367,7 @@ def reindex(
                     existing.project_key = parsed.project_key
                     existing.frontmatter_json = parsed.frontmatter_json
                     existing.hash = parsed.hash
+                    existing.base = parsed.base
                     existing.updated_at = int(time.time())
                     store.upsert_node(existing)
                     if embedder is not None:

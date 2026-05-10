@@ -45,6 +45,12 @@ class Config:
     scoring: ScoringWeights = field(default_factory=ScoringWeights)
     defaults: Defaults = field(default_factory=Defaults)
     recency_half_life_days: float = 90.0
+    # v1.1: project isolation behavior. 'strict' (default) hard-filters
+    # query results to the active project's nodes plus any BASE-flagged
+    # nodes. 'boost' falls back to the v1.0 behavior (no filter, just
+    # scoring boost via epsilon). Useful when the user wants more
+    # cross-project surfacing.
+    project_isolation_mode: str = "strict"
 
 
 # --- Load / save ----------------------------------------------------------
@@ -92,6 +98,7 @@ def save(cfg: Config) -> None:
         "scoring": asdict(cfg.scoring),
         "defaults": asdict(cfg.defaults),
         "recency_half_life_days": cfg.recency_half_life_days,
+        "project_isolation_mode": cfg.project_isolation_mode,
     }
     with _lock:
         p.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
@@ -134,3 +141,7 @@ def _apply(cfg: Config, raw: dict) -> None:
             cfg.defaults.budget_tokens = max(1, min(10_000, d["budget_tokens"]))
     if isinstance(raw.get("recency_half_life_days"), int | float):
         cfg.recency_half_life_days = max(1.0, float(raw["recency_half_life_days"]))
+    if isinstance(raw.get("project_isolation_mode"), str):
+        mode = raw["project_isolation_mode"].strip().lower()
+        if mode in ("strict", "boost"):
+            cfg.project_isolation_mode = mode

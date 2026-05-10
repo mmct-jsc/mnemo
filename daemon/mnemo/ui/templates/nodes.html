@@ -42,9 +42,9 @@
           <option value="{{ p }}" {% if filter_project == p %}selected{% endif %}>{{ p }}</option>
         {% endfor %}
       </select>
-      {% if filter_type or filter_project %}
-        <a class="link-button" href="/nodes-page">clear</a>
-      {% endif %}
+      <a class="link-button filter-clear {% if not filter_type and not filter_project %}is-disabled{% endif %}"
+         href="{% if filter_type or filter_project %}/nodes-page{% else %}#{% endif %}"
+         {% if not filter_type and not filter_project %}aria-disabled="true" tabindex="-1"{% endif %}>clear</a>
     </form>
   </div>
 
@@ -58,6 +58,7 @@
         <li>
           <a href="/node/{{ n.id }}">
             <span class="badge type-{{ n.type }}">{{ n.type | replace('memory_','') | replace('_',' ') }}</span>
+            {% if n.base %}<span class="badge base-badge" title="BASE knowledge — applies to every project">base</span>{% endif %}
             <span class="name">{{ n.name }}</span>
             {% if n.project_key %}<span class="proj">{{ n.project_key }}</span>{% endif %}
           </a>

@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %} - sources{% endblock %}
 {% block content %}
-<section class="sources" x-data="{ running: false }">
+<section class="sources" x-data="sourcesPage()" x-init="init()">
 
   <header class="page-hero">
     <div class="hero-text">
@@ -10,30 +10,8 @@
     </div>
     <div class="hero-actions">
       <span class="hint">{{ sources | length }} registered</span>
-      <button class="primary" @click="
-        running = true;
-        window.toast('Reindexing... (re-embedding can take a few seconds per node)', 'info');
-        fetch('/reindex', { method: 'POST' })
-          .then(r => r.json())
-          .then(d => {
-            const total = d.added + d.updated + d.unchanged;
-            let msg, level;
-            if (d.errors && d.errors.length) {
-              msg = 'Reindex finished with ' + d.errors.length + ' errors';
-              level = 'warn';
-            } else if (d.added || d.updated || d.removed) {
-              msg = 'Reindex done: +' + d.added + ' new, ~' + d.updated + ' updated, -' + d.removed + ' removed';
-              level = 'success';
-            } else {
-              msg = 'All ' + total + ' nodes already up to date';
-              level = 'success';
-            }
-            window.toastAfterReload(msg, level);
-            running = false;
-            setTimeout(() => location.reload(), 400);
-          })
-          .catch(e => { window.toast('Reindex failed: ' + e, 'error'); running = false; });
-      " :disabled="running">
+      <button @click="openAdd()">Add source</button>
+      <button class="primary" @click="reindexAll()" :disabled="running">
         <span x-show="!running">Reindex all</span>
         <span x-show="running" x-cloak>reindexing...</span>
       </button>
@@ -47,8 +25,10 @@
         <th>Path</th>
         <th>Kind</th>
         <th>Project</th>
+        <th>Patterns</th>
         <th>Last indexed</th>
         <th>Enabled</th>
+        <th></th>
       </tr>
     </thead>
     <tbody>
@@ -57,6 +37,11 @@
           <td><code>{{ s.path }}</code></td>
           <td><span class="badge">{{ s.kind | replace('_',' ') }}</span></td>
           <td>{{ s.project_key or "" }}</td>
+          <td class="patterns">
+            {% if s.include %}<div><span class="hint">include:</span> <code>{{ s.include }}</code></div>{% endif %}
+            {% if s.exclude %}<div><span class="hint">exclude:</span> <code>{{ s.exclude }}</code></div>{% endif %}
+            {% if not s.include and not s.exclude %}<span class="hint">defaults</span>{% endif %}
+          </td>
           <td>
             {% if s.last_indexed_at %}
               <time data-ts="{{ s.last_indexed_at }}" data-fmt="datetime">{{ s.last_indexed_at }}</time>
@@ -65,6 +50,12 @@
             {% endif %}
           </td>
           <td>{{ "yes" if s.enabled else "no" }}</td>
+          <td class="row-actions">
+            <button class="link-button"
+                    @click='openEdit({{ s.path | tojson }}, {{ s.kind | tojson }}, {{ (s.project_key or "") | tojson }}, {{ (s.include or "") | tojson }}, {{ (s.exclude or "") | tojson }}, {{ s.enabled | tojson }})'>edit</button>
+            <button class="link-button danger-link"
+                    @click='confirmRemove({{ s.path | tojson }})'>remove</button>
+          </td>
         </tr>
       {% endfor %}
     </tbody>
@@ -72,8 +63,428 @@
   {% else %}
     <div class="empty">
       <p>No sources registered.</p>
-      <p class="hint">Run <code>mnemo init</code> or <code>mnemo source add &lt;path&gt; --kind memory_dir</code>.</p>
+      <p class="hint">Click <strong>Add source</strong> above, or run <code>mnemo source add &lt;path&gt; --kind memory_dir</code>.</p>
     </div>
   {% endif %}
+
+  <!-- Form panel: Add and Edit reuse the same modal -->
+  <div class="modal-backdrop" x-show="formOpen" x-cloak @click.self="formOpen = false" @keydown.escape.window="formOpen = false">
+    <div class="modal source-form" role="dialog" aria-modal="true">
+      <h3 x-text="editing ? 'Edit source' : 'Add source'"></h3>
+      <p class="hint" x-show="!editing" x-cloak>Register a new directory or file for mnemo to watch and index.</p>
+      <p class="hint" x-show="editing" x-cloak><code x-text="form.path"></code></p>
+
+      <!-- Path autocomplete -->
+      <div class="ac-field" x-show="!editing" x-cloak>
+        <label for="ac-path-input">Path</label>
+        <div class="ac-wrap"
+             @click.outside="pathAc.open = false"
+             @keydown.escape="pathAc.open = false">
+          <input id="ac-path-input"
+                 type="text"
+                 x-model="form.path"
+                 autocomplete="off" spellcheck="false"
+                 placeholder="/absolute/path/to/your/memory"
+                 @focus="pathAc.show(form.path)"
+                 @input.debounce.180ms="pathAc.show(form.path)"
+                 @keydown.down.prevent="pathAc.show(form.path); pathAc.move(1)"
+                 @keydown.up.prevent="pathAc.show(form.path); pathAc.move(-1)"
+                 @keydown.enter.prevent="if (pathAc.activeIdx >= 0) { form.path = pathAc.entries[pathAc.activeIdx].value; pathAc.open = false; pathAc.recordRecent(form.path); }">
+          <div class="ac-pop" x-show="pathAc.open && pathAc.entries.length" x-cloak>
+            <template x-for="(e, i) in pathAc.entries" :key="e.kind + ':' + e.value">
+              <button type="button"
+                      class="ac-item"
+                      :class="{ active: i === pathAc.activeIdx }"
+                      @mousedown.prevent="form.path = e.value; pathAc.open = false; pathAc.recordRecent(e.value)"
+                      @mouseenter="pathAc.activeIdx = i">
+                <span class="ac-item-kind" :class="'ac-kind-' + e.kind" x-text="e.kind === 'recent' ? 'recent' : 'fs'"></span>
+                <span class="ac-item-value" x-text="e.value"></span>
+              </button>
+            </template>
+          </div>
+        </div>
+        <p class="ac-hint hint">Type to filter your filesystem; recent picks appear above.</p>
+      </div>
+
+      <!-- Kind: themed select inherits global styling -->
+      <div class="ac-field" x-show="!editing" x-cloak>
+        <label for="ac-kind-select">Kind</label>
+        <select id="ac-kind-select" x-model="form.kind">
+          <option value="memory_dir">memory_dir &mdash; directory of memory entries</option>
+          <option value="claude_md">claude_md &mdash; single CLAUDE.md file</option>
+          <option value="plan_dir">plan_dir &mdash; directory of design / plan docs</option>
+          <option value="transcripts">transcripts &mdash; chat transcript dump</option>
+        </select>
+      </div>
+
+      <!-- Project key autocomplete (known keys from db) -->
+      <div class="ac-field">
+        <label for="ac-pk-input">Project key <span class="hint">optional &mdash; auto-derived from path if empty</span></label>
+        <div class="ac-wrap"
+             @click.outside="pkAc.open = false"
+             @keydown.escape="pkAc.open = false">
+          <input id="ac-pk-input"
+                 type="text"
+                 x-model="form.project_key"
+                 autocomplete="off" spellcheck="false"
+                 placeholder="leave blank for auto"
+                 @focus="pkAc.show(form.project_key)"
+                 @input.debounce.120ms="pkAc.show(form.project_key)"
+                 @keydown.down.prevent="pkAc.show(form.project_key); pkAc.move(1)"
+                 @keydown.up.prevent="pkAc.show(form.project_key); pkAc.move(-1)"
+                 @keydown.enter.prevent="if (pkAc.activeIdx >= 0) { form.project_key = pkAc.entries[pkAc.activeIdx].value; pkAc.open = false; pkAc.recordRecent(form.project_key); }">
+          <div class="ac-pop" x-show="pkAc.open && pkAc.entries.length" x-cloak>
+            <template x-for="(e, i) in pkAc.entries" :key="e.kind + ':' + e.value">
+              <button type="button"
+                      class="ac-item"
+                      :class="{ active: i === pkAc.activeIdx }"
+                      @mousedown.prevent="form.project_key = e.value; pkAc.open = false; pkAc.recordRecent(e.value)"
+                      @mouseenter="pkAc.activeIdx = i">
+                <span class="ac-item-kind" :class="'ac-kind-' + e.kind" x-text="e.kind"></span>
+                <span class="ac-item-value" x-text="e.value"></span>
+                <span class="ac-item-meta" x-show="e.meta" x-cloak x-text="e.meta"></span>
+              </button>
+            </template>
+          </div>
+        </div>
+      </div>
+
+      <div class="ac-field">
+        <label>Include patterns <span class="hint">comma-separated globs; empty = kind default</span></label>
+        <input type="text" x-model="form.include"
+               placeholder="*.md, *.txt, *.pdf">
+      </div>
+
+      <div class="ac-field">
+        <label>Exclude patterns <span class="hint">comma-separated globs</span></label>
+        <input type="text" x-model="form.exclude"
+               placeholder="**/draft-*.md, **/.git/**">
+      </div>
+
+      <label class="check">
+        <input type="checkbox" x-model="form.enabled"> <span>Enabled</span>
+      </label>
+
+      <div class="modal-actions">
+        <button @click="formOpen = false">Cancel</button>
+        <button class="primary" @click="save()" :disabled="saving || !form.path || !form.kind">
+          <span x-show="!saving" x-text="editing ? 'Save changes' : 'Add source'"></span>
+          <span x-show="saving" x-cloak>saving...</span>
+        </button>
+      </div>
+    </div>
+  </div>
 </section>
+
+<script>
+/**
+ * Reusable autocomplete component. Driven by an async fetcher and a
+ * localStorage-backed recents list.
+ *
+ *   const ac = makeAutocomplete({
+ *     recentsKey: 'mnemo.recent.<...>',
+ *     fetchSuggestions: async (q) => [{ value: '...', meta: '...' }, ...],
+ *   });
+ *   ac.show(currentValue);    // open with recents only
+ *   ac.refresh(typedValue);   // re-fetch suggestions, debounced upstream
+ *   ac.move(±1);              // arrow-key navigation
+ *   ac.recordRecent(picked);  // persist a freshly chosen value
+ *
+ * Each entry is { kind, value, meta? } where kind is 'recent' or 'known' or 'fs'.
+ */
+function makeAutocomplete({ recentsKey, fetchSuggestions }) {
+  return {
+    open: false,
+    activeIdx: -1,
+    recents: [],            // strings
+    suggestions: [],        // { value, meta? }[]
+    init() {
+      try {
+        const raw = localStorage.getItem(recentsKey);
+        this.recents = Array.isArray(JSON.parse(raw)) ? JSON.parse(raw) : [];
+      } catch (_) { this.recents = []; }
+    },
+    show(currentValue) {
+      this.open = true;
+      this.activeIdx = -1;
+      this.refresh(currentValue || '');
+    },
+    async refresh(query) {
+      try {
+        this.suggestions = await fetchSuggestions(query || '');
+      } catch (_) { this.suggestions = []; }
+    },
+    get entries() {
+      // Merge recents (filtered to those starting with current value)
+      // and live suggestions, dedup by value, recents listed first.
+      const seen = new Set();
+      const out = [];
+      for (const v of this.recents) {
+        if (seen.has(v)) continue;
+        seen.add(v);
+        out.push({ kind: 'recent', value: v });
+        if (out.length >= 8) break;
+      }
+      for (const s of this.suggestions) {
+        const v = typeof s === 'string' ? s : s.value;
+        if (seen.has(v)) continue;
+        seen.add(v);
+        out.push({ kind: s.kind || 'fs', value: v, meta: s.meta || null });
+        if (out.length >= 30) break;
+      }
+      return out;
+    },
+    move(delta) {
+      const n = this.entries.length;
+      if (!n) { this.activeIdx = -1; return; }
+      this.activeIdx = (this.activeIdx + delta + n) % n;
+    },
+    recordRecent(value) {
+      if (!value) return;
+      this.recents = [value, ...this.recents.filter(v => v !== value)].slice(0, 12);
+      try {
+        localStorage.setItem(recentsKey, JSON.stringify(this.recents));
+      } catch (_) { /* quota etc */ }
+    },
+  };
+}
+
+function sourcesPage() {
+  return {
+    running: false,
+    formOpen: false,
+    editing: false,
+    saving: false,
+    form: { path: '', kind: 'memory_dir', project_key: '', include: '', exclude: '', enabled: true },
+
+    pathAc: makeAutocomplete({
+      recentsKey: 'mnemo.recent.paths',
+      fetchSuggestions: async (q) => {
+        const r = await fetch('/v1/fs/suggest?prefix=' + encodeURIComponent(q));
+        if (!r.ok) return [];
+        const data = await r.json();
+        return (data.candidates || []).map(p => ({ value: p, kind: 'fs' }));
+      },
+    }),
+
+    pkAc: makeAutocomplete({
+      recentsKey: 'mnemo.recent.project_keys',
+      fetchSuggestions: async (q) => {
+        const r = await fetch('/v1/projects/known');
+        if (!r.ok) return [];
+        const data = await r.json();
+        const items = data.items || [];
+        const lower = (q || '').toLowerCase();
+        return items
+          .filter(it => !lower || it.project_key.toLowerCase().includes(lower))
+          .map(it => ({
+            value: it.project_key,
+            kind: 'known',
+            meta: it.node_count + ' node' + (it.node_count === 1 ? '' : 's'),
+          }));
+      },
+    }),
+
+    init() {
+      this.pathAc.init();
+      this.pkAc.init();
+    },
+
+    reindexAll() {
+      this.running = true;
+      window.toast('Reindexing... (re-embedding can take a few seconds per node)', 'info');
+      fetch('/v1/reindex', { method: 'POST' })
+        .then(r => r.json())
+        .then(d => {
+          const total = d.added + d.updated + d.unchanged;
+          let msg, level;
+          if (d.errors && d.errors.length) {
+            msg = 'Reindex finished with ' + d.errors.length + ' errors';
+            level = 'warn';
+          } else if (d.added || d.updated || d.removed) {
+            msg = 'Reindex done: +' + d.added + ' new, ~' + d.updated + ' updated, -' + d.removed + ' removed';
+            level = 'success';
+          } else {
+            msg = 'All ' + total + ' nodes already up to date';
+            level = 'success';
+          }
+          window.toastAfterReload(msg, level);
+          this.running = false;
+          setTimeout(() => location.reload(), 400);
+        })
+        .catch(e => { window.toast('Reindex failed: ' + e, 'error'); this.running = false; });
+    },
+
+    openAdd() {
+      this.editing = false;
+      this.form = { path: '', kind: 'memory_dir', project_key: '', include: '', exclude: '', enabled: true };
+      this.formOpen = true;
+    },
+
+    openEdit(path, kind, project_key, include, exclude, enabled) {
+      this.editing = true;
+      this.form = { path, kind, project_key, include, exclude, enabled };
+      this.formOpen = true;
+    },
+
+    async save() {
+      this.saving = true;
+      try {
+        let r;
+        if (this.editing) {
+          const body = {
+            path: this.form.path,
+            project_key: this.form.project_key || null,
+            include: this.form.include || null,
+            exclude: this.form.exclude || null,
+            enabled: this.form.enabled,
+          };
+          r = await fetch('/v1/sources', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          });
+        } else {
+          const body = {
+            path: this.form.path,
+            kind: this.form.kind,
+            project_key: this.form.project_key || null,
+            include: this.form.include || null,
+            exclude: this.form.exclude || null,
+            enabled: this.form.enabled,
+          };
+          r = await fetch('/v1/sources', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          });
+        }
+        if (!r.ok) throw new Error(await r.text());
+        // Persist user choices to recents on successful save.
+        if (!this.editing) this.pathAc.recordRecent(this.form.path);
+        if (this.form.project_key) this.pkAc.recordRecent(this.form.project_key);
+        window.toastAfterReload(this.editing ? 'Source updated' : 'Source added', 'success');
+        location.reload();
+      } catch (e) {
+        window.toast('Save failed: ' + e, 'error');
+        this.saving = false;
+      }
+    },
+
+    async confirmRemove(path) {
+      const ok = await window.modal({
+        title: 'Remove source?',
+        body: 'This unregisters the source. Existing nodes from this source will be removed on the next reindex.\n\n' + path,
+        confirm: { text: 'Remove', level: 'danger' },
+        cancel: { text: 'Cancel' },
+      });
+      if (!ok) return;
+      try {
+        const r = await fetch('/v1/sources?path=' + encodeURIComponent(path), { method: 'DELETE' });
+        if (!r.ok) throw new Error(await r.text());
+        window.toastAfterReload('Source removed', 'success');
+        location.reload();
+      } catch (e) {
+        window.toast('Remove failed: ' + e, 'error');
+      }
+    },
+  };
+}
+</script>
+
+<style>
+  .row-actions { display: flex; gap: 0.6rem; white-space: nowrap; }
+  .row-actions .link-button { padding: 0.2rem 0.35rem; font-size: 0.82rem; }
+  .row-actions .link-button.danger-link { color: var(--warn); }
+  .row-actions .link-button.danger-link:hover { color: #e88a6a; }
+  td.patterns code { font-size: 0.78rem; word-break: break-all; }
+  td.patterns .hint { font-size: 0.72rem; }
+
+  .source-form { width: min(620px, calc(100vw - 2rem)); }
+  .source-form > h3 { margin: 0 0 0.35rem; font-size: 1.1rem; }
+  .source-form > p.hint { margin: 0 0 0.85rem; }
+  .source-form > p.hint code { word-break: break-all; }
+
+  .ac-field { margin-top: 0.85rem; }
+  .ac-field > label { display: block; font-size: 0.85rem; color: var(--fg-muted); margin-bottom: 0.35rem; }
+  .ac-field > label > .hint { font-size: 0.72rem; margin-left: 0.35rem; }
+  .ac-field > input,
+  .ac-field > select {
+    width: 100%;
+    padding: 0.55rem 0.75rem;
+    font-family: var(--mono);
+    font-size: 0.88rem;
+  }
+  .ac-field .ac-hint { margin: 0.35rem 0 0; font-size: 0.75rem; }
+
+  .ac-wrap { position: relative; }
+  .ac-wrap input {
+    width: 100%;
+    padding: 0.55rem 0.75rem;
+    font-family: var(--mono);
+    font-size: 0.88rem;
+  }
+  .ac-pop {
+    position: absolute; top: calc(100% + 4px); left: 0; right: 0;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+    max-height: 280px;
+    overflow-y: auto;
+    z-index: 220;  /* above the modal-backdrop */
+    display: flex; flex-direction: column;
+    padding: 0.25rem;
+  }
+  .ac-item {
+    display: grid;
+    grid-template-columns: 56px 1fr auto;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.45rem 0.6rem;
+    background: transparent;
+    border: 0;
+    border-radius: var(--radius);
+    color: var(--fg);
+    text-align: left;
+    cursor: pointer;
+    font: inherit;
+    transition: var(--transition);
+  }
+  .ac-item:hover, .ac-item.active {
+    background: var(--panel-2);
+  }
+  .ac-item-kind {
+    font-family: var(--mono);
+    font-size: 0.66rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding: 0.1rem 0.4rem;
+    border-radius: 999px;
+    text-align: center;
+    white-space: nowrap;
+  }
+  .ac-kind-recent { background: var(--accent-soft); color: var(--accent); }
+  .ac-kind-fs     { background: rgba(141, 182, 240, 0.16); color: var(--type-project); }
+  .ac-kind-known  { background: rgba(182, 232, 140, 0.16); color: var(--type-user); }
+  .ac-item-value {
+    font-family: var(--mono);
+    font-size: 0.85rem;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .ac-item-meta {
+    font-size: 0.72rem;
+    color: var(--fg-dim);
+    white-space: nowrap;
+  }
+
+  .source-form label.check {
+    display: flex; align-items: center; gap: 0.5rem;
+    margin-top: 1rem;
+    color: var(--fg);
+    font-size: 0.85rem;
+    cursor: pointer;
+    user-select: none;
+  }
+</style>
 {% endblock %}

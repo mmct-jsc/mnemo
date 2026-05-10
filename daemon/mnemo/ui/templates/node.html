@@ -2,7 +2,7 @@
 {% block title %} - {{ node.name }}{% endblock %}
 {% block content %}
 <section class="node-edit"
-         x-data='nodePage({ raw: {{ node.body | tojson }} })'
+         x-data='nodePage({ raw: {{ node.body | tojson }}, isBase: {{ node.base | tojson }} })'
          x-init="init()">
 
   <div class="back-row">
@@ -14,11 +14,16 @@
       <div class="badges" style="margin-bottom: 0.55rem;">
         <span class="badge type-{{ node.type }}">{{ node.type | replace('memory_','') | replace('_',' ') }}</span>
         {% if node.project_key %}<span class="badge">{{ node.project_key }}</span>{% endif %}
+        <span class="badge base-badge" x-show="isBase" x-cloak title="Surfaces in every project's queries">base</span>
       </div>
       <h1>{{ node.name }}</h1>
       <p>{{ node.description or 'No description set yet — add one below to make this node easier to recall.' }}</p>
     </div>
     <div class="hero-actions">
+      <label class="base-toggle" title="Mark as BASE knowledge: applies in every project regardless of active scope">
+        <input type="checkbox" x-model="isBase" @change="toggleBase()">
+        <span>BASE</span>
+      </label>
       <code class="cite">[mnemo:{{ node.id }}]</code>
       <button type="button" @click="copyCite()">Copy citation</button>
     </div>
@@ -59,7 +64,7 @@
       </dl>
 
       <form @submit.prevent="
-        fetch('/nodes/{{ node.id }}', {
+        fetch('/v1/nodes/{{ node.id }}', {
           method: 'PUT',
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({
@@ -167,16 +172,34 @@
 </section>
 
 <script>
-function nodePage({ raw }) {
+function nodePage({ raw, isBase }) {
   return {
     tab: 'edit',
     raw,
+    isBase: !!isBase,
     saved: false,
     error: null,
     init() {
       // Pre-render so opening Preview is instant. If marked hasn't
       // hydrated yet, retry on a short timer.
       this.$nextTick(() => this.renderPreview());
+    },
+    async toggleBase() {
+      try {
+        const r = await fetch('/v1/nodes/{{ node.id }}', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ base: this.isBase }),
+        });
+        if (!r.ok) throw new Error(await r.text());
+        const data = await r.json();
+        this.isBase = !!data.base;
+        window.toast(this.isBase ? 'Marked as BASE' : 'BASE flag cleared', 'success');
+      } catch (e) {
+        // Roll back the optimistic toggle on error.
+        this.isBase = !this.isBase;
+        window.toast('Toggle failed: ' + e, 'error');
+      }
     },
     setTab(t) {
       this.tab = t;
