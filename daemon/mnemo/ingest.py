@@ -68,6 +68,9 @@ class ParsedFile:
     hash: str
     source_kind: str
     project_key: str | None
+    # v1.1: frontmatter ``base: true`` flag. BASE knowledge bypasses
+    # project isolation and surfaces in every project's queries.
+    base: bool = False
 
 
 @dataclass
@@ -209,7 +212,20 @@ def parse_file(path: Path, *, kind: str, project_key: str | None = None) -> Pars
         hash=file_hash,
         source_kind=kind,
         project_key=_resolve_project_key(fm, path, project_key),
+        base=_resolve_base_flag(fm),
     )
+
+
+def _resolve_base_flag(fm: dict[str, object]) -> bool:
+    """Read frontmatter ``base`` (truthy) -> True. Treat 'true', 'yes',
+    '1' (case-insensitive) as True. Default False."""
+    val = fm.get("base")
+    if val is None:
+        return False
+    if isinstance(val, bool):
+        return val
+    s = str(val).strip().lower()
+    return s in ("true", "yes", "1", "y", "on")
 
 
 # --- Scanning --------------------------------------------------------------
@@ -336,6 +352,7 @@ def reindex(
                         project_key=parsed.project_key,
                         frontmatter_json=parsed.frontmatter_json,
                         hash=parsed.hash,
+                        base=parsed.base,
                     )
                     store.upsert_node(new_node)
                     if embedder is not None:
@@ -350,6 +367,7 @@ def reindex(
                     existing.project_key = parsed.project_key
                     existing.frontmatter_json = parsed.frontmatter_json
                     existing.hash = parsed.hash
+                    existing.base = parsed.base
                     existing.updated_at = int(time.time())
                     store.upsert_node(existing)
                     if embedder is not None:

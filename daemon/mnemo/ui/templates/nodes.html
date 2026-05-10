@@ -58,6 +58,7 @@
         <li>
           <a href="/node/{{ n.id }}">
             <span class="badge type-{{ n.type }}">{{ n.type | replace('memory_','') | replace('_',' ') }}</span>
+            {% if n.base %}<span class="badge base-badge" title="BASE knowledge — applies to every project">base</span>{% endif %}
             <span class="name">{{ n.name }}</span>
             {% if n.project_key %}<span class="proj">{{ n.project_key }}</span>{% endif %}
           </a>

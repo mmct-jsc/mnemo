@@ -29,6 +29,7 @@ class NodeOut(BaseModel):
     hash: str
     created_at: int
     updated_at: int
+    base: bool = False
 
     @classmethod
     def from_node(cls, n: Node) -> NodeOut:
@@ -44,6 +45,7 @@ class NodeOut(BaseModel):
             hash=n.hash,
             created_at=n.created_at,
             updated_at=n.updated_at,
+            base=n.base,
         )
 
 
@@ -52,6 +54,7 @@ class NodeUpdateIn(BaseModel):
     description: str | None = None
     type: str | None = None
     project_key: str | None = None
+    base: bool | None = None
 
 
 # --- Sources --------------------------------------------------------------

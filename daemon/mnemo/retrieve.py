@@ -97,14 +97,27 @@ def query(
     # 4. Score each candidate (union of vector and graph).
     # Single batched SELECT for all candidate nodes - cleaner and faster than
     # per-candidate get_node() calls.
+    #
+    # v1.1 BASE / project-isolation: when an active project is set and the
+    # current isolation mode is 'strict' (default), drop candidates that
+    # are neither in the active project NOR flagged BASE. Scoring still
+    # boosts the project match via epsilon for ranking within the kept set.
     now = time.time()
     candidate_ids = list(set(vec_scores) | set(graph_scores))
     nodes_by_id = store.get_nodes_by_ids(candidate_ids)
+    isolation_mode = getattr(cfg, "project_isolation_mode", "strict")
     scored: list[ScoredHit] = []
     for nid in candidate_ids:
         node = nodes_by_id.get(nid)
         if node is None:
             continue
+        if (
+            isolation_mode == "strict"
+            and active_project is not None
+            and not node.base
+            and node.project_key != active_project
+        ):
+            continue  # hard-filter: outside active project, not BASE
         s = (
             sw.alpha * vec_scores.get(nid, 0.0)
             + sw.beta * graph_scores.get(nid, 0.0)
