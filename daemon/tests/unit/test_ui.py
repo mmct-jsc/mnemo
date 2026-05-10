@@ -74,7 +74,37 @@ def test_sources_page_renders(client: TestClient) -> None:
 def test_audit_page_renders_empty(client: TestClient) -> None:
     r = client.get("/audit-page")
     assert r.status_code == 200
-    assert "Recent queries" in r.text
+    assert "Audit log" in r.text
+
+
+def test_dashboard_renders(client: TestClient) -> None:
+    r = client.get("/")
+    assert r.status_code == 200
+    assert "Welcome back" in r.text or "memory entries" in r.text
+
+
+def test_nodes_page_renders_empty(client: TestClient) -> None:
+    r = client.get("/nodes-page")
+    assert r.status_code == 200
+    assert "Nodes" in r.text
+
+
+def test_nodes_page_pagination_present(client: TestClient, tmp_path: Path) -> None:
+    _seed(client, tmp_path)
+    r = client.get("/nodes-page")
+    assert r.status_code == 200
+    # Pagination summary block always renders when there are nodes.
+    assert "Showing" in r.text
+
+
+def test_node_page_highlights_nodes_navbar(client: TestClient, tmp_path: Path) -> None:
+    import re
+
+    nid = _seed(client, tmp_path)
+    r = client.get(f"/node/{nid}")
+    assert r.status_code == 200
+    # When on /node/<id>, the navbar 'Nodes' link should be marked active.
+    assert re.search(r'href="/nodes-page"\s+class="active"', r.text)
 
 
 def test_settings_page_renders(client: TestClient) -> None:

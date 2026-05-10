@@ -1,0 +1,20 @@
+<nav class="pager" aria-label="pagination">
+  {# Caller passes pagination_qs (query string with 'page=' stripped). #}
+  {% set qs = pagination_qs | default('') %}
+  {% set sep = '&' if qs else '' %}
+  {% set base = pagination_base | default(request.url.path) %}
+
+  {% if pagination.has_prev %}
+    <a class="page-btn" href="{{ base }}?{{ qs }}{{ sep }}page={{ pagination.page - 1 }}">&larr; Prev</a>
+  {% else %}
+    <span class="page-btn disabled">&larr; Prev</span>
+  {% endif %}
+
+  <span class="page-info">page {{ pagination.page }} of {{ pagination.pages }}</span>
+
+  {% if pagination.has_next %}
+    <a class="page-btn" href="{{ base }}?{{ qs }}{{ sep }}page={{ pagination.page + 1 }}">Next &rarr;</a>
+  {% else %}
+    <span class="page-btn disabled">Next &rarr;</span>
+  {% endif %}
+</nav>

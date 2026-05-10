@@ -2,14 +2,17 @@
 {% block title %} - {{ node.name }}{% endblock %}
 {% block content %}
 <section class="node-edit" x-data="{ saved: false, error: null }">
+  <div class="back-row">
+    <a class="link-button" href="/nodes-page">&larr; back to nodes</a>
+  </div>
   <header class="node-head">
-    <span class="badge type-{{ node.type }}">{{ node.type }}</span>
+    <span class="badge type-{{ node.type }}">{{ node.type | replace('memory_','') | replace('_',' ') }}</span>
     <h2>{{ node.name }}</h2>
-    <code>[mnemo:{{ node.id }}]</code>
+    <code class="cite">[mnemo:{{ node.id }}]</code>
   </header>
   <dl class="meta">
-    <dt>source</dt><dd>{{ node.source_path }}</dd>
-    <dt>project</dt><dd>{{ node.project_key or "&mdash;" | safe }}</dd>
+    <dt>source</dt><dd><code>{{ node.source_path }}</code></dd>
+    <dt>project</dt><dd>{{ node.project_key or '—' }}</dd>
     <dt>updated</dt><dd>{{ node.updated_at }}</dd>
     <dt>hash</dt><dd><code>{{ node.hash[:12] }}</code></dd>
   </dl>
@@ -38,34 +41,61 @@
       <textarea x-ref="body" rows="12">{{ node.body }}</textarea>
     </label>
     <div class="actions">
-      <button type="submit">Save</button>
-      <span x-show="saved" class="ok">saved</span>
-      <span x-show="error" class="err" x-text="error"></span>
+      <button type="submit" class="primary">Save</button>
+      <span x-show="saved" class="ok" x-cloak>saved</span>
+      <span x-show="error" class="err" x-text="error" x-cloak></span>
     </div>
   </form>
 
   <section class="edges">
     <h3>Outgoing edges ({{ outgoing | length }})</h3>
-    <ul>
-      {% for e in outgoing %}
-        <li>
-          <code>{{ e.relation }}</code> &rarr;
-          <a href="/node/{{ e.dst_id }}">{{ e.dst_id[:8] }}</a>
-          <span class="weight">w={{ '%.2f' % e.weight }}</span>
-          <span class="src">[{{ e.source }}]</span>
-        </li>
-      {% endfor %}
-    </ul>
+    {% if outgoing %}
+      <ul class="edge-list">
+        {% for e in outgoing %}
+          <li>
+            <code class="rel">{{ e.relation }}</code>
+            <span class="arrow">&rarr;</span>
+            {% if e.dst_id in neighbors %}
+              {% set dst = neighbors[e.dst_id] %}
+              <a href="/node/{{ dst.id }}" class="edge-target">
+                <span class="badge type-{{ dst.type }}">{{ dst.type | replace('memory_','') | replace('_',' ') }}</span>
+                <span class="name">{{ dst.name }}</span>
+              </a>
+            {% else %}
+              <a href="/node/{{ e.dst_id }}">{{ e.dst_id[:12] }}</a>
+            {% endif %}
+            <span class="weight">w={{ '%.2f' % e.weight }}</span>
+            <span class="src">[{{ e.source }}]</span>
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="hint">No outgoing edges yet.</p>
+    {% endif %}
+
     <h3>Incoming edges ({{ incoming | length }})</h3>
-    <ul>
-      {% for e in incoming %}
-        <li>
-          <a href="/node/{{ e.src_id }}">{{ e.src_id[:8] }}</a>
-          &rarr; <code>{{ e.relation }}</code>
-          <span class="weight">w={{ '%.2f' % e.weight }}</span>
-        </li>
-      {% endfor %}
-    </ul>
+    {% if incoming %}
+      <ul class="edge-list">
+        {% for e in incoming %}
+          <li>
+            {% if e.src_id in neighbors %}
+              {% set src = neighbors[e.src_id] %}
+              <a href="/node/{{ src.id }}" class="edge-target">
+                <span class="badge type-{{ src.type }}">{{ src.type | replace('memory_','') | replace('_',' ') }}</span>
+                <span class="name">{{ src.name }}</span>
+              </a>
+            {% else %}
+              <a href="/node/{{ e.src_id }}">{{ e.src_id[:12] }}</a>
+            {% endif %}
+            <span class="arrow">&rarr;</span>
+            <code class="rel">{{ e.relation }}</code>
+            <span class="weight">w={{ '%.2f' % e.weight }}</span>
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="hint">No incoming edges yet.</p>
+    {% endif %}
   </section>
 </section>
 {% endblock %}

@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+{% block title %} - dashboard{% endblock %}
+{% block content %}
+
+<section class="hero">
+  <h1>Welcome back</h1>
+  <p>{{ total_nodes }} memory entries across {{ source_count }} sources, learning from your queries.</p>
+</section>
+
+<section class="dash-grid">
+  <a class="stat-card" href="/nodes-page">
+    <div class="stat-num">{{ total_nodes }}</div>
+    <div class="stat-label">memory entries</div>
+  </a>
+  <a class="stat-card" href="/sources-page">
+    <div class="stat-num">{{ source_count }}</div>
+    <div class="stat-label">sources indexed</div>
+  </a>
+  <a class="stat-card" href="/graph">
+    <div class="stat-num">{{ edge_count }}</div>
+    <div class="stat-label">connections learned</div>
+  </a>
+  <a class="stat-card" href="/audit-page">
+    <div class="stat-num">{{ query_count }}</div>
+    <div class="stat-label">queries logged</div>
+  </a>
+</section>
+
+<section class="dash-row">
+  <div class="dash-card dash-types">
+    <div class="dash-card-head">
+      <h2>Memory by type</h2>
+      <a class="link-button" href="/nodes-page">browse</a>
+    </div>
+    {% if total_nodes %}
+      <ul class="type-bars">
+        {% for type, n in sorted_counts %}
+          {% set pct = (n / total_nodes) * 100 %}
+          <li>
+            <div class="type-row">
+              <span class="badge type-{{ type }}">{{ type | replace('memory_','') | replace('_',' ') }}</span>
+              <span class="type-num">{{ n }}</span>
+            </div>
+            <div class="bar-track">
+              <div class="bar-fill type-fill-{{ type }}" style="width: {{ pct }}%;"></div>
+            </div>
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="empty">No memory yet. Run <code>mnemo init</code> + <code>mnemo reindex</code>.</p>
+    {% endif %}
+  </div>
+
+  <div class="dash-card dash-quick">
+    <h2>Quick search</h2>
+    <p class="hint">Type to query the whole memory.</p>
+    <div class="search-box compact">
+      <input
+        type="search"
+        name="q"
+        placeholder="What's the rule for X..."
+        autocomplete="off"
+        hx-get="/ui/search"
+        hx-trigger="keyup changed delay:300ms, search"
+        hx-target="#dash-results">
+    </div>
+    <div id="dash-results"></div>
+  </div>
+</section>
+
+<section class="dash-row">
+  <div class="dash-card">
+    <div class="dash-card-head">
+      <h2>Top connected</h2>
+      <span class="hint">most edges</span>
+    </div>
+    {% if top_connected %}
+      <ul class="node-list compact">
+        {% for n, d in top_connected %}
+          <li>
+            <a href="/node/{{ n.id }}">
+              <span class="badge type-{{ n.type }}">{{ n.type | replace('memory_','') | replace('_',' ') }}</span>
+              <span class="name">{{ n.name }}</span>
+              <span class="proj">{{ d }} edges</span>
+            </a>
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="empty">No edges yet. Connections form as you query.</p>
+    {% endif %}
+  </div>
+
+  <div class="dash-card">
+    <div class="dash-card-head">
+      <h2>Recent queries</h2>
+      <a class="link-button" href="/audit-page">all</a>
+    </div>
+    {% if recent_queries %}
+      <ul class="query-mini">
+        {% for q in recent_queries %}
+          <li>
+            <span class="prompt">"{{ q.prompt }}"</span>
+            <span class="meta">
+              {% for tag in q.intent_tags %}{% if tag != 'none' %}<span class="tag">{{ tag }}</span>{% endif %}{% endfor %}
+              <span class="hint">{{ q.retrieved_ids | length }} hit{% if q.retrieved_ids | length != 1 %}s{% endif %}</span>
+            </span>
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="empty">No queries yet. <a href="/nodes-page">Try a search.</a></p>
+    {% endif %}
+  </div>
+</section>
+
+<section class="dash-card">
+  <div class="dash-card-head">
+    <h2>Recently updated</h2>
+    <a class="link-button" href="/nodes-page">all nodes</a>
+  </div>
+  {% if recent_nodes %}
+    <ul class="node-list">
+      {% for n in recent_nodes %}
+        <li>
+          <a href="/node/{{ n.id }}">
+            <span class="badge type-{{ n.type }}">{{ n.type | replace('memory_','') | replace('_',' ') }}</span>
+            <span class="name">{{ n.name }}</span>
+            {% if n.project_key %}<span class="proj">{{ n.project_key }}</span>{% endif %}
+          </a>
+          {% if n.description %}<p class="desc">{{ n.description }}</p>{% endif %}
+        </li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+</section>
+
+{% endblock %}
