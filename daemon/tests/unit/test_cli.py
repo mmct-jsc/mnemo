@@ -94,6 +94,97 @@ def test_cli_source_remove(runner: CliRunner, tmp_path: Path) -> None:
     assert json.loads(listing.stdout) == []
 
 
+def test_cli_source_remove_reports_cascade_count(
+    runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """v1.1.1: source remove output mentions how many nodes were
+    cleaned up so the user can verify the cascade fired."""
+    monkeypatch.setattr("mnemo.cli.Embedder", lambda *a, **kw: FakeEmbedder())
+    src = _seed_memory(tmp_path)
+    runner.invoke(app, ["source", "add", str(src), "--kind", "memory_dir"])
+    runner.invoke(app, ["reindex", "--no-embed"])
+    rm = runner.invoke(app, ["source", "remove", str(src)])
+    assert rm.exit_code == 0
+    assert "1 node cleaned up" in rm.stdout
+
+
+def test_cli_source_orphans_empty(runner: CliRunner) -> None:
+    result = runner.invoke(app, ["source", "orphans"])
+    assert result.exit_code == 0
+    assert "No orphan nodes" in result.stdout
+
+
+def test_cli_source_orphans_lists_then_prunes(
+    runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End-to-end: simulate the pre-1.1.1 leak by directly deleting the
+    sources row (so cascade doesn't fire), then verify ``orphans`` finds
+    the leftover nodes and ``--prune`` cleans them up."""
+    monkeypatch.setattr("mnemo.cli.Embedder", lambda *a, **kw: FakeEmbedder())
+    src = _seed_memory(tmp_path)
+    runner.invoke(app, ["source", "add", str(src), "--kind", "memory_dir"])
+    runner.invoke(app, ["reindex", "--no-embed"])
+
+    # Simulate the pre-1.1.1 broken behavior: drop the sources row WITHOUT
+    # cascading. The nodes are now orphans.
+    from mnemo import paths as paths_mod
+    from mnemo.store import Store
+
+    s = Store(paths_mod.db_path())
+    try:
+        s.conn.execute("DELETE FROM sources WHERE path = ?", (str(src),))
+        s.conn.commit()
+        assert len(s.list_sources()) == 0
+        # The node still exists.
+        assert len(s.list_nodes()) == 1
+    finally:
+        s.close()
+
+    # `orphans` lists them.
+    listed = runner.invoke(app, ["source", "orphans"])
+    assert listed.exit_code == 0
+    assert "Found 1 orphan node" in listed.stdout
+
+    # `orphans --prune` removes them.
+    pruned = runner.invoke(app, ["source", "orphans", "--prune"])
+    assert pruned.exit_code == 0
+    assert "Pruned 1 orphan node" in pruned.stdout
+
+    # Re-running shows none.
+    again = runner.invoke(app, ["source", "orphans"])
+    assert "No orphan nodes" in again.stdout
+
+
+def test_cli_source_orphans_json(
+    runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """JSON output mode for scripts / adapters."""
+    monkeypatch.setattr("mnemo.cli.Embedder", lambda *a, **kw: FakeEmbedder())
+    src = _seed_memory(tmp_path)
+    runner.invoke(app, ["source", "add", str(src), "--kind", "memory_dir"])
+    runner.invoke(app, ["reindex", "--no-embed"])
+
+    # Same leak simulation as above.
+    from mnemo import paths as paths_mod
+    from mnemo.store import Store
+
+    s = Store(paths_mod.db_path())
+    try:
+        s.conn.execute("DELETE FROM sources WHERE path = ?", (str(src),))
+        s.conn.commit()
+    finally:
+        s.close()
+
+    result = runner.invoke(app, ["source", "orphans", "--json"])
+    assert result.exit_code == 0
+    data = json.loads(result.stdout)
+    assert len(data) == 1
+    assert "source_path" in data[0]
+    assert data[0]["source_path"].startswith(str(src))
+    assert "type" in data[0]
+    assert "name" in data[0]
+
+
 def test_cli_reindex_no_embed(runner: CliRunner, tmp_path: Path) -> None:
     src = _seed_memory(tmp_path)
     runner.invoke(app, ["source", "add", str(src), "--kind", "memory_dir"])

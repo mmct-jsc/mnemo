@@ -762,6 +762,33 @@ class Store:
             self.conn.commit()
         return len(to_delete)
 
+    def find_orphan_nodes(self) -> list[Node]:
+        """Return nodes whose source_path matches no registered source.
+
+        v1.1.1 dedicated cleanup helper. Pre-1.1.1, removing a source did
+        NOT cascade its nodes; users who removed a source under the old
+        behavior still have those nodes in their store. The reindex
+        orphan-sweep cannot reach them because it only walks nodes that
+        live under a still-registered source.
+
+        This walks every node, checks it against every registered source
+        using the same :func:`path_under_source` semantics the reconciler
+        uses, and returns the ones with no match. Use together with
+        :meth:`delete_node` (or the ``mnemo source orphans --prune`` CLI)
+        to clean up.
+
+        Returns the orphan nodes in newest-first order.
+        """
+        sources = self.list_sources()
+        with self._lock:
+            rows = self.conn.execute("SELECT * FROM nodes ORDER BY updated_at DESC").fetchall()
+        orphans: list[Node] = []
+        for row in rows:
+            node_path = row["source_path"]
+            if not any(path_under_source(node_path, s.path, s.kind) for s in sources):
+                orphans.append(self._row_to_node(row))
+        return orphans
+
     # --- Active project (singleton) ---------------------------------------
 
     def get_active_project(self) -> ActiveProject | None:
