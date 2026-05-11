@@ -19,9 +19,10 @@ The OpenAPI schema is filtered to v1-only paths and exposed at both
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from fastapi.openapi.utils import get_openapi
@@ -108,6 +109,14 @@ class AppState:
     store: Store | None = None
     embedder: Embedder | None = None
     owns_store: bool = False
+    # v1.1.1: serialize concurrent reindex requests. Without this, two
+    # POST /v1/reindex calls (e.g. from a stale UI tab and a fresh tab)
+    # both run, racing on SQLite (serialized internally but emitting
+    # duplicate effects + a conflated report). The lock is per-app so
+    # tests that build their own FastAPI instance via create_app() get
+    # an independent lock.
+    reindex_lock: threading.Lock = field(default_factory=threading.Lock)
+    reindex_started_at: int | None = None
 
 
 def create_app(*, store: Store | None = None, embedder: Embedder | None = None) -> FastAPI:
@@ -212,8 +221,12 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
 
     @v1.delete("/sources")
     def remove_source(path: str, s: Store = Depends(get_store)) -> JSONResponse:
-        s.remove_source(path)
-        return JSONResponse({"ok": True})
+        # v1.1.1: cascade-delete the source's nodes inside Store.remove_source.
+        # Return the count so the UI can show "Source removed (N nodes cleaned
+        # up)" rather than the old lie that nodes would be removed "on the
+        # next reindex" (they wouldn't -- see Store.remove_source docstring).
+        removed = s.remove_source(path)
+        return JSONResponse({"ok": True, "removed": removed})
 
     # --- Reindex ----------------------------------------------------------
 
@@ -223,8 +236,42 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
         s: Store = Depends(get_store),
         e: Embedder = Depends(get_embedder),
     ) -> ReindexReportOut:
-        report = ingest.reindex(s, embedder=e if embed else None)
-        return ReindexReportOut.from_report(report)
+        # v1.1.1: refuse concurrent reindex calls with HTTP 409 so a stale
+        # UI tab (or a script that didn't await the previous response)
+        # can't kick off a parallel run. The first caller proceeds; later
+        # callers get the start timestamp so they can poll /v1/reindex/status.
+        if not state.reindex_lock.acquire(blocking=False):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "reindex_in_progress",
+                    "started_at": state.reindex_started_at,
+                },
+            )
+        try:
+            state.reindex_started_at = int(time.time())
+            report = ingest.reindex(s, embedder=e if embed else None)
+            return ReindexReportOut.from_report(report)
+        finally:
+            state.reindex_started_at = None
+            state.reindex_lock.release()
+
+    @v1.get("/reindex/status")
+    def reindex_status() -> JSONResponse:
+        """Report whether a reindex is currently running.
+
+        UI uses this on page load so the Reindex button shows the right
+        state across navigations -- without it, the client-only "running"
+        flag is wiped every reload and a user can fire a second reindex
+        while the first is still in-flight.
+        """
+        running = state.reindex_lock.locked()
+        return JSONResponse(
+            {
+                "running": running,
+                "started_at": state.reindex_started_at if running else None,
+            }
+        )
 
     # --- Nodes ------------------------------------------------------------
 

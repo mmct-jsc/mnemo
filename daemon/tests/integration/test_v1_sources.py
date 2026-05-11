@@ -130,9 +130,46 @@ def test_delete_source(client: TestClient, tmp_path: Path) -> None:
     client.post("/v1/sources", json={"path": str(src_dir), "kind": "memory_dir"})
     r = client.delete(f"/v1/sources?path={src_dir}")
     assert r.status_code == 200
+    body = r.json()
+    # v1.1.1: DELETE returns the cascade count. No nodes ingested here -> 0.
+    assert body["ok"] is True
+    assert body["removed"] == 0
     # List should now be empty.
     r2 = client.get("/v1/sources")
     assert all(s["path"] != str(src_dir) for s in r2.json())
+
+
+def test_delete_source_cascades_nodes_via_http(client: TestClient, tmp_path: Path) -> None:
+    """v1.1.1 regression test at the HTTP layer: registering a source,
+    ingesting a few files, then DELETEing it must return the removed
+    count and leave no nodes behind."""
+    src_dir = tmp_path / "memory"
+    src_dir.mkdir()
+    # Write three memory-shaped markdown files.
+    for name in ("a", "b", "c"):
+        (src_dir / f"{name}.md").write_text(
+            "---\nname: " + name + "\ndescription: t\ntype: project\n---\nbody " + name,
+            encoding="utf-8",
+        )
+    client.post("/v1/sources", json={"path": str(src_dir), "kind": "memory_dir"})
+    # Trigger ingest so nodes exist.
+    rep = client.post("/v1/reindex?embed=false")
+    assert rep.status_code == 200
+    assert rep.json()["added"] == 3
+
+    # DELETE the source -> cascade.
+    r = client.delete(f"/v1/sources?path={src_dir}")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True
+    assert body["removed"] == 3
+
+    # The nodes endpoint should now have nothing left from that source.
+    nodes_after = client.get("/v1/nodes").json()
+    assert all(n["source_path"] != str(src_dir) for n in nodes_after)
+    assert not any(n["source_path"].startswith(str(src_dir)) for n in nodes_after), (
+        "nodes whose source_path was under the removed source must be gone"
+    )
 
 
 # --- ingest layer (filter behavior) --------------------------------------

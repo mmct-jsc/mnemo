@@ -240,8 +240,65 @@ def test_list_sources_only_enabled(store: Store) -> None:
 
 def test_remove_source(store: Store) -> None:
     store.register_source("/p", "memory_dir")
-    store.remove_source("/p")
+    assert store.remove_source("/p") == 0  # no nodes -> 0 cascaded
     assert store.list_sources() == []
+
+
+def test_remove_source_cascades_descendant_nodes(store: Store) -> None:
+    """v1.1.1 regression: removing a memory_dir source must delete every
+    node whose source_path lives under that directory. Before the fix the
+    sources row was deleted but the nodes lingered forever (the reindex
+    orphan-sweep only catches nodes under STILL-REGISTERED sources)."""
+    store.register_source("/repo/memory", "memory_dir")
+    # Two nodes under the source path (direct + nested) plus one unrelated
+    # node that should survive the cascade.
+    inside_a = _make_node(name="a", source_path="/repo/memory/a.md", source_kind="memory_dir")
+    inside_b = _make_node(name="b", source_path="/repo/memory/sub/b.md", source_kind="memory_dir")
+    outside = _make_node(name="c", source_path="/elsewhere/c.md", source_kind="memory_dir")
+    store.upsert_node(inside_a)
+    store.upsert_node(inside_b)
+    store.upsert_node(outside)
+
+    removed = store.remove_source("/repo/memory")
+
+    assert removed == 2
+    assert store.get_node(inside_a.id) is None
+    assert store.get_node(inside_b.id) is None
+    # Unrelated node survives.
+    assert store.get_node(outside.id) is not None
+    # Source itself is gone.
+    assert store.list_sources() == []
+
+
+def test_remove_source_cascade_respects_claude_md_exact_match(store: Store) -> None:
+    """claude_md is a single-file source. Its cascade should hit only the
+    exact node whose source_path equals the source path, not unrelated
+    files in the same directory."""
+    store.register_source("/home/u/.claude/CLAUDE.md", "claude_md")
+    exact = _make_node(
+        name="claude-md",
+        source_path="/home/u/.claude/CLAUDE.md",
+        source_kind="claude_md",
+    )
+    sibling = _make_node(
+        name="sibling",
+        source_path="/home/u/.claude/other.md",
+        source_kind="memory_dir",
+    )
+    store.upsert_node(exact)
+    store.upsert_node(sibling)
+
+    removed = store.remove_source("/home/u/.claude/CLAUDE.md")
+
+    assert removed == 1
+    assert store.get_node(exact.id) is None
+    assert store.get_node(sibling.id) is not None
+
+
+def test_remove_source_unregistered_returns_zero(store: Store) -> None:
+    """Removing a source that was never registered is a no-op that returns
+    0 (so HTTP DELETE stays idempotent)."""
+    assert store.remove_source("/never/registered") == 0
 
 
 def test_register_source_rejects_unknown_kind(store: Store) -> None:
