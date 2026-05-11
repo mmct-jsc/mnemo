@@ -288,14 +288,66 @@ function sourcesPage() {
     init() {
       this.pathAc.init();
       this.pkAc.init();
+      // v1.1.1: ask the daemon whether a reindex is already running. If it
+      // is, lock the button + start polling so the user can't fire a
+      // second one after navigating away and back. Without this the
+      // client-only `running` flag was wiped every page load.
+      this._checkReindexStatus();
+    },
+
+    async _checkReindexStatus() {
+      try {
+        const r = await fetch('/v1/reindex/status');
+        if (!r.ok) return;
+        const data = await r.json();
+        if (data.running) {
+          this.running = true;
+          window.toast('A reindex is already in progress on the daemon. Waiting for it to finish...', 'info');
+          this._pollReindex();
+        }
+      } catch (_) { /* daemon offline; nothing to do */ }
+    },
+
+    _pollReindex() {
+      const tick = async () => {
+        try {
+          const r = await fetch('/v1/reindex/status');
+          if (r.ok) {
+            const data = await r.json();
+            if (!data.running) {
+              this.running = false;
+              window.toastAfterReload('Reindex finished', 'success');
+              location.reload();
+              return;
+            }
+          }
+        } catch (_) { /* keep trying */ }
+        setTimeout(tick, 2000);
+      };
+      setTimeout(tick, 2000);
     },
 
     reindexAll() {
       this.running = true;
       window.toast('Reindexing... (re-embedding can take a few seconds per node)', 'info');
       fetch('/v1/reindex', { method: 'POST' })
-        .then(r => r.json())
+        .then(async r => {
+          if (r.status === 409) {
+            // Another reindex is already running -- switch to poll mode
+            // instead of failing. The user just sees a single toast and
+            // the button stays disabled until the in-flight run finishes.
+            const body = await r.json().catch(() => ({}));
+            const startedAt = body && body.detail && body.detail.started_at;
+            const since = startedAt ? ' since ' + new Date(startedAt * 1000).toLocaleTimeString() : '';
+            window.toast('Reindex already in progress' + since + '. Waiting...', 'info');
+            this._pollReindex();
+            return null;
+          }
+          if (!r.ok) throw new Error(await r.text());
+          return r.json();
+        })
         .then(d => {
+          if (d === null) return; // 409 path handled above
           const total = d.added + d.updated + d.unchanged;
           let msg, level;
           if (d.errors && d.errors.length) {
@@ -374,7 +426,10 @@ function sourcesPage() {
     async confirmRemove(path) {
       const ok = await window.modal({
         title: 'Remove source?',
-        body: 'This unregisters the source. Existing nodes from this source will be removed on the next reindex.\n\n' + path,
+        // v1.1.1: copy now matches the new cascade behavior -- nodes are
+        // deleted immediately, not on next reindex (the previous version
+        // never actually cleaned them up).
+        body: 'This unregisters the source and removes every node that was ingested from it.\n\n' + path,
         confirm: { text: 'Remove', level: 'danger' },
         cancel: { text: 'Cancel' },
       });
@@ -382,7 +437,12 @@ function sourcesPage() {
       try {
         const r = await fetch('/v1/sources?path=' + encodeURIComponent(path), { method: 'DELETE' });
         if (!r.ok) throw new Error(await r.text());
-        window.toastAfterReload('Source removed', 'success');
+        const data = await r.json().catch(() => ({}));
+        const removed = (data && typeof data.removed === 'number') ? data.removed : 0;
+        const msg = removed === 0
+          ? 'Source removed'
+          : 'Source removed (' + removed + ' node' + (removed === 1 ? '' : 's') + ' cleaned up)';
+        window.toastAfterReload(msg, 'success');
         location.reload();
       } catch (e) {
         window.toast('Remove failed: ' + e, 'error');
