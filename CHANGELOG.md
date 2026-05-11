@@ -31,6 +31,16 @@ beyond two additive endpoint responses.
 
 ### Added
 
+- **`mnemo source orphans [--prune]`** CLI command. The cascade fix
+  above stops *future* removals from leaking, but users who removed a
+  source under the pre-1.1.1 behavior still have the leftover nodes in
+  their store. Running `mnemo source orphans` lists every node whose
+  `source_path` matches no registered source; `--prune` deletes them
+  along with their vector chunks. Output is human-readable by default;
+  `--json` available for scripts.
+- **`mnemo source remove`** now prints the cascade count, so the user
+  can verify the cleanup actually fired (`removed: /path  (3 nodes
+  cleaned up)`).
 - **`GET /v1/reindex/status`** returns `{"running": bool, "started_at":
   int|null}` so the Sources page can restore the disabled-button state
   after navigation. The UI polls this every 2 s when a reindex is
@@ -48,14 +58,34 @@ beyond two additive endpoint responses.
 - **`Store.remove_source` returns `int`** (count of cascaded nodes).
   Previously returned `None`. Callers that ignored the return value
   still work.
+- **`Store.find_orphan_nodes`** new method — returns nodes whose
+  `source_path` matches no registered source (the inverse of the
+  cascade). Used by the `mnemo source orphans` CLI.
 - **Sources page modal copy** updated to truthfully describe the
   cascade ("removes every node that was ingested from it").
+
+### Upgrade notes
+
+If you removed a source under v1.1.0 or earlier and you still see its
+old nodes in the graph / Nodes page, that's the pre-1.1.1 leak. After
+upgrading, run::
+
+    mnemo source orphans          # see what's left
+    mnemo source orphans --prune  # clean them up
+
+then restart the daemon so the reindex picks up the cleaner state.
+For our reporter (the `D:\Repository\Duyen` case): after upgrade, those
+README nodes leftover from the misregistered `memory_dir` will be
+listed and cleanable in one command.
 
 ### Tests
 
 - `test_remove_source_cascades_descendant_nodes` -- unit, store layer.
 - `test_remove_source_cascade_respects_claude_md_exact_match` -- unit.
 - `test_remove_source_unregistered_returns_zero` -- unit (idempotency).
+- `test_find_orphan_nodes_returns_unregistered_sources` -- unit.
+- `test_find_orphan_nodes_empty_when_all_match` -- unit.
+- `test_find_orphan_nodes_no_sources_means_everything_orphan` -- unit.
 - `test_delete_source_cascades_nodes_via_http` -- integration, full
   ingest-then-DELETE round trip.
 - `test_reindex_status_idle_when_no_run_in_flight` -- integration.
@@ -64,6 +94,11 @@ beyond two additive endpoint responses.
 - `test_concurrent_reindex_returns_409_with_started_at` -- integration.
 - `test_reindex_lock_released_on_error` -- integration (lock cleanup
   even when ingest raises).
+- `test_cli_source_remove_reports_cascade_count` -- CLI.
+- `test_cli_source_orphans_empty` -- CLI.
+- `test_cli_source_orphans_lists_then_prunes` -- CLI, end-to-end
+  reproduction of the pre-1.1.1 leak path.
+- `test_cli_source_orphans_json` -- CLI.
 
 ## [1.1.0] - 2026-05-10
 
