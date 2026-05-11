@@ -109,43 +109,73 @@ Today's default sources are project memory + global CLAUDE.md +
 - **Slack threads**: opt-in connector for capturing decisions made in
   chat.
 
-## 2.0 - Code Intelligence (approved 2026-05-11)
+## 2.0 - Code Intelligence + Decision Provenance (approved 2026-05-11)
 
 Full design: [docs/plans/2026-05-11-mnemo-v2.0-design.md](plans/2026-05-11-mnemo-v2.0-design.md).
 
-Move from "typed knowledge memory" to "typed knowledge memory + typed
-code graph", over the same hybrid Graph-RAG retrieval. The killer
-query is the **cross-stack sitemap**: "this React button calls this
-Express handler which queries this Postgres table" -- one graph
-traversal once the schema + extractors are in place.
+**The pitch:** mnemo becomes **the only code-intelligence tool that
+remembers *why*.** Every code-intelligence tool today (GitHub Code
+Search, SourceGraph, Cursor @-Codebase, GitNexus) answers *what* and
+*how*. None remember *why* — they don't have a memory layer. mnemo
+already has one. v2.0 adds the code graph and the wiring that links
+every function back to the decisions, incidents, and retros that
+motivated it.
 
-- **Explicit source typing**: `code_repo` (tree-sitter) + `docs_dir`
-  (markdown harvest) + `memory_dir` (existing) as discrete kinds.
-  Auto-router classifies on `mnemo source add` with a dry-run preview
-  so a repo of READMEs never gets silently misclassified as memory
-  (the v1.1.0 "Duyen" bug becomes structurally impossible).
+Three headline capabilities:
+
+1. **Cross-stack sitemap.** "This React button calls this Express
+   handler which queries this Postgres table" — one graph traversal
+   once Tier 3 framework extractors emit `Component → Route →
+   Handler → Service → Table` edges across the FE/BE seam.
+2. **Decision provenance.** Hover any function in `/code` to see
+   the `feedback_<incident>`, `plan_doc`, and commits that motivated
+   it. Auto-clustered "lessons learned" digest per project. New
+   `mnemo:why-is-this-here` skill walks code → commit → decision →
+   retro.
+3. **Impact analysis with memory.** `mnemo:impact-analysis` returns
+   call-graph blast radius PLUS the `memory_feedback` notes anyone
+   left about the affected functions ("don't refactor X without
+   reading retro Y").
+
+Plus the foundational additions:
+
+- **Explicit source typing**: `code_repo` + `docs_dir` + `memory_dir`
+  with auto-router + dry-run preview. Closes the Duyen-class
+  misclassification bug structurally.
 - **Tiered code graph**: Tier 1 universal structure (16 grammars),
-  Tier 2 call-graph (Python / TS-JS / Go via Stack-Graphs-style scope
-  resolution), Tier 3 framework extractors (FastAPI, Express, React,
-  Next.js, Django, Flask).
-- **Cross-stack composition** via new `linked_project` edge.
-- **`/code` UI family** with drill-down navigation and lazy
-  ego-network expansion (2 hops default, click-to-expand).
-- **5 new skills**: `mnemo:explore-codebase`, `mnemo:trace-call`,
-  `mnemo:trace-route`, `mnemo:explain-design`, `mnemo:debug-with-code`.
-- **Per-file incremental watcher** with 2.5s debounce window.
-- **Migration banner** auto-detects pre-v2.0 misclassified
-  `memory_dir` sources and offers re-classification (no silent data
-  loss).
-- **50k file safety ceiling** on the auto-router.
+  Tier 2 call-graph (Python / TS-JS / Go with constructor +
+  `self`/`this` resolution), Tier 3 framework extractors (FastAPI,
+  Express, React, Next.js, Django, Flask).
+- **Edge confidence scores** on every edge (informed by GitNexus
+  comparison). Unresolved Tier 2 calls = 0.5; framework matches =
+  0.9; user-confirmed = 1.0.
+- **Commit ingestion** from `git log` per code_repo with auto-linker
+  to `feedback`/`plan_doc` nodes via heuristic + explicit
+  `Closes:`/`Refs:` trailers.
+- **Cross-stack composition** via `linked_project` edge.
+- **`/code` UI family** with drill-down, lazy ego-network, sitemap
+  view, and provenance sidebar.
+- **7 new skills** (was 5; +2 for provenance + impact):
+  `mnemo:explore-codebase`, `mnemo:trace-call`, `mnemo:trace-route`,
+  `mnemo:explain-design`, `mnemo:debug-with-code`,
+  `mnemo:why-is-this-here`, `mnemo:impact-analysis`.
+- **Per-file incremental watcher** with 2.5s debounce + commit-
+  aware staleness.
+- **Migration banner** auto-detects pre-v2.0 misclassified sources.
+- **50k file safety ceiling**.
 
-14 phases, ~3 weeks. v1.2 (Learning to Listen) ships first as a
+16 phases, ~3.5 weeks. v1.2 (Learning to Listen) ships first as a
 small orthogonal release; v2.0 inherits its auto-tuner.
 
+**v2.0.1 follow-on:** PR-diff "don't break me" annotator — surfaces
+high-confidence provenance edges as inline PR comments. Foundation
+ships in v2.0; trigger surface (GitHub Action / pre-commit hook /
+VS Code lens) ships in v2.0.1.
+
 Carried forward as **hard non-goals**: chat surface (deferred to v3),
-LSP integration (v2.x candidate), refactoring tools (out of scope
-indefinitely), unified everything-on-one-canvas graph view (known
-scale failure).
+LSP integration (v2.x candidate), refactoring/write-back tools
+(out of scope indefinitely), unified everything-on-one-canvas graph
+view (known scale failure).
 
 ## 2.x - Agentic curation (deferred)
 
