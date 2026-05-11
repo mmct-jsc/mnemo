@@ -81,6 +81,31 @@ def ensure_runtime_dirs() -> Path:
 # of (path, expected_key) pairs to detect drift.
 
 
+def path_under_source(node_path: str, src_path: str, src_kind: str) -> bool:
+    """True if ``node_path`` is owned by the source rooted at ``src_path``.
+
+    For ``claude_md`` sources the relationship is exact (a single file).
+    For directory-shaped sources (``memory_dir``, ``plan_dir``, ``transcripts``)
+    the node must be the directory itself or a descendant.
+
+    Used by:
+    - ingest reconciliation (sweep nodes whose files vanished from a tracked
+      source).
+    - source removal cascade (delete all nodes belonging to a source being
+      unregistered, so the graph doesn't keep stale entries after the user
+      cleans up a misclassified registration).
+    """
+    np = Path(node_path)
+    sp = Path(src_path)
+    if src_kind == "claude_md":
+        return np == sp
+    try:
+        np.relative_to(sp)
+        return True
+    except ValueError:
+        return False
+
+
 def project_key_from_abs(abs_path: str) -> str:
     """Derive the canonical project key from an already-absolute path string.
 

@@ -74,7 +74,8 @@ def test_remove_source(client: TestClient) -> None:
     client.post("/sources", json={"path": "/p", "kind": "memory_dir"})
     resp = client.delete("/sources", params={"path": "/p"})
     assert resp.status_code == 200
-    assert resp.json() == {"ok": True}
+    # v1.1.1: DELETE now returns the cascade count alongside `ok`.
+    assert resp.json() == {"ok": True, "removed": 0}
     assert client.get("/sources").json() == []
 
 
