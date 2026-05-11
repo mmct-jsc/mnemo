@@ -301,6 +301,54 @@ def test_remove_source_unregistered_returns_zero(store: Store) -> None:
     assert store.remove_source("/never/registered") == 0
 
 
+def test_find_orphan_nodes_returns_unregistered_sources(store: Store) -> None:
+    """v1.1.1 cleanup helper for the pre-1.1.1 leak path: a node whose
+    source_path doesn't match any registered source should be detected."""
+    # One registered source + a node under it (should NOT be orphan).
+    store.register_source("/repo/memory", "memory_dir")
+    in_source = _make_node(name="a", source_path="/repo/memory/a.md", source_kind="memory_dir")
+    store.upsert_node(in_source)
+
+    # Two nodes that look like leftovers from a previously-removed source.
+    orphan_a = _make_node(
+        name="orphan-a",
+        source_path="/old/Duyen/README.md",
+        source_kind="memory_dir",
+    )
+    orphan_b = _make_node(
+        name="orphan-b",
+        source_path="/old/Duyen/sub/sub2/inner.md",
+        source_kind="memory_dir",
+    )
+    store.upsert_node(orphan_a)
+    store.upsert_node(orphan_b)
+
+    orphans = store.find_orphan_nodes()
+    ids = {n.id for n in orphans}
+    assert orphan_a.id in ids
+    assert orphan_b.id in ids
+    assert in_source.id not in ids
+    assert len(orphans) == 2
+
+
+def test_find_orphan_nodes_empty_when_all_match(store: Store) -> None:
+    store.register_source("/repo/memory", "memory_dir")
+    n = _make_node(source_path="/repo/memory/a.md", source_kind="memory_dir")
+    store.upsert_node(n)
+    assert store.find_orphan_nodes() == []
+
+
+def test_find_orphan_nodes_no_sources_means_everything_orphan(store: Store) -> None:
+    """If the user has removed every source (pre-1.1.1 cascade), every
+    node is an orphan."""
+    n1 = _make_node(source_path="/a/x.md", source_kind="memory_dir")
+    n2 = _make_node(source_path="/b/y.md", source_kind="memory_dir")
+    store.upsert_node(n1)
+    store.upsert_node(n2)
+    orphans = store.find_orphan_nodes()
+    assert {o.id for o in orphans} == {n1.id, n2.id}
+
+
 def test_register_source_rejects_unknown_kind(store: Store) -> None:
     with pytest.raises(ValueError, match="unknown source kind"):
         store.register_source("/p", "bogus")
