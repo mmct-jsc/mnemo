@@ -109,9 +109,48 @@ Today's default sources are project memory + global CLAUDE.md +
 - **Slack threads**: opt-in connector for capturing decisions made in
   chat.
 
-## 2.0 - Agentic curation (6-12 months out)
+## 2.0 - Code Intelligence (approved 2026-05-11)
 
-Move from "mnemo *holds* memory" to "mnemo *manages* memory".
+Full design: [docs/plans/2026-05-11-mnemo-v2.0-design.md](plans/2026-05-11-mnemo-v2.0-design.md).
+
+Move from "typed knowledge memory" to "typed knowledge memory + typed
+code graph", over the same hybrid Graph-RAG retrieval. The killer
+query is the **cross-stack sitemap**: "this React button calls this
+Express handler which queries this Postgres table" -- one graph
+traversal once the schema + extractors are in place.
+
+- **Explicit source typing**: `code_repo` (tree-sitter) + `docs_dir`
+  (markdown harvest) + `memory_dir` (existing) as discrete kinds.
+  Auto-router classifies on `mnemo source add` with a dry-run preview
+  so a repo of READMEs never gets silently misclassified as memory
+  (the v1.1.0 "Duyen" bug becomes structurally impossible).
+- **Tiered code graph**: Tier 1 universal structure (16 grammars),
+  Tier 2 call-graph (Python / TS-JS / Go via Stack-Graphs-style scope
+  resolution), Tier 3 framework extractors (FastAPI, Express, React,
+  Next.js, Django, Flask).
+- **Cross-stack composition** via new `linked_project` edge.
+- **`/code` UI family** with drill-down navigation and lazy
+  ego-network expansion (2 hops default, click-to-expand).
+- **5 new skills**: `mnemo:explore-codebase`, `mnemo:trace-call`,
+  `mnemo:trace-route`, `mnemo:explain-design`, `mnemo:debug-with-code`.
+- **Per-file incremental watcher** with 2.5s debounce window.
+- **Migration banner** auto-detects pre-v2.0 misclassified
+  `memory_dir` sources and offers re-classification (no silent data
+  loss).
+- **50k file safety ceiling** on the auto-router.
+
+14 phases, ~3 weeks. v1.2 (Learning to Listen) ships first as a
+small orthogonal release; v2.0 inherits its auto-tuner.
+
+Carried forward as **hard non-goals**: chat surface (deferred to v3),
+LSP integration (v2.x candidate), refactoring tools (out of scope
+indefinitely), unified everything-on-one-canvas graph view (known
+scale failure).
+
+## 2.x - Agentic curation (deferred)
+
+The "manage, not just hold" direction is still on the roadmap but
+shifted past v2.0:
 
 - **Auto-archive stale entries**: nodes that haven't been retrieved in
   N months and have no recent edits get auto-archived (still retrievable
@@ -127,6 +166,13 @@ Move from "mnemo *holds* memory" to "mnemo *manages* memory".
 - **Agentic ingestion**: a small agent watches your shell history and
   proposes new memory entries when it sees a non-obvious decision being
   made (e.g., "you just tweaked an MQTT config; capture the why?").
+
+## 3.0 - Companion / chat (sketch)
+
+Chat surface in the UI with BYO API key across providers. Consumes
+v2.0's typed code graph as retrieval context. `mnemo:doc` skill lands
+here (deferred from v1.1). Direction sketch in
+`project_mnemo_future_versions.md` memory note.
 
 ## 2.1+ - Ecosystem
 
