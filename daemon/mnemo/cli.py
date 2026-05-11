@@ -244,10 +244,80 @@ def source_list(
 
 @source_app.command("remove")
 def source_remove(path: str) -> None:
+    """Unregister a source and cascade-delete every node ingested from it.
+
+    v1.1.1: cascade is automatic. The command prints the number of nodes
+    cleaned up alongside the source path.
+    """
     store = _open_store()
     try:
-        store.remove_source(path)
-        typer.echo(f"removed: {path}")
+        removed = store.remove_source(path)
+        if removed:
+            noun = "node" if removed == 1 else "nodes"
+            typer.echo(f"removed: {path}  ({removed} {noun} cleaned up)")
+        else:
+            typer.echo(f"removed: {path}")
+    finally:
+        store.close()
+
+
+@source_app.command("orphans")
+def source_orphans(
+    prune: bool = typer.Option(False, "--prune", help="Delete the orphan nodes."),
+    json_out: bool = typer.Option(False, "--json", help="Emit JSON instead of human text."),
+) -> None:
+    """List (or prune) nodes whose source_path matches no registered source.
+
+    Pre-1.1.1 ``DELETE /v1/sources`` (or ``mnemo source remove``) didn't
+    cascade -- removing a source left every node from it orphaned in the
+    graph because the reindex orphan-sweep only walks nodes still under a
+    registered source.
+
+    Run this once after upgrading to v1.1.1 to surface and clean up the
+    leftovers. Without ``--prune`` it just lists them.
+
+    Examples::
+
+        mnemo source orphans
+        mnemo source orphans --prune
+        mnemo source orphans --json
+    """
+    store = _open_store()
+    try:
+        orphans = store.find_orphan_nodes()
+        if json_out:
+            typer.echo(
+                json.dumps(
+                    [
+                        {
+                            "id": n.id,
+                            "type": n.type,
+                            "name": n.name,
+                            "source_path": n.source_path,
+                            "project_key": n.project_key,
+                            "updated_at": n.updated_at,
+                        }
+                        for n in orphans
+                    ],
+                    indent=2,
+                )
+            )
+        else:
+            if not orphans:
+                typer.echo("No orphan nodes.")
+            else:
+                typer.echo(f"Found {len(orphans)} orphan node(s):")
+                # Cap the listing at 50; bigger lists are noise on a terminal.
+                for n in orphans[:50]:
+                    short_id = n.id[:8]
+                    typer.echo(f"  {short_id}  [{n.type:18}]  {n.source_path}")
+                if len(orphans) > 50:
+                    typer.echo(f"  ... and {len(orphans) - 50} more")
+        if prune and orphans:
+            for n in orphans:
+                store.delete_node(n.id)
+            noun = "node" if len(orphans) == 1 else "nodes"
+            typer.echo(f"Pruned {len(orphans)} orphan {noun}.")
     finally:
         store.close()
 
