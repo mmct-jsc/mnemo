@@ -30,6 +30,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from mnemo import parsers
+from mnemo.paths import path_under_source
 from mnemo.store import NODE_TYPES, SOURCE_KINDS, Node, Source, Store
 
 log = logging.getLogger(__name__)
@@ -309,15 +310,10 @@ def scan_source(source: Source) -> Iterator[ParsedFile]:
 
 
 def _path_under_source(node_path: str, src_path: str, src_kind: str) -> bool:
-    np = Path(node_path)
-    sp = Path(src_path)
-    if src_kind == "claude_md":
-        return np == sp
-    try:
-        np.relative_to(sp)
-        return True
-    except ValueError:
-        return False
+    # v1.1.1: shared with store.remove_source via mnemo.paths so the source
+    # remove cascade uses identical "owned by this source" semantics. Kept as
+    # a private re-export for callers that imported it from this module.
+    return path_under_source(node_path, src_path, src_kind)
 
 
 def reindex(
@@ -386,7 +382,7 @@ def reindex(
         all_nodes = store.list_nodes(limit=1_000_000)
         for node in all_nodes:
             for src in src_list:
-                if _path_under_source(node.source_path, src.path, src.kind):
+                if path_under_source(node.source_path, src.path, src.kind):
                     if node.source_path not in seen_paths:
                         store.delete_node(node.id)
                         report.removed += 1

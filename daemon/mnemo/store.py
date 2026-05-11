@@ -20,6 +20,8 @@ from pathlib import Path
 
 import sqlite_vec
 
+from mnemo.paths import path_under_source
+
 SCHEMA_VERSION = 1
 EMBEDDING_DIM = 384  # all-MiniLM-L6-v2 dim. Bump + reindex to switch models.
 
@@ -715,10 +717,50 @@ class Store:
             self.conn.execute("UPDATE sources SET last_indexed_at = ? WHERE path = ?", (ts, path))
             self.conn.commit()
 
-    def remove_source(self, path: str) -> None:
+    def remove_source(self, path: str) -> int:
+        """Unregister a source and cascade-delete its nodes.
+
+        v1.1.1: previously this only DELETEd the sources row, leaving every
+        node that was ingested from the path orphaned in the graph. The
+        reindex orphan-sweep only looks at nodes whose source_path still
+        matches a *registered* source, so once the source was gone its
+        nodes lingered forever -- visible in the UI's Nodes / Graph pages
+        long after the user expected them cleaned up.
+
+        Now: walk every node whose ``source_path`` falls under ``path``
+        (using the same :func:`path_under_source` semantics as the reindex
+        reconciler) and delete it via :meth:`delete_node`, which also
+        clears its vec/chunk_meta rows. Returns the number of nodes
+        removed so the HTTP layer can show the user how much was cleaned
+        up.
+
+        Idempotent: removing an unregistered source is a no-op and
+        returns 0.
+        """
+        src = self.get_source(path)
+        if src is None:
+            # Source isn't registered. Still issue the DELETE so callers
+            # see a uniform "remove" semantic, but there's nothing to
+            # cascade because we don't know what kind it was.
+            with self._lock:
+                self.conn.execute("DELETE FROM sources WHERE path = ?", (path,))
+                self.conn.commit()
+            return 0
+
+        # Collect candidate node IDs in one read, then delete outside the
+        # cursor so delete_node (which takes _lock itself) doesn't deadlock.
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT id, source_path FROM nodes",
+            ).fetchall()
+        to_delete = [r["id"] for r in rows if path_under_source(r["source_path"], path, src.kind)]
+        for node_id in to_delete:
+            self.delete_node(node_id)  # also deletes chunks via vec cleanup
+
         with self._lock:
             self.conn.execute("DELETE FROM sources WHERE path = ?", (path,))
             self.conn.commit()
+        return len(to_delete)
 
     # --- Active project (singleton) ---------------------------------------
 

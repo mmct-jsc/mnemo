@@ -2,6 +2,69 @@
 
 All notable changes to mnemo are documented here.
 
+## [1.1.1] - 2026-05-11
+
+**Hotfix.** Two source-management bugs surfaced in real use after the
+1.1.0 release: removing a source left its nodes orphaned in the graph
+forever, and the Reindex button could fire concurrent runs after a
+page navigation. Both are fixed here without any API contract change
+beyond two additive endpoint responses.
+
+### Fixed
+
+- **`DELETE /v1/sources` now cascades node deletion.** Previously the
+  endpoint only deleted the row from the `sources` table; every node
+  ingested from the removed source's path lingered in the graph
+  forever because the reindex orphan-sweep only inspects nodes whose
+  path matches a *still-registered* source. The UI's confirmation
+  copy ("Existing nodes from this source will be removed on the next
+  reindex") was actively misleading. Reported visually as "wipe all
+  graph and replace with all README files" when a non-memory tree
+  was mistakenly registered as `memory_dir`.
+- **Concurrent `POST /v1/reindex` requests no longer race.** The
+  daemon now serializes reindex requests with an in-process lock. A
+  second request while another is in-flight returns `HTTP 409` with
+  `{"error": "reindex_in_progress", "started_at": <ts>}`. The UI's
+  client-only "running" flag was wiped on every page reload /
+  navigation, so a user navigating away and back could fire a second
+  reindex on top of an in-flight one.
+
+### Added
+
+- **`GET /v1/reindex/status`** returns `{"running": bool, "started_at":
+  int|null}` so the Sources page can restore the disabled-button state
+  after navigation. The UI polls this every 2 s when a reindex is
+  in-flight and reloads once it flips back to idle.
+- **`DELETE /v1/sources` response gained a `removed` field**
+  (`{"ok": true, "removed": N}`) reporting the cascade count. The
+  Sources page now shows "Source removed (N nodes cleaned up)" in
+  the success toast.
+
+### Changed
+
+- **`mnemo.paths.path_under_source`** is now a public helper used by
+  both the ingest reconciler and `Store.remove_source` so the two
+  layers agree on what "owned by this source" means.
+- **`Store.remove_source` returns `int`** (count of cascaded nodes).
+  Previously returned `None`. Callers that ignored the return value
+  still work.
+- **Sources page modal copy** updated to truthfully describe the
+  cascade ("removes every node that was ingested from it").
+
+### Tests
+
+- `test_remove_source_cascades_descendant_nodes` -- unit, store layer.
+- `test_remove_source_cascade_respects_claude_md_exact_match` -- unit.
+- `test_remove_source_unregistered_returns_zero` -- unit (idempotency).
+- `test_delete_source_cascades_nodes_via_http` -- integration, full
+  ingest-then-DELETE round trip.
+- `test_reindex_status_idle_when_no_run_in_flight` -- integration.
+- `test_reindex_status_reports_running_mid_flight` -- integration,
+  uses a blocked-event monkeypatch on `ingest.reindex`.
+- `test_concurrent_reindex_returns_409_with_started_at` -- integration.
+- `test_reindex_lock_released_on_error` -- integration (lock cleanup
+  even when ingest raises).
+
 ## [1.1.0] - 2026-05-10
 
 **Beyond Claude Code.** mnemo now serves any IDE / any LLM SDK / any
