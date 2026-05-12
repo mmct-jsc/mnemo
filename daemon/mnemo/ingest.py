@@ -619,6 +619,60 @@ def _resolve_code_edges(store: Store, node_ids: list[str]) -> None:
             if target_id != node.id:
                 store.add_edge(node.id, target_id, "routes_to", confidence=0.95)
 
+    # v2.0 phase 7: endpoint dedup + at_endpoint edges.
+    # For every freshly-touched ``code_route`` or ``code_component``
+    # whose intent block carries ``route_method`` + ``route_path``,
+    # upsert a shared ``code_endpoint`` node (keyed by
+    # ``endpoint:METHOD:path``) and wire an ``at_endpoint`` edge.
+    # This is what creates the cross-stack join: a React component
+    # that fetches ``/api/users`` and a FastAPI route at the same
+    # path both end up pointing at the same endpoint node.
+    _resolve_endpoint_edges(store, node_ids)
+
+
+def _resolve_endpoint_edges(store: Store, node_ids: list[str]) -> None:
+    """Upsert ``code_endpoint`` nodes for routes / components that
+    declare a (method, path) and wire each touched declarer to the
+    endpoint via an ``at_endpoint`` edge.
+
+    Endpoints are deduplicated by source_path = ``endpoint:METHOD:path``.
+    The endpoint node's project_key is left None (cross-cutting), so
+    strict-isolation retrieval treats it as a shared anchor between
+    every project's frontend and backend.
+    """
+    for nid in node_ids:
+        node = store.get_node(nid)
+        if node is None or not node.frontmatter_json:
+            continue
+        if node.type not in ("code_route", "code_component"):
+            continue
+        try:
+            fm = json.loads(node.frontmatter_json)
+        except ValueError:
+            continue
+        intent = fm.get("code_unit")
+        if not isinstance(intent, dict):
+            continue
+        method = intent.get("route_method")
+        path = intent.get("route_path")
+        if not isinstance(method, str) or not isinstance(path, str):
+            continue
+
+        endpoint_sp = f"endpoint:{method}:{path}"
+        endpoint = store.get_node_by_source(endpoint_sp)
+        if endpoint is None:
+            endpoint = Node.new(
+                type="code_endpoint",
+                name=f"{method} {path}",
+                body="",
+                source_path=endpoint_sp,
+                source_kind="code_repo",
+                description=f"Endpoint {method} {path}",
+                hash=endpoint_sp,
+            )
+            store.upsert_node(endpoint)
+        store.add_edge(node.id, endpoint.id, "at_endpoint", confidence=0.9)
+
 
 def register_default_sources(store: Store, claude_home: Path) -> int:
     """Discover and register Scope B sources. Returns count of newly registered."""

@@ -34,6 +34,7 @@ from typing import TYPE_CHECKING
 from mnemo.extractors import express as _express
 from mnemo.extractors import fastapi as _fastapi
 from mnemo.extractors import flask as _flask
+from mnemo.extractors import react as _react
 
 if TYPE_CHECKING:  # pragma: no cover -- import-time only
     import tree_sitter
@@ -52,9 +53,9 @@ FrameworkExtractor = Callable[["tree_sitter.Tree", bytes, str, "list[CodeUnit]"]
 
 FRAMEWORK_EXTRACTORS: dict[str, list[FrameworkExtractor]] = {
     "python": [_fastapi.extract, _flask.extract],
-    "javascript": [_express.extract],
-    "typescript": [_express.extract],
-    "tsx": [_express.extract],
+    "javascript": [_express.extract, _react.extract],
+    "typescript": [_express.extract, _react.extract],
+    "tsx": [_express.extract, _react.extract],
 }
 """Per-language list of extractors to run. A single tree can match
 multiple frameworks (e.g. a Python file that mixes FastAPI and Flask
