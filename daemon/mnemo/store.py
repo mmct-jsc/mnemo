@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import struct
 import threading
 import time
 import uuid
@@ -21,6 +22,19 @@ from pathlib import Path
 import sqlite_vec
 
 from mnemo.paths import path_under_source
+
+
+def _deserialize_float32(blob: bytes) -> list[float]:
+    """Inverse of :func:`sqlite_vec.serialize_float32`.
+
+    sqlite-vec packs vectors as a little-endian ``float32`` array; the
+    library only provides the serializer because reads typically go
+    through SQL helpers like ``vec_to_json``. For v1.2 phase 2 we need
+    to round-trip query embeddings in Python, so unpack here.
+    """
+    n = len(blob) // 4
+    return list(struct.unpack(f"<{n}f", blob))
+
 
 SCHEMA_VERSION = 1
 EMBEDDING_DIM = 384  # all-MiniLM-L6-v2 dim. Bump + reindex to switch models.
@@ -62,6 +76,23 @@ EDGE_RELATIONS = frozenset(
 )
 
 EDGE_SOURCES = frozenset({"inferred", "user", "frontmatter"})
+
+# v1.2: feedback_event.reason enumeration. Each reason maps to a signal:
+#   thumbs_up        -> +1.0 (explicit positive)
+#   thumbs_down      -> -1.0 (explicit negative)
+#   cite_copied      -> +0.5 (implicit positive; user copied the citation)
+#   inferred_requery -> -0.5 (implicit negative; user re-asked a similar
+#                              query within 5 min, suggesting earlier hits
+#                              missed the mark)
+# Stored as TEXT so future signals can be added without a schema migration.
+FEEDBACK_REASONS = frozenset(
+    {
+        "thumbs_up",
+        "thumbs_down",
+        "cite_copied",
+        "inferred_requery",
+    }
+)
 
 
 # --- Dataclasses -------------------------------------------------------------
@@ -157,6 +188,62 @@ class Query:
     retrieved_ids: list[str]
     scores: dict[str, float]
     ts: int
+    # v1.2 phase 2: the query embedding, persisted so the inferred-
+    # re-query detector can cosine-compare new prompts against recent
+    # ones. None for pre-1.2 rows that never had an embedding written.
+    embedding: list[float] | None = None
+    # v1.2 phase 5: per-hit breakdown of the 6-term scoring formula,
+    # captured at retrieval time so the auto-tuner can rescore with
+    # alternative weights without re-running the embedder. Shape:
+    # ``{node_id: {"vector": ..., "graph": ..., "recency": ...,
+    # "type": ..., "project": ..., "lexical": ...}, ...}``. None for
+    # pre-1.2 rows.
+    score_components: dict[str, dict[str, float]] | None = None
+
+
+@dataclass
+class FeedbackEvent:
+    """v1.2 phase 1: one row of user feedback on a retrieval hit.
+
+    Every signal source -- explicit thumbs in the UI, implicit
+    cite-copied tap, the daemon-side inferred re-query detector --
+    writes a row here with the same shape so the v1.2 auto-tuner has a
+    uniform input.
+
+    `signal` is the numeric weight the optimizer consumes:
+    +1.0 for thumbs_up, -1.0 for thumbs_down, +0.5 for cite_copied,
+    -0.5 for inferred_requery. The mapping is centralized in
+    :func:`signal_for_reason` so callers don't have to memorize it.
+
+    Idempotency: `(query_id, node_id, reason)` is unique. Re-logging
+    the same triple updates `signal` and `created_at` in place rather
+    than producing duplicates -- matters when a user double-clicks
+    the thumbs button or when the inferred detector fires twice.
+    """
+
+    id: int  # AUTOINCREMENT primary key; -1 means "not yet persisted"
+    query_id: str
+    node_id: str
+    signal: float
+    reason: str
+    created_at: int
+
+
+def signal_for_reason(reason: str) -> float:
+    """Canonical signal value for a given reason.
+
+    Centralized so the HTTP layer can default the signal field when
+    the caller only supplies `reason`, and so all signal sources
+    agree on magnitudes. Raises ValueError on unknown reasons.
+    """
+    if reason not in FEEDBACK_REASONS:
+        raise ValueError(f"unknown feedback reason: {reason!r}")
+    return {
+        "thumbs_up": 1.0,
+        "thumbs_down": -1.0,
+        "cite_copied": 0.5,
+        "inferred_requery": -0.5,
+    }[reason]
 
 
 @dataclass
@@ -245,6 +332,33 @@ CREATE TABLE IF NOT EXISTS active_project (
   path         TEXT NOT NULL,
   since        INTEGER NOT NULL
 );
+
+-- v1.2 phase 1: user-feedback events on retrieval hits.
+--
+-- One row per (query_id, node_id, reason) tuple. Re-logging the same
+-- triple updates `signal` and `created_at` in place instead of
+-- producing duplicates -- the UNIQUE constraint + INSERT OR REPLACE
+-- in :meth:`Store.log_feedback_event` enforces this.
+--
+-- FK cascades on both sides so deleting a node or purging an old
+-- query row also drops any feedback that mentioned it. The query log
+-- is intentionally not purged today but the cascade keeps the option
+-- open without separate cleanup code.
+CREATE TABLE IF NOT EXISTS feedback_event (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  query_id    TEXT NOT NULL,
+  node_id     TEXT NOT NULL,
+  signal      REAL NOT NULL,
+  reason      TEXT NOT NULL,
+  created_at  INTEGER NOT NULL,
+  UNIQUE (query_id, node_id, reason),
+  FOREIGN KEY (query_id) REFERENCES queries(id) ON DELETE CASCADE,
+  FOREIGN KEY (node_id) REFERENCES nodes(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_feedback_query ON feedback_event(query_id);
+CREATE INDEX IF NOT EXISTS idx_feedback_node  ON feedback_event(node_id);
+CREATE INDEX IF NOT EXISTS idx_feedback_ts    ON feedback_event(created_at DESC);
 """
 
 
@@ -305,6 +419,21 @@ class Store:
             "nodes",
             {
                 "base": "INTEGER NOT NULL DEFAULT 0",
+            },
+        )
+        # v1.2 phase 2: store the query embedding alongside the audit row
+        # so the inferred-re-query detector can do cosine over recent
+        # prompts. NULL on legacy rows; the detector skips those.
+        #
+        # v1.2 phase 5: store the per-hit 6-term score components so the
+        # auto-tuner can rescore with alternative weights without
+        # re-running the embedder. NULL on legacy rows; the optimizer
+        # filters them out.
+        self._ensure_columns(
+            "queries",
+            {
+                "embedding": "BLOB",
+                "score_components": "TEXT",
             },
         )
         row = self.conn.execute("SELECT version FROM schema_version").fetchone()
@@ -829,13 +958,33 @@ class Store:
         intent_tags: list[str],
         retrieved_ids: list[str],
         scores: dict[str, float],
+        embedding: list[float] | None = None,
+        score_components: dict[str, dict[str, float]] | None = None,
     ) -> str:
+        """Write one audit row.
+
+        v1.2 phase 2 added optional ``embedding`` for the inferred-
+        re-query detector. v1.2 phase 5 added optional
+        ``score_components`` for the auto-tuner. Pre-1.2 callers that
+        omit both keep working; their row gets NULL in those columns
+        and downstream consumers filter them out.
+        """
         qid = uuid.uuid4().hex
+        emb_blob: bytes | None = None
+        if embedding is not None:
+            if len(embedding) != EMBEDDING_DIM:
+                raise ValueError(f"embedding dim {len(embedding)} != expected {EMBEDDING_DIM}")
+            emb_blob = sqlite_vec.serialize_float32(embedding)
+        comps_json: str | None = (
+            json.dumps(score_components) if score_components is not None else None
+        )
         with self._lock:
             self.conn.execute(
                 """
-                INSERT INTO queries (id, prompt, intent_tags, retrieved_ids, scores, ts)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO queries
+                  (id, prompt, intent_tags, retrieved_ids, scores, ts,
+                   embedding, score_components)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     qid,
@@ -844,6 +993,8 @@ class Store:
                     json.dumps(retrieved_ids),
                     json.dumps(scores),
                     int(time.time()),
+                    emb_blob,
+                    comps_json,
                 ),
             )
             self.conn.commit()
@@ -864,6 +1015,210 @@ class Store:
                 retrieved_ids=json.loads(r["retrieved_ids"]) if r["retrieved_ids"] else [],
                 scores=json.loads(r["scores"]) if r["scores"] else {},
                 ts=r["ts"],
+                embedding=None,
+            )
+            for r in rows
+        ]
+
+    def recent_queries_with_embeddings(
+        self, *, window_seconds: int = 300, limit: int = 100
+    ) -> list[Query]:
+        """Return queries within the last ``window_seconds`` that have
+        an embedding stored, newest first.
+
+        v1.2 phase 2 helper for the inferred-re-query detector: filters
+        out null-embedding (pre-1.2 legacy) rows AND anything older than
+        the window so the cosine loop stays bounded.
+
+        ``limit`` caps the row count to keep the detector cheap even if
+        a burst of queries lands inside the window.
+        """
+        cutoff = int(time.time()) - window_seconds
+        with self._lock:
+            rows = self.conn.execute(
+                """
+                SELECT * FROM queries
+                WHERE ts >= ? AND embedding IS NOT NULL
+                ORDER BY ts DESC, rowid DESC
+                LIMIT ?
+                """,
+                (cutoff, limit),
+            ).fetchall()
+        result: list[Query] = []
+        for r in rows:
+            emb_blob = r["embedding"]
+            # Convert blob back to list[float]. sqlite-vec serializes as
+            # little-endian float32; numpy reads it the same way without
+            # an explicit dtype dance.
+            vec = list(_deserialize_float32(emb_blob)) if emb_blob else None
+            result.append(
+                Query(
+                    id=r["id"],
+                    prompt=r["prompt"],
+                    intent_tags=json.loads(r["intent_tags"]) if r["intent_tags"] else [],
+                    retrieved_ids=json.loads(r["retrieved_ids"]) if r["retrieved_ids"] else [],
+                    scores=json.loads(r["scores"]) if r["scores"] else {},
+                    ts=r["ts"],
+                    embedding=vec,
+                    score_components=None,
+                )
+            )
+        return result
+
+    def recent_queries_with_components(
+        self,
+        *,
+        min_feedback: int = 1,
+        limit: int = 5000,
+    ) -> list[Query]:
+        """Return queries with ``score_components`` populated, oldest first.
+
+        v1.2 phase 5 helper for the auto-tuner:
+        - Drops rows with NULL ``score_components`` (pre-1.2 legacy or
+          embed-skipped paths) -- the optimizer cannot rescore them.
+        - With ``min_feedback >= 1`` (default), also requires at least
+          one row in ``feedback_event`` for that query so MRR has
+          ground truth to score against. ``min_feedback=0`` returns
+          everything with components (used by tests + diagnostic CLI).
+        - Order is **ascending by ts** -- the auto-tuner does a
+          time-ordered 80/20 train/val split and wants the oldest
+          queries first so newer feedback never leaks into training.
+
+        ``limit`` is a hard cap so a long-running daemon's audit log
+        doesn't load entirely into memory.
+        """
+        with self._lock:
+            if min_feedback <= 0:
+                rows = self.conn.execute(
+                    """
+                    SELECT * FROM queries
+                    WHERE score_components IS NOT NULL
+                    ORDER BY ts ASC, rowid ASC
+                    LIMIT ?
+                    """,
+                    (limit,),
+                ).fetchall()
+            else:
+                rows = self.conn.execute(
+                    """
+                    SELECT q.* FROM queries q
+                    WHERE q.score_components IS NOT NULL
+                      AND (
+                        SELECT COUNT(*) FROM feedback_event f
+                        WHERE f.query_id = q.id
+                      ) >= ?
+                    ORDER BY q.ts ASC, q.rowid ASC
+                    LIMIT ?
+                    """,
+                    (min_feedback, limit),
+                ).fetchall()
+        result: list[Query] = []
+        for r in rows:
+            comps = json.loads(r["score_components"]) if r["score_components"] else None
+            result.append(
+                Query(
+                    id=r["id"],
+                    prompt=r["prompt"],
+                    intent_tags=json.loads(r["intent_tags"]) if r["intent_tags"] else [],
+                    retrieved_ids=json.loads(r["retrieved_ids"]) if r["retrieved_ids"] else [],
+                    scores=json.loads(r["scores"]) if r["scores"] else {},
+                    ts=r["ts"],
+                    embedding=None,
+                    score_components=comps,
+                )
+            )
+        return result
+
+    # --- Feedback events (v1.2 phase 1) ------------------------------------
+
+    def log_feedback_event(
+        self,
+        *,
+        query_id: str,
+        node_id: str,
+        signal: float,
+        reason: str,
+        when: int | None = None,
+    ) -> FeedbackEvent:
+        """Insert or update one feedback row.
+
+        Idempotent on ``(query_id, node_id, reason)``: re-logging the
+        same triple refreshes ``signal`` and ``created_at`` rather than
+        creating duplicate rows. This is critical for the UI (a
+        double-clicked thumbs button shouldn't double-count) and for
+        the inferred re-query detector (which can fire repeatedly for
+        the same window).
+
+        ``when`` is exposed for tests; production callers leave it as
+        None and the row gets the current epoch.
+        """
+        if reason not in FEEDBACK_REASONS:
+            raise ValueError(f"unknown feedback reason: {reason!r}")
+        ts = when if when is not None else int(time.time())
+        with self._lock:
+            # Compose an UPSERT keyed on the unique (query_id, node_id, reason)
+            # constraint defined in the schema. ON CONFLICT...DO UPDATE keeps
+            # the original id (autoincrement primary key) and refreshes the
+            # mutable fields.
+            cur = self.conn.execute(
+                """
+                INSERT INTO feedback_event (query_id, node_id, signal, reason, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(query_id, node_id, reason)
+                DO UPDATE SET signal = excluded.signal,
+                              created_at = excluded.created_at
+                RETURNING id, query_id, node_id, signal, reason, created_at
+                """,
+                (query_id, node_id, signal, reason, ts),
+            )
+            row = cur.fetchone()
+            self.conn.commit()
+        return FeedbackEvent(
+            id=row["id"],
+            query_id=row["query_id"],
+            node_id=row["node_id"],
+            signal=row["signal"],
+            reason=row["reason"],
+            created_at=row["created_at"],
+        )
+
+    def list_feedback_events(
+        self,
+        *,
+        query_id: str | None = None,
+        node_id: str | None = None,
+        limit: int = 1000,
+    ) -> list[FeedbackEvent]:
+        """List feedback events, newest first.
+
+        Without filters returns the most recent ``limit`` rows globally
+        (useful for retune dataset assembly). With ``query_id`` set the
+        UI can show what feedback exists for a specific query; with
+        ``node_id`` set, what feedback a single node has accumulated.
+        """
+        clauses: list[str] = []
+        params: list[object] = []
+        if query_id is not None:
+            clauses.append("query_id = ?")
+            params.append(query_id)
+        if node_id is not None:
+            clauses.append("node_id = ?")
+            params.append(node_id)
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        params.append(limit)
+        with self._lock:
+            rows = self.conn.execute(
+                f"SELECT * FROM feedback_event {where} ORDER BY created_at DESC, id DESC LIMIT ?",
+                params,
+            ).fetchall()
+        return [
+            FeedbackEvent(
+                id=r["id"],
+                query_id=r["query_id"],
+                node_id=r["node_id"],
+                signal=r["signal"],
+                reason=r["reason"],
+                created_at=r["created_at"],
             )
             for r in rows
         ]
@@ -924,6 +1279,49 @@ class Store:
                 self.conn.execute("DELETE FROM vec_chunks WHERE rowid = ?", (row["vec_rowid"],))
             self.conn.execute("DELETE FROM chunk_meta WHERE node_id = ?", (node_id,))
             self.conn.commit()
+
+    def get_chunk_embeddings(
+        self,
+        pairs: list[tuple[str, int]],
+    ) -> dict[tuple[str, int], list[float]]:
+        """Bulk-fetch chunk embeddings by ``(node_id, chunk_idx)`` pairs.
+
+        v1.2 phase 4 MMR re-rank reads back each candidate's best-chunk
+        embedding so it can compute pairwise cosine for the diversity
+        penalty. Doing it as one query (via a VALUES-CTE) instead of N
+        round-trips keeps the rerank step in the sub-millisecond budget.
+
+        Pairs that don't resolve (deleted node, stale chunk_idx) are
+        silently omitted from the result so the caller can rely on
+        ``dict.get(pair)`` returning None for those cases.
+        """
+        if not pairs:
+            return {}
+        self.ensure_vec()
+
+        # SQLite has no native tuple-IN; build a values list and JOIN.
+        placeholders = ",".join(["(?, ?)"] * len(pairs))
+        flat: list[object] = []
+        for nid, idx in pairs:
+            flat.append(nid)
+            flat.append(idx)
+        sql = f"""
+            WITH wanted(node_id, chunk_idx) AS (VALUES {placeholders})
+            SELECT m.node_id, m.chunk_idx, v.embedding
+            FROM wanted w
+            JOIN chunk_meta m
+              ON m.node_id = w.node_id AND m.chunk_idx = w.chunk_idx
+            JOIN vec_chunks v ON v.rowid = m.vec_rowid
+        """
+        with self._lock:
+            rows = self.conn.execute(sql, flat).fetchall()
+        out: dict[tuple[str, int], list[float]] = {}
+        for r in rows:
+            blob = r["embedding"]
+            if blob is None:
+                continue
+            out[(r["node_id"], r["chunk_idx"])] = _deserialize_float32(blob)
+        return out
 
     def list_embedded_node_ids(self) -> set[str]:
         self.ensure_vec()

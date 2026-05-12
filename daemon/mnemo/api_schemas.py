@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 from mnemo.compress import CompressedHit
 from mnemo.ingest import ReindexReport
 from mnemo.retrieve import RetrievalResult
-from mnemo.store import ActiveProject, Node, Query, Source
+from mnemo.store import ActiveProject, FeedbackEvent, Node, Query, Source
 
 # --- Nodes ----------------------------------------------------------------
 
@@ -55,6 +55,28 @@ class NodeUpdateIn(BaseModel):
     type: str | None = None
     project_key: str | None = None
     base: bool | None = None
+
+
+class NodeCreateIn(BaseModel):
+    """v1.2 phase 7 housekeeping: HTTP-driven memory creation.
+
+    Lets non-filesystem clients (the VS Code "Add Note" command,
+    future SaaS ingesters, scripts) put a memory entry into the store
+    without first writing a markdown file under the project's memory
+    dir. ``source_path`` defaults to a synthetic ``http://api/<uuid>``
+    so the filesystem watcher doesn't try to reconcile it, and
+    ``source_kind`` defaults to ``memory_dir`` to match hand-written
+    memory entries.
+    """
+
+    type: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    body: str = Field(min_length=1)
+    description: str | None = None
+    project_key: str | None = None
+    base: bool = False
+    source_path: str | None = None
+    source_kind: str | None = None
 
 
 # --- Sources --------------------------------------------------------------
@@ -255,6 +277,107 @@ class KnownProjectItem(BaseModel):
     sample_path: str | None
     node_count: int
     source_count: int
+
+
+# --- Feedback (v1.2 phase 1) ----------------------------------------------
+
+
+class FeedbackIn(BaseModel):
+    """Body for ``POST /v1/feedback``.
+
+    The four `reason` values map to canonical `signal` magnitudes
+    (+1 / -1 / +0.5 / -0.5). Callers can omit `signal` to accept the
+    default; explicit values let the inferred-re-query detector use a
+    different magnitude than the corresponding explicit thumb.
+
+    Idempotent on ``(query_id, node_id, reason)`` -- re-POSTing the
+    same triple updates the existing row rather than inserting a
+    duplicate.
+    """
+
+    query_id: str
+    node_id: str
+    reason: str = Field(
+        description="thumbs_up | thumbs_down | cite_copied | inferred_requery",
+    )
+    # Range matches the magnitudes we actually emit. The validator on
+    # ``reason`` happens before this so a bad reason short-circuits.
+    signal: float | None = Field(default=None, ge=-1.0, le=1.0)
+
+
+class FeedbackOut(BaseModel):
+    id: int
+    query_id: str
+    node_id: str
+    signal: float
+    reason: str
+    created_at: int
+
+    @classmethod
+    def from_event(cls, e: FeedbackEvent) -> FeedbackOut:
+        return cls(
+            id=e.id,
+            query_id=e.query_id,
+            node_id=e.node_id,
+            signal=e.signal,
+            reason=e.reason,
+            created_at=e.created_at,
+        )
+
+
+# --- Retune (v1.2 phase 6) -------------------------------------------------
+
+
+class RetuneIn(BaseModel):
+    """Body for ``POST /v1/retune``.
+
+    Both fields are optional. ``min_queries`` overrides
+    ``config.retune_min_queries`` for this run (useful for seeding new
+    repos with sparse feedback). When omitted, the daemon uses the
+    on-disk value.
+    """
+
+    min_queries: int | None = Field(default=None, ge=1)
+
+
+class RetuneReportOut(BaseModel):
+    """v1.2 phase 6 HTTP shape of the auto-tuner result. Pure data
+    transfer object -- the dataclass equivalent lives in
+    :mod:`mnemo.retune`. The endpoint never persists; the UI's Apply
+    button does that via the existing ``PUT /v1/config``.
+    """
+
+    proposed: dict[str, float]
+    current: dict[str, float]
+    diff: dict[str, float]
+    train_mrr_before: float
+    train_mrr_after: float
+    val_mrr_before: float
+    val_mrr_after: float
+    iterations: int
+    train_size: int
+    val_size: int
+    elapsed_seconds: float
+    log: list[str]
+
+    @classmethod
+    def from_report(cls, r: object) -> RetuneReportOut:
+        # `r` is mnemo.retune.RetuneReport. Avoid the import cycle by
+        # ducktyping the fields.
+        return cls(
+            proposed=r.proposed,  # type: ignore[attr-defined]
+            current=r.current,  # type: ignore[attr-defined]
+            diff=r.diff,  # type: ignore[attr-defined]
+            train_mrr_before=r.train_mrr_before,  # type: ignore[attr-defined]
+            train_mrr_after=r.train_mrr_after,  # type: ignore[attr-defined]
+            val_mrr_before=r.val_mrr_before,  # type: ignore[attr-defined]
+            val_mrr_after=r.val_mrr_after,  # type: ignore[attr-defined]
+            iterations=r.iterations,  # type: ignore[attr-defined]
+            train_size=r.train_size,  # type: ignore[attr-defined]
+            val_size=r.val_size,  # type: ignore[attr-defined]
+            elapsed_seconds=r.elapsed_seconds,  # type: ignore[attr-defined]
+            log=r.log,  # type: ignore[attr-defined]
+        )
 
 
 class KnownProjectsOut(BaseModel):

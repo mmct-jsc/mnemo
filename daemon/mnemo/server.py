@@ -6,10 +6,11 @@ process. Both are constructed in ``lifespan`` so requests never pay setup cost.
 Bind to ``127.0.0.1`` only. Never listen on ``0.0.0.0``.
 
 v1.1 introduced URL versioning: every public endpoint lives under ``/v1/``.
-Legacy paths (``/health``, ``/sources``, ``/reindex``, ``/nodes``, ``/query``,
-``/audit``, ``/config``) return ``308 Permanent Redirect`` to their ``/v1/...``
-equivalent so existing clients keep working through the v1.1 series. The
-redirects are scheduled to be removed in v1.2.
+v1.1 also kept a 308 bridge from legacy un-versioned paths
+(``/health`` -> ``/v1/health``, etc.) for a single minor version of
+backward compat. v1.2 phase 7 housekeeping **removed** that bridge --
+legacy paths now return 404. The ``X-Mnemo-Api-Version`` header was
+the standing signal telling adapters to migrate.
 
 The OpenAPI schema is filtered to v1-only paths and exposed at both
 ``/openapi.json`` (FastAPI default, used by the built-in /docs UI) and
@@ -19,6 +20,7 @@ The OpenAPI schema is filtered to v1-only paths and exposed at both
 from __future__ import annotations
 
 import logging
+import sqlite3
 import threading
 import time
 from contextlib import asynccontextmanager
@@ -26,16 +28,19 @@ from dataclasses import dataclass, field
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from fastapi.openapi.utils import get_openapi
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from mnemo import __version__, config, ingest, paths, retrieve
 from mnemo.api_schemas import (
     ActiveProjectOut,
+    FeedbackIn,
+    FeedbackOut,
     FsSuggestOut,
     HealthOut,
     KnownProjectItem,
     KnownProjectsOut,
+    NodeCreateIn,
     NodeOut,
     NodeUpdateIn,
     ProjectActivateIn,
@@ -45,50 +50,22 @@ from mnemo.api_schemas import (
     QueryIn,
     QueryOut,
     ReindexReportOut,
+    RetuneIn,
+    RetuneReportOut,
     SourceIn,
     SourceOut,
     SourceUpdateIn,
 )
 from mnemo.embed import Embedder
-from mnemo.store import Store
+from mnemo.store import FEEDBACK_REASONS, Node, Store, signal_for_reason
 
 log = logging.getLogger(__name__)
 
-# Roots that should 308 to their /v1/... equivalent. Each is matched as
-# "exact" or "prefix-with-trailing-segment". UI HTML routes are NOT here --
-# they live under their own paths (/, /nodes-page, /sources-page,
-# /audit-page, /settings, /graph, /node/<id>, /static/, /ui/) and are never
-# rewritten.
-LEGACY_API_ROOTS = (
-    "/health",
-    "/sources",
-    "/reindex",
-    "/nodes",
-    "/query",
-    "/audit",
-    "/config",
-)
-
-
-class _LegacyRedirectMiddleware(BaseHTTPMiddleware):
-    """Translate legacy un-versioned API calls to /v1/... with 308.
-
-    308 preserves the request method (POST stays POST, DELETE stays DELETE)
-    and the body, which is what we need for adapters that haven't migrated.
-    Browser fetch() follows 308 transparently when ``redirect: 'follow'`` is
-    set (the default).
-    """
-
-    async def dispatch(self, request: Request, call_next):
-        path = request.url.path
-        for root in LEGACY_API_ROOTS:
-            # Match either exact (/health) or with a path tail (/nodes/<id>).
-            if path == root or path.startswith(root + "/"):
-                target = "/v1" + path
-                if request.url.query:
-                    target += "?" + request.url.query
-                return RedirectResponse(url=target, status_code=308)
-        return await call_next(request)
+# v1.2 phase 7 removed the legacy 308 redirect bridge. The
+# ``_LegacyRedirectMiddleware`` previously living here translated
+# un-versioned paths like ``/health`` -> ``/v1/health``. It was a
+# one-version-only bridge and the ``X-Mnemo-Api-Version`` header has
+# been telling adapters to migrate throughout the v1.1 cycle.
 
 
 class _ApiVersionHeaderMiddleware(BaseHTTPMiddleware):
@@ -141,11 +118,9 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
                 state.store.close()
 
     app = FastAPI(title="mnemo", version=__version__, lifespan=lifespan)
-    # Starlette runs the LAST add_middleware OUTERMOST. We want the version
-    # header to stamp every response, including 308 redirects from the
-    # legacy-path middleware. So legacy-redirect goes in first (innermost)
-    # and the version header goes in last (outermost), wrapping it.
-    app.add_middleware(_LegacyRedirectMiddleware)
+    # The version header stamps every response (including 404s from
+    # now-removed legacy paths) so adapters introspecting failed
+    # requests still see the daemon version.
     app.add_middleware(_ApiVersionHeaderMiddleware)
 
     def get_store() -> Store:
@@ -286,6 +261,62 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
             NodeOut.from_node(n)
             for n in s.list_nodes(type=type, project_key=project_key, limit=limit)
         ]
+
+    @v1.post("/nodes", response_model=NodeOut)
+    def create_node(
+        body: NodeCreateIn,
+        s: Store = Depends(get_store),
+        e: Embedder = Depends(get_embedder),
+    ) -> NodeOut:
+        """v1.2 phase 7: HTTP-driven memory creation.
+
+        Lets clients that aren't writing files (VS Code "Add Note",
+        SaaS ingesters, scripts) create a memory entry directly. The
+        new node is embedded synchronously so it's queryable on the
+        next ``/v1/query`` -- matches the post-reindex contract that
+        filesystem-written entries get for free.
+
+        Validates ``type`` and ``source_kind`` against the store-level
+        enums; surfaces unknowns as ``400``. ``source_path`` defaults
+        to a synthetic ``http://api/<uuid>`` so the watcher never
+        tries to read it from disk.
+        """
+        import hashlib
+        import uuid as _uuid
+
+        synthetic_path = body.source_path or f"http://api/{_uuid.uuid4().hex}"
+        try:
+            node = Node.new(
+                type=body.type,
+                name=body.name,
+                body=body.body,
+                source_path=synthetic_path,
+                source_kind=body.source_kind or "memory_dir",
+                description=body.description,
+                project_key=body.project_key,
+                hash=hashlib.sha256(body.body.encode("utf-8")).hexdigest(),
+                base=body.base,
+            )
+        except ValueError as exc:
+            # Surfaces "unknown node type" / "unknown source kind".
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        s.upsert_node(node)
+
+        # Embed eagerly so the new node is searchable immediately.
+        # Matches the ``ingest.reindex`` post-write behavior for
+        # filesystem entries.
+        try:
+            from mnemo.ingest import _embed
+
+            _embed(s, node, e)
+        except Exception:
+            # Embedding failure shouldn't sink the create -- the node
+            # still exists; reindex (or a later edit) can backfill the
+            # vector. Log and move on.
+            log.exception("embed of HTTP-created node %s failed", node.id)
+
+        return NodeOut.from_node(node)
 
     @v1.get("/nodes/{node_id}", response_model=NodeOut)
     def get_node(node_id: str, s: Store = Depends(get_store)) -> NodeOut:
@@ -474,6 +505,99 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
     @v1.get("/audit", response_model=list[QueryAuditOut])
     def audit(limit: int = 50, s: Store = Depends(get_store)) -> list[QueryAuditOut]:
         return [QueryAuditOut.from_query(q) for q in s.recent_queries(limit=limit)]
+
+    # --- Feedback (v1.2 phase 1) -----------------------------------------
+
+    @v1.post("/feedback", response_model=FeedbackOut)
+    def post_feedback(body: FeedbackIn, s: Store = Depends(get_store)) -> FeedbackOut:
+        """Record a feedback signal on a retrieval hit.
+
+        Idempotent on ``(query_id, node_id, reason)``. If ``signal`` is
+        omitted, the daemon defaults it from ``reason`` via
+        :func:`signal_for_reason` (thumbs_up -> 1.0, thumbs_down -> -1.0,
+        cite_copied -> 0.5, inferred_requery -> -0.5).
+
+        404 if ``query_id`` does not exist in the audit log; the FK
+        constraint would also block the insert, but we check up-front
+        for a cleaner error message.
+        """
+        if body.reason not in FEEDBACK_REASONS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"unknown feedback reason: {body.reason!r}",
+            )
+        # Verify the query_id exists. Cheaper + clearer than letting
+        # the FK fire an IntegrityError that the user has to decode.
+        recent_ids = {q.id for q in s.recent_queries(limit=100_000)}
+        if body.query_id not in recent_ids:
+            raise HTTPException(
+                status_code=404,
+                detail=f"query_id not in audit log: {body.query_id!r}",
+            )
+        # Resolve effective signal: explicit override > canonical default.
+        sig = body.signal if body.signal is not None else signal_for_reason(body.reason)
+        try:
+            event = s.log_feedback_event(
+                query_id=body.query_id,
+                node_id=body.node_id,
+                signal=sig,
+                reason=body.reason,
+            )
+        except sqlite3.IntegrityError as exc:
+            # FK violation on node_id (or unlikely query_id race) lands here.
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return FeedbackOut.from_event(event)
+
+    @v1.get("/feedback", response_model=list[FeedbackOut])
+    def list_feedback(
+        query_id: str | None = None,
+        node_id: str | None = None,
+        s: Store = Depends(get_store),
+    ) -> list[FeedbackOut]:
+        """List feedback events, newest first.
+
+        Requires at least one of ``query_id`` / ``node_id`` -- without a
+        filter the response could be enormous and accidentally
+        expensive on a long-lived store.
+        """
+        if query_id is None and node_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail="provide ?query_id=... and/or ?node_id=...",
+            )
+        events = s.list_feedback_events(query_id=query_id, node_id=node_id)
+        return [FeedbackOut.from_event(e) for e in events]
+
+    # --- Retune (v1.2 phase 6) -------------------------------------------
+
+    @v1.post("/retune", response_model=RetuneReportOut)
+    def do_retune(
+        body: RetuneIn | None = None,
+        s: Store = Depends(get_store),
+    ) -> RetuneReportOut:
+        """Run the auto-tuner against the audit log + feedback_event
+        table and return a ``RetuneReport``.
+
+        Preview-only: never mutates ``/v1/config``. The UI's Apply
+        button is responsible for persisting via ``PUT /v1/config``
+        with the proposed scoring dict. This keeps the retune endpoint
+        idempotent and lets the user discard the proposal cleanly.
+
+        Below the labeled-query threshold the response is still 200
+        with ``train_size=0`` + a "below threshold" log line so the UI
+        can show a helpful empty state without special-casing 4xx.
+        """
+        # Local import to avoid the retune <-> server import cycle.
+        from mnemo import config as cfg_mod
+        from mnemo.retune import retune
+
+        cfg = cfg_mod.load()
+        if body is None or body.min_queries is None:
+            threshold = cfg.retune_min_queries
+        else:
+            threshold = body.min_queries
+        report = retune(s, min_queries=threshold)
+        return RetuneReportOut.from_report(report)
 
     # --- Config ----------------------------------------------------------
 

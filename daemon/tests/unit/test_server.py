@@ -1,4 +1,8 @@
-"""HTTP API tests using FastAPI's TestClient."""
+"""HTTP API tests using FastAPI's TestClient.
+
+All paths use the ``/v1/...`` prefix. v1.2 phase 7 removed the legacy
+308 redirect bridge, so calling an un-versioned path now returns 404.
+"""
 
 from __future__ import annotations
 
@@ -25,7 +29,7 @@ def client(store: Store, fake_embedder: FakeEmbedder) -> Iterator[TestClient]:
 
 
 def test_health_empty(client: TestClient) -> None:
-    resp = client.get("/health")
+    resp = client.get("/v1/health")
     assert resp.status_code == 200
     data = resp.json()
     assert data["ok"] is True
@@ -44,7 +48,7 @@ def test_health_with_nodes(client: TestClient, store: Store) -> None:
         source_kind="memory_dir",
     )
     store.upsert_node(n)
-    resp = client.get("/health")
+    resp = client.get("/v1/health")
     data = resp.json()
     assert data["node_count"] == 1
     assert data["counts_by_type"]["memory_feedback"] == 1
@@ -54,29 +58,31 @@ def test_health_with_nodes(client: TestClient, store: Store) -> None:
 
 
 def test_add_source_then_list(client: TestClient) -> None:
-    resp = client.post("/sources", json={"path": "/p", "kind": "memory_dir", "project_key": "P1"})
+    resp = client.post(
+        "/v1/sources", json={"path": "/p", "kind": "memory_dir", "project_key": "P1"}
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert data["path"] == "/p"
     assert data["project_key"] == "P1"
 
-    resp = client.get("/sources")
+    resp = client.get("/v1/sources")
     assert resp.status_code == 200
     assert len(resp.json()) == 1
 
 
 def test_add_source_invalid_kind(client: TestClient) -> None:
-    resp = client.post("/sources", json={"path": "/p", "kind": "bogus"})
+    resp = client.post("/v1/sources", json={"path": "/p", "kind": "bogus"})
     assert resp.status_code == 400
 
 
 def test_remove_source(client: TestClient) -> None:
-    client.post("/sources", json={"path": "/p", "kind": "memory_dir"})
-    resp = client.delete("/sources", params={"path": "/p"})
+    client.post("/v1/sources", json={"path": "/p", "kind": "memory_dir"})
+    resp = client.delete("/v1/sources", params={"path": "/p"})
     assert resp.status_code == 200
     # v1.1.1: DELETE now returns the cascade count alongside `ok`.
     assert resp.json() == {"ok": True, "removed": 0}
-    assert client.get("/sources").json() == []
+    assert client.get("/v1/sources").json() == []
 
 
 # --- /reindex + /nodes ----------------------------------------------------
@@ -103,13 +109,13 @@ def _seed(tmp_path: Path) -> Path:
 
 def test_reindex_then_list_nodes(client: TestClient, tmp_path: Path) -> None:
     src = _seed(tmp_path)
-    client.post("/sources", json={"path": str(src), "kind": "memory_dir"})
-    resp = client.post("/reindex", params={"embed": "false"})
+    client.post("/v1/sources", json={"path": str(src), "kind": "memory_dir"})
+    resp = client.post("/v1/reindex", params={"embed": "false"})
     assert resp.status_code == 200
     body = resp.json()
     assert body["added"] == 1
 
-    resp = client.get("/nodes")
+    resp = client.get("/v1/nodes")
     nodes = resp.json()
     assert len(nodes) == 1
     assert nodes[0]["type"] == "memory_feedback"
@@ -117,28 +123,28 @@ def test_reindex_then_list_nodes(client: TestClient, tmp_path: Path) -> None:
 
 
 def test_get_node_not_found(client: TestClient) -> None:
-    resp = client.get("/nodes/does-not-exist")
+    resp = client.get("/v1/nodes/does-not-exist")
     assert resp.status_code == 404
 
 
 def test_update_node(client: TestClient, tmp_path: Path) -> None:
     src = _seed(tmp_path)
-    client.post("/sources", json={"path": str(src), "kind": "memory_dir"})
-    client.post("/reindex", params={"embed": "false"})
-    nid = client.get("/nodes").json()[0]["id"]
-    resp = client.put(f"/nodes/{nid}", json={"description": "patched"})
+    client.post("/v1/sources", json={"path": str(src), "kind": "memory_dir"})
+    client.post("/v1/reindex", params={"embed": "false"})
+    nid = client.get("/v1/nodes").json()[0]["id"]
+    resp = client.put(f"/v1/nodes/{nid}", json={"description": "patched"})
     assert resp.status_code == 200
     assert resp.json()["description"] == "patched"
 
 
 def test_delete_node(client: TestClient, tmp_path: Path) -> None:
     src = _seed(tmp_path)
-    client.post("/sources", json={"path": str(src), "kind": "memory_dir"})
-    client.post("/reindex", params={"embed": "false"})
-    nid = client.get("/nodes").json()[0]["id"]
-    resp = client.delete(f"/nodes/{nid}")
+    client.post("/v1/sources", json={"path": str(src), "kind": "memory_dir"})
+    client.post("/v1/reindex", params={"embed": "false"})
+    nid = client.get("/v1/nodes").json()[0]["id"]
+    resp = client.delete(f"/v1/nodes/{nid}")
     assert resp.status_code == 200
-    assert client.get("/nodes").json() == []
+    assert client.get("/v1/nodes").json() == []
 
 
 # --- /query --------------------------------------------------------------
@@ -146,9 +152,9 @@ def test_delete_node(client: TestClient, tmp_path: Path) -> None:
 
 def test_query_endpoint(client: TestClient, tmp_path: Path) -> None:
     src = _seed(tmp_path)
-    client.post("/sources", json={"path": str(src), "kind": "memory_dir"})
-    client.post("/reindex")  # with embed
-    resp = client.post("/query", json={"prompt": "the rule", "k": 3, "budget_tokens": 200})
+    client.post("/v1/sources", json={"path": str(src), "kind": "memory_dir"})
+    client.post("/v1/reindex")  # with embed
+    resp = client.post("/v1/query", json={"prompt": "the rule", "k": 3, "budget_tokens": 200})
     assert resp.status_code == 200
     data = resp.json()
     assert "hits" in data
@@ -158,7 +164,7 @@ def test_query_endpoint(client: TestClient, tmp_path: Path) -> None:
 
 
 def test_query_validation(client: TestClient) -> None:
-    resp = client.post("/query", json={"prompt": "x", "budget_tokens": 0})
+    resp = client.post("/v1/query", json={"prompt": "x", "budget_tokens": 0})
     assert resp.status_code == 422
 
 
@@ -167,10 +173,10 @@ def test_query_validation(client: TestClient) -> None:
 
 def test_audit_returns_recent_queries(client: TestClient, tmp_path: Path) -> None:
     src = _seed(tmp_path)
-    client.post("/sources", json={"path": str(src), "kind": "memory_dir"})
-    client.post("/reindex")
-    client.post("/query", json={"prompt": "the rule"})
-    resp = client.get("/audit")
+    client.post("/v1/sources", json={"path": str(src), "kind": "memory_dir"})
+    client.post("/v1/reindex")
+    client.post("/v1/query", json={"prompt": "the rule"})
+    resp = client.get("/v1/audit")
     assert resp.status_code == 200
     data = resp.json()
     assert len(data) >= 1
