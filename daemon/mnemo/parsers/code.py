@@ -63,6 +63,30 @@ FUNCTION_BODY_HEAD_LINES = 60
 
 
 @dataclass
+class CallSite:
+    """v2.0 phase 5: a recorded call expression inside a function or
+    method.
+
+    The Tier 2 resolver consumes call sites to emit ``calls`` edges:
+
+    - ``receiver=None``: free call, e.g. ``f()`` or ``Session()``. The
+      resolver looks up the name in the enclosing module's scope, the
+      file's imports, and as a class constructor.
+    - ``receiver="self"`` (Python) / ``"this"`` (JS-TS): method call
+      on the enclosing class. The resolver walks ``method_of`` edges
+      to find the right method.
+    - ``receiver=<other>``: qualified call, e.g. ``helper.f()``. The
+      resolver tries to match the receiver against an imported
+      module name first; falls back to attribute / instance shape
+      heuristics in later phases.
+    """
+
+    callee_name: str
+    receiver: str | None
+    line: int  # 1-indexed for diagnostics
+
+
+@dataclass
 class CodeUnit:
     """One graph node's worth of extracted code.
 
@@ -82,6 +106,11 @@ class CodeUnit:
     imports: list[str] = field(default_factory=list)
     children_source_paths: list[str] = field(default_factory=list)
     parent_source_path: str | None = None
+    # v2.0 phase 5: call sites recorded inside this function / method.
+    # Module-level units never populate this -- only enclosing
+    # functions / methods do, since Tier 2 emits caller-function
+    # ``calls`` edges (not "module calls function" edges).
+    call_sites: list[CallSite] = field(default_factory=list)
 
 
 # Per-language declaration extractor. Receives the parsed tree + the
@@ -177,6 +206,7 @@ def _python_function_unit(
         source_path=f"{file_path}:{start_line}-{end_line}",
         description=description,
         hash=_hash_bytes(body_bytes),
+        call_sites=_python_call_sites(node),
     )
 
 
@@ -226,6 +256,81 @@ def _python_decl_name(node: tree_sitter.Node) -> str:
     if name_node is None:
         return "<anonymous>"
     return _slice_text(name_node)
+
+
+def _python_call_sites(fn_node: tree_sitter.Node) -> list[CallSite]:
+    """Walk the function body collecting every ``call`` expression.
+
+    Recursive: a call nested inside an ``if`` / ``for`` / ``with`` /
+    list comprehension / etc. still attributes to the enclosing
+    function (we don't follow into nested ``function_definition`` /
+    ``class_definition`` -- those have their own units / their own
+    call_sites).
+
+    The Python grammar shapes a call as ``(call function: <expr>
+    arguments: <args>)`` where ``<expr>`` is either an
+    ``identifier`` (free call), an ``attribute`` (``a.b`` -- the
+    receiver case), or some more complex expression (function
+    factory, subscript, etc.). The latter case is silently ignored
+    at Tier 2 -- the resolver can't usefully match against it.
+    """
+    body = fn_node.child_by_field_name("body")
+    if body is None:
+        return []
+    sites: list[CallSite] = []
+    _collect_python_calls(body, sites)
+    return sites
+
+
+def _collect_python_calls(node: tree_sitter.Node, out: list[CallSite]) -> None:
+    """DFS for ``call`` nodes; skip nested function / class definitions
+    so they don't pollute the enclosing function's call_sites."""
+    # Don't descend into nested function / class definitions -- those
+    # are their own CodeUnits with their own call_sites.
+    if node.type in ("function_definition", "class_definition", "decorated_definition"):
+        return
+    if node.type == "call":
+        site = _python_call_site_from_node(node)
+        if site is not None:
+            out.append(site)
+        # We still descend the call's children so nested calls
+        # (e.g. ``f(g())``) get collected as well.
+    for child in node.children:
+        _collect_python_calls(child, out)
+
+
+def _python_call_site_from_node(call: tree_sitter.Node) -> CallSite | None:
+    """Read the function expression of a ``call`` node and produce a
+    :class:`CallSite`. Returns None for shapes Tier 2 can't usefully
+    resolve (calls on subscripts, complex factories, etc.)."""
+    fn = call.child_by_field_name("function")
+    if fn is None:
+        return None
+    line = call.start_point[0] + 1
+    if fn.type == "identifier":
+        return CallSite(callee_name=_slice_text(fn), receiver=None, line=line)
+    if fn.type == "attribute":
+        # ``a.b`` -- receiver is the object expression, callee is the
+        # attribute name.
+        receiver_node = fn.child_by_field_name("object")
+        attr_node = fn.child_by_field_name("attribute")
+        if attr_node is None:
+            return None
+        attr_name = _slice_text(attr_node)
+        # Receiver can itself be a chain (``a.b.c.method()``); for
+        # Tier 2 we only need the *outermost* receiver name. If the
+        # receiver is a plain identifier (``self``, an imported
+        # module, a class name) we capture it verbatim; otherwise
+        # we leave it None so the resolver treats it as a free call
+        # by name.
+        receiver = _slice_text(receiver_node) if receiver_node is not None else None
+        if receiver and "." in receiver:
+            # Chain: keep just the first segment so e.g. ``a.b.c()``
+            # gives receiver="a", which the resolver can still match
+            # against imports.
+            receiver = receiver.split(".", 1)[0]
+        return CallSite(callee_name=attr_name, receiver=receiver, line=line)
+    return None
 
 
 def _python_docstring(node: tree_sitter.Node, source: bytes) -> str | None:

@@ -123,6 +123,13 @@ EDGE_RELATIONS = frozenset(
         "defines",
         "method_of",
         "imports",
+        # v2.0 phase 5: Tier 2 semantic call graph. ``calls`` links a
+        # caller function/method to a callee. Stack-Graphs-style scope
+        # resolution emits edges with high confidence (0.95) for
+        # within-file resolution and lower (0.8) for cross-file via
+        # imports. Unresolved call sites do NOT emit an edge -- the
+        # graph stays clean and the LLM can lexical-match if it cares.
+        "calls",
     }
 )
 

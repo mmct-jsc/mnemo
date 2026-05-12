@@ -226,3 +226,153 @@ def test_reindex_code_repo_unresolved_import_does_not_create_edge(
         assert edges == []
     finally:
         store.close()
+
+
+# --- v2.0 phase 5: Tier 2 call-graph resolution --------------------------
+
+
+def test_reindex_resolves_same_module_free_call_to_calls_edge(tmp_path: Path) -> None:
+    """``def a(): b()`` + ``def b(): pass`` in the same file produce
+    a ``calls`` edge a -> b with high confidence."""
+    store_path = tmp_path / "store.db"
+    repo = tmp_path / "repo"
+    _write(repo / "x.py", "def a():\n    return b()\n\ndef b():\n    return 1\n")
+    store = Store(store_path)
+    try:
+        store.register_source(str(repo), "code_repo")
+        ingest.reindex(store, embedder=None)
+        a = next(n for n in store.list_nodes() if n.type == "code_function" and n.name == "a")
+        b = next(n for n in store.list_nodes() if n.type == "code_function" and n.name == "b")
+        edges = store.get_edges(src_id=a.id, relation="calls")
+        dst_ids = {e.dst_id for e in edges}
+        assert b.id in dst_ids
+
+    finally:
+        store.close()
+
+
+def test_reindex_resolves_self_method_call_to_calls_edge(tmp_path: Path) -> None:
+    """``self.method()`` in caller resolves to the method on the same
+    class. Uses the method_of edge graph laid down in phase 4."""
+    store_path = tmp_path / "store.db"
+    repo = tmp_path / "repo"
+    _write(
+        repo / "x.py",
+        "class C:\n"
+        "    def helper(self):\n"
+        "        return 1\n"
+        "    def caller(self):\n"
+        "        return self.helper()\n",
+    )
+    store = Store(store_path)
+    try:
+        store.register_source(str(repo), "code_repo")
+        ingest.reindex(store, embedder=None)
+        caller = next(
+            n for n in store.list_nodes() if n.type == "code_method" and n.name == "caller"
+        )
+        helper = next(
+            n for n in store.list_nodes() if n.type == "code_method" and n.name == "helper"
+        )
+        edges = store.get_edges(src_id=caller.id, relation="calls")
+        dst_ids = {e.dst_id for e in edges}
+        assert helper.id in dst_ids
+    finally:
+        store.close()
+
+
+def test_reindex_resolves_constructor_call_to_class(tmp_path: Path) -> None:
+    """``Session()`` resolves to the ``Session`` class node, not to a
+    function. Picks up via name lookup in the module scope."""
+    store_path = tmp_path / "store.db"
+    repo = tmp_path / "repo"
+    _write(repo / "x.py", "class Session: pass\n\ndef make():\n    return Session()\n")
+    store = Store(store_path)
+    try:
+        store.register_source(str(repo), "code_repo")
+        ingest.reindex(store, embedder=None)
+        make = next(n for n in store.list_nodes() if n.type == "code_function")
+        session = next(n for n in store.list_nodes() if n.type == "code_class")
+        edges = store.get_edges(src_id=make.id, relation="calls")
+        dst_ids = {e.dst_id for e in edges}
+        assert session.id in dst_ids
+    finally:
+        store.close()
+
+
+def test_reindex_resolves_cross_file_call_via_imports(tmp_path: Path) -> None:
+    """``import helper; helper.f()`` in consumer.py resolves to ``f``
+    in helper.py by walking the imports edge to the target module then
+    matching the function name within that module."""
+    store_path = tmp_path / "store.db"
+    repo = tmp_path / "repo"
+    _write(repo / "consumer.py", "import helper\n\ndef use():\n    return helper.f()\n")
+    _write(repo / "helper.py", "def f():\n    return 1\n")
+    store = Store(store_path)
+    try:
+        store.register_source(str(repo), "code_repo")
+        ingest.reindex(store, embedder=None)
+        use = next(n for n in store.list_nodes() if n.type == "code_function" and n.name == "use")
+        f = next(n for n in store.list_nodes() if n.type == "code_function" and n.name == "f")
+        edges = store.get_edges(src_id=use.id, relation="calls")
+        dst_ids = {e.dst_id for e in edges}
+        assert f.id in dst_ids
+    finally:
+        store.close()
+
+
+def test_reindex_unresolved_call_produces_no_edge(tmp_path: Path) -> None:
+    """``stdlib_function()`` with no matching definition in the repo
+    must NOT produce an edge. Tier 2 stays best-effort -- no edge is
+    better than a wrong edge for retrieval quality."""
+    store_path = tmp_path / "store.db"
+    repo = tmp_path / "repo"
+    _write(repo / "x.py", "def use():\n    return some_unknown_function()\n")
+    store = Store(store_path)
+    try:
+        store.register_source(str(repo), "code_repo")
+        ingest.reindex(store, embedder=None)
+        use = next(n for n in store.list_nodes() if n.type == "code_function")
+        edges = store.get_edges(src_id=use.id, relation="calls")
+        assert edges == []
+    finally:
+        store.close()
+
+
+def test_reindex_calls_edge_confidence_high_for_same_file(tmp_path: Path) -> None:
+    """Same-file (same-scope) resolution is the most confident -- the
+    resolver knows exactly where the callee lives. The design pegs
+    this at 0.95."""
+    store_path = tmp_path / "store.db"
+    repo = tmp_path / "repo"
+    _write(repo / "x.py", "def a():\n    return b()\n\ndef b():\n    return 1\n")
+    store = Store(store_path)
+    try:
+        store.register_source(str(repo), "code_repo")
+        ingest.reindex(store, embedder=None)
+        a = next(n for n in store.list_nodes() if n.type == "code_function" and n.name == "a")
+        edge = next(iter(store.get_edges(src_id=a.id, relation="calls")))
+        assert edge.confidence >= 0.9
+
+    finally:
+        store.close()
+
+
+def test_reindex_calls_edge_confidence_lower_for_cross_file(tmp_path: Path) -> None:
+    """Cross-file resolution is less confident than same-file because
+    we hop through the imports edge. Confidence stays high enough to
+    be useful but distinguishably lower than the within-file case."""
+    store_path = tmp_path / "store.db"
+    repo = tmp_path / "repo"
+    _write(repo / "consumer.py", "import helper\n\ndef use():\n    return helper.f()\n")
+    _write(repo / "helper.py", "def f():\n    return 1\n")
+    store = Store(store_path)
+    try:
+        store.register_source(str(repo), "code_repo")
+        ingest.reindex(store, embedder=None)
+        use = next(n for n in store.list_nodes() if n.type == "code_function" and n.name == "use")
+        edge = next(iter(store.get_edges(src_id=use.id, relation="calls")))
+        # Lower than 1.0 (default) and lower than the same-file 0.95.
+        assert edge.confidence < 0.95
+    finally:
+        store.close()

@@ -31,6 +31,7 @@ from pathlib import Path
 
 from mnemo import auto_router, parsers
 from mnemo.parsers import code as code_parser
+from mnemo.parsers import scope as scope_resolver
 from mnemo.parsers import tree_sitter as ts_loader
 from mnemo.paths import path_under_source
 from mnemo.store import NODE_TYPES, SOURCE_KINDS, Node, Source, Store
@@ -257,10 +258,16 @@ def parse_code_file(path: Path, *, project_key: str | None = None) -> list[Parse
     for u in units:
         # Pack the edge intent into frontmatter_json so the reindex
         # post-pass can read it back after the node is upserted.
-        edge_intent = {
+        # v2.0 phase 5: call_sites travel here too -- the scope
+        # resolver consumes them after Tier 1 edges are wired.
+        edge_intent: dict[str, object] = {
             "imports": u.imports,
             "children_source_paths": u.children_source_paths,
             "parent_source_path": u.parent_source_path,
+            "call_sites": [
+                {"callee": cs.callee_name, "receiver": cs.receiver, "line": cs.line}
+                for cs in u.call_sites
+            ],
         }
         fm = {"code_unit": edge_intent}
         out.append(
@@ -499,6 +506,12 @@ def reindex(
     # imports lookups can hit the freshly-populated graph.
     if touched_code_node_ids:
         _resolve_code_edges(store, touched_code_node_ids)
+        # v2.0 phase 5: Tier 2 ``calls`` resolution runs AFTER Tier 1
+        # so the resolver can walk the just-wired imports + method_of
+        # edges. Returns the count for diagnostics; we don't surface
+        # it in the report shape today (the ReindexReport tracks node
+        # counts, not edge counts).
+        scope_resolver.resolve_calls(store, touched_code_node_ids)
 
     # Deletions: any node whose source_path falls under a scanned source
     # but wasn't seen this run.

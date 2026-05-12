@@ -260,5 +260,109 @@ def test_code_unit_has_expected_fields() -> None:
         "imports",
         "children_source_paths",
         "parent_source_path",
+        "call_sites",
     ):
         assert hasattr(u, attr), attr
+
+
+# --- v2.0 phase 5: Python call-site extraction ---------------------------
+
+
+def test_call_site_dataclass_shape() -> None:
+    from mnemo.parsers import code
+
+    cs = code.CallSite(callee_name="f", receiver=None, line=3)
+    for attr in ("callee_name", "receiver", "line"):
+        assert hasattr(cs, attr)
+
+
+def test_extract_python_captures_free_function_call_inside_function() -> None:
+    """A function that calls another function records the call site on
+    the caller's CodeUnit."""
+    from mnemo.parsers import code
+
+    src = b"def a():\n    return b()\n\ndef b():\n    return 1\n"
+    units = code.extract(Path("/repo/x.py"), src, language="python")
+    a = next(u for u in units if u.type == "code_function" and u.name == "a")
+    names = {cs.callee_name for cs in a.call_sites}
+    assert "b" in names
+    # Free call (no receiver).
+    free = next(cs for cs in a.call_sites if cs.callee_name == "b")
+    assert free.receiver is None
+
+
+def test_extract_python_captures_method_call_on_self() -> None:
+    """``self.method()`` records the call site with receiver='self' so
+    the resolver knows to look up the parent class's methods."""
+    from mnemo.parsers import code
+
+    src = (
+        b"class C:\n"
+        b"    def helper(self):\n"
+        b"        return 1\n"
+        b"    def caller(self):\n"
+        b"        return self.helper()\n"
+    )
+    units = code.extract(Path("/repo/x.py"), src, language="python")
+    caller = next(u for u in units if u.type == "code_method" and u.name == "caller")
+    helper_call = next(cs for cs in caller.call_sites if cs.callee_name == "helper")
+    assert helper_call.receiver == "self"
+
+
+def test_extract_python_captures_module_qualified_call() -> None:
+    """``helper.f()`` records receiver='helper' so the resolver can
+    cross-walk through the imports edge."""
+    from mnemo.parsers import code
+
+    src = b"import helper\n\ndef use():\n    return helper.f()\n"
+    units = code.extract(Path("/repo/x.py"), src, language="python")
+    use = next(u for u in units if u.type == "code_function" and u.name == "use")
+    call = next(cs for cs in use.call_sites if cs.callee_name == "f")
+    assert call.receiver == "helper"
+
+
+def test_extract_python_captures_constructor_call_as_free_call() -> None:
+    """``Session()`` is just a free call from the AST's perspective --
+    the resolver later treats PascalCase / class names specially. The
+    extractor captures it the same way as any other free call."""
+    from mnemo.parsers import code
+
+    src = b"class Session: pass\n\ndef make():\n    return Session()\n"
+    units = code.extract(Path("/repo/x.py"), src, language="python")
+    make = next(u for u in units if u.type == "code_function" and u.name == "make")
+    call = next(cs for cs in make.call_sites if cs.callee_name == "Session")
+    assert call.receiver is None
+
+
+def test_extract_python_module_level_calls_are_not_in_any_function() -> None:
+    """Calls at module scope (no enclosing def) are NOT attached to any
+    function/method unit. They could in principle be modeled as edges
+    on the module, but Tier 2 only emits caller-function edges to keep
+    the graph clean. Anyone wanting "module imports" semantics has
+    the ``imports`` edge."""
+    from mnemo.parsers import code
+
+    src = b"def a(): pass\n\na()\n"
+    units = code.extract(Path("/repo/x.py"), src, language="python")
+    a = next(u for u in units if u.type == "code_function")
+    # No call sites recorded on `a` (the module-level call is outside `a`).
+    assert all(cs.callee_name != "a" for cs in a.call_sites)
+
+
+def test_extract_python_nested_call_sites_attribute_to_enclosing_function() -> None:
+    """A call deep inside nested control flow (``if``, ``for``, etc.)
+    still attaches to the enclosing top-level function or method, not
+    to some intermediate scope."""
+    from mnemo.parsers import code
+
+    src = (
+        b"def caller():\n"
+        b"    if True:\n"
+        b"        for x in range(10):\n"
+        b"            inner()\n"
+        b"\n"
+        b"def inner(): pass\n"
+    )
+    units = code.extract(Path("/repo/x.py"), src, language="python")
+    caller = next(u for u in units if u.type == "code_function" and u.name == "caller")
+    assert any(cs.callee_name == "inner" for cs in caller.call_sites)
