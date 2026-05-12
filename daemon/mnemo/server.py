@@ -31,7 +31,7 @@ from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from mnemo import __version__, config, ingest, paths, retrieve
+from mnemo import __version__, auto_router, config, ingest, paths, retrieve
 from mnemo.api_schemas import (
     ActiveProjectOut,
     FeedbackIn,
@@ -54,6 +54,9 @@ from mnemo.api_schemas import (
     RetuneReportOut,
     SourceIn,
     SourceOut,
+    SourcePreviewBreakdownOut,
+    SourcePreviewIn,
+    SourcePreviewOut,
     SourceUpdateIn,
 )
 from mnemo.embed import Embedder
@@ -173,6 +176,33 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
         if src is None:
             raise HTTPException(status_code=500, detail="register_source failed")
         return SourceOut.from_source(src)
+
+    @v1.post("/sources/preview", response_model=SourcePreviewOut)
+    def preview_source(body: SourcePreviewIn) -> SourcePreviewOut:
+        """v2.0 phase 2: dry-run preview for a candidate source path.
+
+        Side-effect-free: scans the filesystem, proposes a kind via
+        :func:`mnemo.auto_router.preview`, returns the result.
+        Clients (CLI, UI) call this BEFORE ``POST /v1/sources`` so
+        the user sees what would be indexed before any DB write.
+        """
+        try:
+            result = auto_router.preview(body.path, force=body.force)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return SourcePreviewOut(
+            path=result.path,
+            proposed_kind=result.proposed_kind,
+            confidence=result.confidence,
+            breakdown=SourcePreviewBreakdownOut(
+                by_ext=result.breakdown.by_ext,
+                total_files=result.breakdown.total_files,
+                md_with_frontmatter=result.breakdown.md_with_frontmatter,
+                md_without_frontmatter=result.breakdown.md_without_frontmatter,
+                has_git=result.breakdown.has_git,
+            ),
+            exceeds_safety_ceiling=result.exceeds_safety_ceiling,
+        )
 
     @v1.patch("/sources", response_model=SourceOut)
     def patch_source(body: SourceUpdateIn, s: Store = Depends(get_store)) -> SourceOut:

@@ -1704,3 +1704,65 @@ dl.meta dd { margin: 0; color: var(--fg); }
   font-size: 0.78rem;
   color: var(--fg-muted);
 }
+
+/* --- v2.0 phase 2: auto-router preview panel --------------------- */
+
+.preview-panel {
+  background: var(--accent-soft);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.75rem 0.85rem;
+  margin: 0.5rem 0 0.85rem;
+  font-size: 0.85rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.preview-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+.preview-by-ext .preview-ext {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.1rem 0.55rem;
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  color: var(--fg-muted);
+}
+.preview-by-ext .preview-ext code {
+  background: none;
+  padding: 0;
+  color: var(--fg);
+}
+.preview-use {
+  margin-left: auto;
+  padding: 0.15rem 0.6rem;
+  font-size: 0.75rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--panel);
+  cursor: pointer;
+}
+.preview-use:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.preview-warn {
+  margin-top: 0.4rem;
+  padding: 0.55rem 0.65rem;
+  background: rgba(240, 164, 124, 0.08);
+  border: 1px solid rgba(240, 164, 124, 0.4);
+  border-radius: var(--radius);
+  font-size: 0.82rem;
+}
+.preview-warn p {
+  margin: 0 0 0.4rem;
+  color: var(--fg-muted);
+}
+.preview-warn strong {
+  color: var(--warn);
+}
