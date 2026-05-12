@@ -303,6 +303,61 @@ class FeedbackOut(BaseModel):
         )
 
 
+# --- Retune (v1.2 phase 6) -------------------------------------------------
+
+
+class RetuneIn(BaseModel):
+    """Body for ``POST /v1/retune``.
+
+    Both fields are optional. ``min_queries`` overrides
+    ``config.retune_min_queries`` for this run (useful for seeding new
+    repos with sparse feedback). When omitted, the daemon uses the
+    on-disk value.
+    """
+
+    min_queries: int | None = Field(default=None, ge=1)
+
+
+class RetuneReportOut(BaseModel):
+    """v1.2 phase 6 HTTP shape of the auto-tuner result. Pure data
+    transfer object -- the dataclass equivalent lives in
+    :mod:`mnemo.retune`. The endpoint never persists; the UI's Apply
+    button does that via the existing ``PUT /v1/config``.
+    """
+
+    proposed: dict[str, float]
+    current: dict[str, float]
+    diff: dict[str, float]
+    train_mrr_before: float
+    train_mrr_after: float
+    val_mrr_before: float
+    val_mrr_after: float
+    iterations: int
+    train_size: int
+    val_size: int
+    elapsed_seconds: float
+    log: list[str]
+
+    @classmethod
+    def from_report(cls, r: object) -> RetuneReportOut:
+        # `r` is mnemo.retune.RetuneReport. Avoid the import cycle by
+        # ducktyping the fields.
+        return cls(
+            proposed=r.proposed,  # type: ignore[attr-defined]
+            current=r.current,  # type: ignore[attr-defined]
+            diff=r.diff,  # type: ignore[attr-defined]
+            train_mrr_before=r.train_mrr_before,  # type: ignore[attr-defined]
+            train_mrr_after=r.train_mrr_after,  # type: ignore[attr-defined]
+            val_mrr_before=r.val_mrr_before,  # type: ignore[attr-defined]
+            val_mrr_after=r.val_mrr_after,  # type: ignore[attr-defined]
+            iterations=r.iterations,  # type: ignore[attr-defined]
+            train_size=r.train_size,  # type: ignore[attr-defined]
+            val_size=r.val_size,  # type: ignore[attr-defined]
+            elapsed_seconds=r.elapsed_seconds,  # type: ignore[attr-defined]
+            log=r.log,  # type: ignore[attr-defined]
+        )
+
+
 class KnownProjectsOut(BaseModel):
     """Distinct project keys + their representative paths, gathered from
     sources and nodes. Used by the UI to populate dropdowns."""

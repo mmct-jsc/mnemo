@@ -96,6 +96,103 @@
       </div>
     </div>
   </section>
+
+  {# v1.2 phase 6: Auto-tune from feedback. Runs coordinate descent
+     over the 6 weights using the audit log + feedback_event signal.
+     Renders the diff and asks before applying -- "Apply" loads the
+     proposed values into the weight inputs above and marks the form
+     dirty so the existing Save button does the persistence. #}
+  <section class="dash-row">
+    <div class="dash-card retune-card">
+      <div class="dash-card-head">
+        <h2>Auto-tune from feedback</h2>
+        <span class="hint">runs coordinate descent over the 6 weights</span>
+      </div>
+      <p class="hint" style="margin-top: 0.4rem;">
+        Optimizes <strong>MRR</strong> on validation queries. Persisted only after you review the diff and Apply.
+        Needs at least <code x-text="minQueries">30</code> labeled queries (those with thumbs feedback or inferred-re-query signal).
+      </p>
+
+      <div class="retune-actions">
+        <button class="primary" :disabled="running" @click="runRetune()">
+          <span x-show="!running">Run retune</span>
+          <span x-show="running" x-cloak>computing...</span>
+        </button>
+        <button x-show="report" x-cloak @click="discardRetune()">Discard</button>
+      </div>
+
+      <div class="retune-report" x-show="report" x-cloak>
+        <div class="retune-mrr-grid" x-show="report && (report.train_size > 0 || report.val_size > 0)" x-cloak>
+          <div>
+            <span class="hint">val_mrr</span>
+            <strong>
+              <span x-text="report && report.val_mrr_before.toFixed(4)"></span>
+              &rarr;
+              <span x-text="report && report.val_mrr_after.toFixed(4)"></span>
+            </strong>
+            <em :class="report && report.val_mrr_after > report.val_mrr_before ? 'ok' : ''"
+                x-text="report && ((report.val_mrr_after - report.val_mrr_before) >= 0 ? '+' : '') + (report.val_mrr_after - report.val_mrr_before).toFixed(4)"></em>
+          </div>
+          <div>
+            <span class="hint">train_mrr</span>
+            <strong>
+              <span x-text="report && report.train_mrr_before.toFixed(4)"></span>
+              &rarr;
+              <span x-text="report && report.train_mrr_after.toFixed(4)"></span>
+            </strong>
+          </div>
+          <div>
+            <span class="hint">samples</span>
+            <strong>
+              <span x-text="report && report.train_size"></span> train,
+              <span x-text="report && report.val_size"></span> val
+            </strong>
+          </div>
+          <div>
+            <span class="hint">iterations</span>
+            <strong>
+              <span x-text="report && report.iterations"></span>
+              in <span x-text="report && report.elapsed_seconds.toFixed(2)"></span>s
+            </strong>
+          </div>
+        </div>
+
+        <div class="retune-diff" x-show="report && hasChanges()" x-cloak>
+          <table>
+            <thead>
+              <tr><th>weight</th><th>current</th><th>proposed</th><th>diff</th></tr>
+            </thead>
+            <tbody>
+              <template x-for="k in ['alpha','beta','gamma','delta','epsilon','zeta']" :key="k">
+                <tr :class="{ changed: report && Math.abs(report.diff[k]) > 1e-9 }">
+                  <td><code x-text="k"></code></td>
+                  <td x-text="report && report.current[k].toFixed(4)"></td>
+                  <td x-text="report && report.proposed[k].toFixed(4)"></td>
+                  <td x-text="report && ((report.diff[k] > 0 ? '+' : '') + report.diff[k].toFixed(4))"
+                      :class="report && report.diff[k] > 0 ? 'ok' : (report && report.diff[k] < 0 ? 'warn' : '')"></td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+
+          <div class="retune-apply-row">
+            <button class="primary" @click="applyRetune()">Apply proposed weights</button>
+            <span class="hint">Loads them into the weight inputs above; click Save to persist.</span>
+          </div>
+        </div>
+
+        <div class="retune-empty" x-show="report && !hasChanges() && (report.train_size > 0 || report.val_size > 0)" x-cloak>
+          <p class="hint">Optimizer found no improvement &mdash; current weights are at a local optimum for the labeled feedback so far. Run more queries and try again.</p>
+        </div>
+
+        <details class="retune-log" x-show="report && report.log && report.log.length" x-cloak>
+          <summary>Optimizer log (<span x-text="report && report.log.length"></span> lines)</summary>
+          <pre><template x-for="line in (report && report.log) || []"
+                          :key="line"><span x-text="line"></span>{{ '\n' }}</template></pre>
+        </details>
+      </div>
+    </div>
+  </section>
 </section>
 
 <script>
@@ -116,7 +213,59 @@ function settingsForm() {
     saving: false,
     message: '',
     error: '',
+    // v1.2 phase 6: retune panel state.
+    minQueries: {{ retune_min_queries }},
+    running: false,
+    report: null,
     init() {},
+    // True iff any of the 6 weights would change under the proposal.
+    hasChanges() {
+      if (!this.report) return false;
+      for (const k of ['alpha','beta','gamma','delta','epsilon','zeta']) {
+        if (Math.abs(this.report.diff[k]) > 1e-9) return true;
+      }
+      return false;
+    },
+    async runRetune() {
+      this.running = true;
+      this.report = null;
+      try {
+        const r = await fetch('/v1/retune', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        });
+        if (!r.ok) throw new Error(await r.text());
+        this.report = await r.json();
+        if (this.report.train_size === 0 && this.report.val_size === 0) {
+          // Helpful below-threshold message comes through report.log.
+          const msg = this.report.log[0] || 'Not enough labeled queries yet.';
+          window.toast(msg, 'info');
+        } else if (!this.hasChanges()) {
+          window.toast('No improvement found; current weights look optimal.', 'info');
+        } else {
+          window.toast('Retune complete -- review the diff below.', 'success');
+        }
+      } catch (e) {
+        window.toast('Retune failed: ' + e, 'error');
+      } finally {
+        this.running = false;
+      }
+    },
+    discardRetune() {
+      this.report = null;
+    },
+    applyRetune() {
+      if (!this.report || !this.hasChanges()) return;
+      // Load proposed weights into the form inputs; mark dirty so the
+      // existing Save button (PUT /v1/config) handles persistence.
+      for (const k of ['alpha','beta','gamma','delta','epsilon','zeta']) {
+        this.weights[k] = Number(this.report.proposed[k]);
+      }
+      this.dirty = true;
+      this.report = null;
+      window.toast('Weights loaded -- click Save to persist.', 'success');
+    },
     // Stepper helpers: nudge a value by `delta` and clamp into [min,max].
     // Round to mitigate JS float drift (0.4 + 0.05 = 0.45000000000000007).
     _round(v, step) {
@@ -285,6 +434,52 @@ function settingsForm() {
   }
   input[type="range"]:focus::-moz-range-thumb {
     box-shadow: 0 0 0 1px var(--border), 0 0 0 4px var(--accent-soft);
+  }
+
+  /* v1.2 phase 6: retune panel */
+  .retune-card { display: grid; gap: 0.85rem; }
+  .retune-actions { display: flex; gap: 0.6rem; align-items: center; }
+  .retune-report { display: grid; gap: 1rem; }
+  .retune-mrr-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 0.6rem 1rem;
+  }
+  .retune-mrr-grid > div {
+    display: grid; gap: 0.15rem;
+    padding: 0.55rem 0.75rem;
+    background: var(--bg);
+    border: 1px solid var(--border-soft);
+    border-radius: var(--radius);
+  }
+  .retune-mrr-grid .hint { font-size: 0.72rem; }
+  .retune-mrr-grid strong { font-family: var(--mono); font-size: 0.95rem; }
+  .retune-mrr-grid em { font-style: normal; color: var(--fg-dim); font-size: 0.78rem; }
+  .retune-mrr-grid em.ok { color: var(--type-feedback); }
+  .retune-diff table {
+    width: 100%; border-collapse: collapse;
+    font-family: var(--mono); font-size: 0.85rem;
+  }
+  .retune-diff th, .retune-diff td {
+    padding: 0.4rem 0.6rem; text-align: left;
+    border-bottom: 1px solid var(--border-soft);
+  }
+  .retune-diff th { color: var(--fg-muted); font-weight: 500; font-size: 0.78rem; }
+  .retune-diff tr.changed { background: var(--bg); }
+  .retune-diff td.ok { color: var(--type-feedback); }
+  .retune-diff td.warn { color: var(--warn); }
+  .retune-apply-row { display: flex; align-items: center; gap: 0.75rem; margin-top: 0.85rem; }
+  .retune-log summary { cursor: pointer; color: var(--fg-muted); font-size: 0.82rem; }
+  .retune-log pre {
+    margin-top: 0.4rem;
+    padding: 0.6rem 0.75rem;
+    background: var(--bg);
+    border: 1px solid var(--border-soft);
+    border-radius: var(--radius);
+    font-size: 0.78rem;
+    max-height: 220px;
+    overflow: auto;
+    white-space: pre-wrap;
   }
 </style>
 {% endblock %}

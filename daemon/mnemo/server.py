@@ -48,6 +48,8 @@ from mnemo.api_schemas import (
     QueryIn,
     QueryOut,
     ReindexReportOut,
+    RetuneIn,
+    RetuneReportOut,
     SourceIn,
     SourceOut,
     SourceUpdateIn,
@@ -539,6 +541,37 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
             )
         events = s.list_feedback_events(query_id=query_id, node_id=node_id)
         return [FeedbackOut.from_event(e) for e in events]
+
+    # --- Retune (v1.2 phase 6) -------------------------------------------
+
+    @v1.post("/retune", response_model=RetuneReportOut)
+    def do_retune(
+        body: RetuneIn | None = None,
+        s: Store = Depends(get_store),
+    ) -> RetuneReportOut:
+        """Run the auto-tuner against the audit log + feedback_event
+        table and return a ``RetuneReport``.
+
+        Preview-only: never mutates ``/v1/config``. The UI's Apply
+        button is responsible for persisting via ``PUT /v1/config``
+        with the proposed scoring dict. This keeps the retune endpoint
+        idempotent and lets the user discard the proposal cleanly.
+
+        Below the labeled-query threshold the response is still 200
+        with ``train_size=0`` + a "below threshold" log line so the UI
+        can show a helpful empty state without special-casing 4xx.
+        """
+        # Local import to avoid the retune <-> server import cycle.
+        from mnemo import config as cfg_mod
+        from mnemo.retune import retune
+
+        cfg = cfg_mod.load()
+        if body is None or body.min_queries is None:
+            threshold = cfg.retune_min_queries
+        else:
+            threshold = body.min_queries
+        report = retune(s, min_queries=threshold)
+        return RetuneReportOut.from_report(report)
 
     # --- Config ----------------------------------------------------------
 
