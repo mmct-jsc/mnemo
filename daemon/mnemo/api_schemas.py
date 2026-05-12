@@ -130,7 +130,14 @@ class SourceUpdateIn(BaseModel):
 
 class QueryIn(BaseModel):
     prompt: str
-    budget_tokens: int = Field(default=800, ge=1, le=10000)
+    # v1.2.1: ``ge=20`` instead of ``ge=1``. Each compressed hit's
+    # description line is ``[mnemo:<32-uuid>] [<type>] <desc>`` which
+    # already eats ~12-15 tokens. Below ~20 the first hit's line
+    # exceeds the budget and ``compress_to_budget`` returns the empty
+    # list -- the caller sees a silent zero. The floor stops that:
+    # clients asking for a tiny budget get a 422 instead of an empty
+    # response.
+    budget_tokens: int = Field(default=800, ge=20, le=10000)
     k: int = Field(default=20, ge=1, le=200)
     # v1.1 added ``project_key`` as the canonical name. ``active_project`` is
     # kept for one minor version of backward-compat with pre-1.1 clients.

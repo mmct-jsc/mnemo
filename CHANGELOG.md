@@ -2,6 +2,62 @@
 
 All notable changes to mnemo are documented here.
 
+## [1.2.1] - 2026-05-11
+
+**Closing the 1.2.x line.** A real-use test of v1.2.0 against a
+multi-project store turned up that most "common query returns
+nothing" cases trace back to a single bug: the strict
+project-isolation hard-filter dropped nodes whose ``project_key``
+is ``None`` (CLAUDE.md global memory, plan_docs, and any
+cross-cutting entry that didn't pick up a project_key). The filter
+treated ``None != active_project`` as True and silently filtered
+them out -- exactly the opposite of what you want for global
+memory.
+
+### Fixed
+
+- **Strict project isolation no longer hides ``project_key=None``
+  nodes.** Global memory (CLAUDE.md, plan_docs, any cross-cutting
+  entry without an assigned project) now surfaces in every project's
+  queries by default. Pre-fix, you needed to either (a) flag every
+  global node ``base: true`` or (b) flip to ``isolation_mode=boost``
+  to get them back; both were undocumented workarounds. The fix
+  matches the spirit of the v1.1 design: "BASE for cross-project,
+  project_key for per-project, NULL is the natural cross-cutting
+  bucket." (`daemon/mnemo/retrieve.py`)
+- **``budget_tokens`` floor raised from 1 to 20.** Below 20 the
+  first hit's ``[mnemo:<uuid>] [<type>] <description>`` line can't
+  fit and ``compress_to_budget`` returns the empty list -- a
+  silent zero that masks the real cause. Clients now get an HTTP
+  422 instead of a confusing empty success. (`daemon/mnemo/api_schemas.py`)
+
+### Tests
+
+- ``test_query_strict_isolation_keeps_project_key_none_nodes`` --
+  regression test for the filter fix. Active project + strict mode
+  + 3 nodes (in-project / other-project / no-project_key);
+  asserts in-project and no-project_key survive, other-project is
+  filtered.
+- ``test_query_budget_below_floor_rejected`` -- 422 on
+  ``budget_tokens=10``; 200 on the exact floor of 20.
+- ``test_query_validation`` retains its 422 assertion on
+  ``budget_tokens=0``.
+
+### Not in scope (deferred)
+
+The full set of silent-zero failure modes (16 cases probed) is
+written up in the memory note ``feedback_mnemo_v12_build_lessons``
++ a fresh ``feedback_mnemo_silent_zero_modes`` for future
+diagnostic work. v1.3 / v2.0 candidates:
+
+- Diagnostic ``debug=true`` flag on ``/v1/query`` that returns
+  pre-filter / post-isolation / post-MMR counts so users can see
+  where their hits got lost.
+- "filtered N of M" hint surfaced in the UI when isolation drops
+  hits.
+- ``/v1/projects/resolve`` auto-suggestion when an explicit
+  ``project_key`` doesn't match any indexed nodes.
+
 ## [1.2.0] - 2026-05-11
 
 **Learning to Listen.** mnemo now closes the personalization loop:

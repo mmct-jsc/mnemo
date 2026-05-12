@@ -118,13 +118,22 @@ def query(
         node = nodes_by_id.get(nid)
         if node is None:
             continue
+        # v1.1 BASE / project-isolation hard-filter. v1.2.1 fix: treat
+        # ``project_key is None`` as cross-cutting (it survives the
+        # filter). Pre-fix, every ``project_doc`` (CLAUDE.md and friends)
+        # AND any memory entry that hadn't picked up a project_key got
+        # silently dropped from every project's queries, because
+        # ``None != active_project`` is True. That made global memory
+        # invisible whenever an active project was set -- one of the
+        # dominant causes of "common query returns nothing" in v1.2.0.
         if (
             isolation_mode == "strict"
             and active_project is not None
             and not node.base
+            and node.project_key is not None
             and node.project_key != active_project
         ):
-            continue  # hard-filter: outside active project, not BASE
+            continue  # hard-filter: in a *different* project, not BASE, not cross-cutting
         c_vector = vec_scores.get(nid, 0.0)
         c_graph = graph_scores.get(nid, 0.0)
         c_recency = _recency_score(node.updated_at, now, cfg.recency_half_life_days)
