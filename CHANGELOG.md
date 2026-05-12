@@ -2,6 +2,163 @@
 
 All notable changes to mnemo are documented here.
 
+## [1.2.0] - 2026-05-11
+
+**Learning to Listen.** mnemo now closes the personalization loop:
+every retrieval result can carry user feedback (explicit thumbs in
+the UI / CLI, implicit detection of re-asked queries), and a
+coordinate-descent auto-tuner reads those signals to nudge the
+6-term scoring weights toward what THIS user actually finds useful.
+Plus MMR diversification of the top-K, a clean version cliff on the
+1.1-era 308 redirects, and HTTP-driven memory creation via
+`POST /v1/nodes` so adapters like the VS Code "Add Note" command no
+longer have to go through the filesystem.
+
+8 phases, ~3 weeks. Full design: `docs/plans/2026-05-10-mnemo-v1.2-design.md`.
+
+### Added
+
+#### Feedback collection (phases 1-3)
+
+- **`feedback_event` table** with FK cascades on `query_id` +
+  `node_id`, UNIQUE on `(query_id, node_id, reason)` for idempotency.
+  Indexes on each of the three filter dimensions.
+- **`POST /v1/feedback`** writes one feedback row. Idempotent on the
+  triple (double-clicks safe). `signal` is optional -- the daemon
+  defaults from `reason` via `signal_for_reason`
+  (thumbs_up=+1, thumbs_down=-1, cite_copied=+0.5, inferred_requery=-0.5).
+- **`GET /v1/feedback?query_id=…&node_id=…`** lists events
+  newest-first; requires at least one filter param.
+- **Inferred-re-query detector** fires on every `POST /v1/query`:
+  if a recent prompt has cosine >= 0.85 with the new prompt inside
+  the configurable window (default 300s), write
+  `signal=-0.5, reason='inferred_requery'` against the older
+  query's top-N retrieved hits. Treats the re-ask as evidence the
+  earlier hits missed.
+- **Thumbs up/down buttons on every hit** in the UI. Click POSTs to
+  `/v1/feedback` with optimistic state flip + rollback on error.
+  Defined as the `hitsFeedback` Alpine factory in `base.html` so it
+  survives HTMX swaps. Toggles between up/down still write two rows
+  (one per reason) -- the auto-tuner uses the strongest signal.
+- **`queries.embedding BLOB`** column persists the query vector so
+  the re-query detector can cosine-compare future prompts against
+  this one.
+- **`queries.score_components TEXT`** column persists the per-hit
+  unweighted 6-term breakdown so the auto-tuner can rescore with
+  alternative weights without re-running the embedder.
+
+#### Retrieval quality
+
+- **MMR re-rank** on the top-K (`mnemo/rerank.py::mmr_select`).
+  Penalizes near-duplicate candidates of already-picked hits so
+  the top-5 stops being five paraphrases of the same node. Default
+  `mmr_lambda = 0.7`; 1.0 bypasses MMR for the pre-1.2 behavior;
+  0.0 is pure diversity. ~0.5ms overhead on top of existing scoring.
+
+#### Auto-tuner (phases 5-6)
+
+- **`mnemo/retune.py`** with `best_feedback_signal`,
+  `rescore_with_weights`, `mrr`, `coordinate_descent`, and the
+  high-level `retune(store, min_queries=30)` entrypoint.
+  Optimizer: nudges of {-0.10, -0.05, +0.05, +0.10} across the 6
+  keys, up to 4 passes, EPS=0.001 acceptance, 60s wall-clock cap,
+  time-ordered 80/20 train/val split.
+- **`POST /v1/retune`** returns a full `RetuneReportOut`
+  (proposed/current/diff weights, before/after MRR for train+val,
+  sample sizes, iteration count, log). Preview-only -- never
+  mutates `/v1/config`. The UI's Apply button posts the proposed
+  scoring through the existing `PUT /v1/config`.
+- **`mnemo retune` CLI** with `--apply` / `--min-queries N` / `--json`.
+  Renders a readable column-aligned diff + before/after MRR + log.
+- **"Auto-tune from feedback" panel on `/settings`** with Run /
+  Discard / Apply buttons, MRR grid, diff table with changed rows
+  highlighted, collapsible optimizer log.
+- **`Config.retune_min_queries: int = 30`** threshold under which
+  retune refuses to optimize (MRR is too noisy on small datasets).
+
+#### Housekeeping (phase 7)
+
+- **`POST /v1/nodes`** HTTP-driven memory creation. Validates
+  `type` and `source_kind` against the store enums; auto-fills
+  synthetic `http://api/<uuid>` source_path when omitted; embeds
+  eagerly so the new node is searchable immediately. The VS Code
+  "Add Note" command (palette `mnemo.addNote`) now POSTs through
+  this endpoint instead of opening the dashboard.
+
+### Removed
+
+- **Legacy 308 redirect bridge.** v1.1 had a one-version-only
+  middleware that translated `/health` -> `/v1/health` (and 6 more
+  un-versioned roots). v1.2 ships the cliff -- those paths now
+  return 404. The `X-Mnemo-Api-Version: 1` header has been
+  stamping every response throughout v1.1.x to give adapters time
+  to migrate.
+
+### Changed
+
+- **`Store.log_query(..., embedding=None, score_components=None)`**
+  -- two new optional kwargs; backward compatible (pre-1.2 callers
+  who omit them get NULL columns and downstream filters skip them).
+- **Three new `Store` helpers**: `recent_queries_with_embeddings`
+  (filter by time window + non-null embedding for the re-query
+  detector), `recent_queries_with_components` (filter by
+  non-null components + min feedback count for the auto-tuner),
+  `get_chunk_embeddings` (bulk-fetch chunk vectors for the MMR
+  pool via a CTE-VALUES JOIN).
+- **`retrieve.query`** now (a) computes + logs the unweighted
+  6-term components for the top pool, (b) calls the inferred-
+  re-query detector before the audit-log write so the current
+  query is never compared to itself, (c) runs MMR over the top
+  `max(k*2, 20)` candidates when `mmr_lambda < 1.0`.
+
+### Config additions
+
+Four new keys on `Config` (all settable via `PUT /v1/config` and
+the settings.json file):
+
+- `requery_window_seconds: int = 300`
+- `requery_cosine_threshold: float = 0.85`
+- `requery_top_n_hits: int = 3`
+- `mmr_lambda: float = 0.7`
+- `retune_min_queries: int = 30`
+
+### Tests
+
+Roughly +60 tests across 8 phases (455+ pass total, 2 skipped, ruff
+clean):
+
+- 17 feedback_event store / endpoint tests (phase 1).
+- 6 inferred-re-query detector unit tests + 4 store-helper tests
+  (phase 2).
+- 3 UI thumb-button render tests (phase 3).
+- 10 MMR + `get_chunk_embeddings` tests (phase 4).
+- 14 retune unit tests (math + optimizer + entrypoint) + 2 CLI
+  tests (phase 5).
+- 3 `/v1/retune` HTTP tests + 1 settings-panel render test (phase 6).
+- 15 redirect-removal tests + 6 `POST /v1/nodes` tests + ~10
+  retrofit edits to legacy-path callers (phase 7).
+
+### Upgrade notes
+
+- v1.1.x adapters that called un-versioned paths (`/health`,
+  `/sources`, etc.) must now call `/v1/...` directly. The 308
+  bridge is gone.
+- VS Code extension "Add Note" command behavior changed -- previously
+  opened the dashboard, now prompts for type/name/body inline and
+  creates the node via `POST /v1/nodes`.
+- Existing audit-log rows (pre-1.2) have NULL `embedding` and NULL
+  `score_components` columns; they're invisible to the re-query
+  detector and the auto-tuner but otherwise queryable as before.
+
+### Open questions deferred to v1.3 / v2.0
+
+- Cross-encoder re-rank (v1.3, paired with a quality-first scoring mode).
+- Nightly auto-retune cadence (v1.3, once on-demand proves itself).
+- NDCG@K objective (when labeled dataset gets large enough).
+- Reciprocal Rank Fusion retrieval (v1.3).
+- Code-graph parsing + sitemap (v2.0).
+- Chat surface + MCP shim (v3.0).
+
 ## [1.1.1] - 2026-05-11
 
 **Hotfix.** Two source-management bugs surfaced in real use after the
