@@ -109,6 +109,67 @@ explicit user confirmation.
 
 Combined: phase 1 + 2 -> 478 -> 520 passing tests, 0 failing.
 
+### Added (v2.0 phase 3 -- tree-sitter grammar bundle + lazy loader)
+
+The library layer that Tier 1 / 2 / 3 ingestion will sit on top of.
+Phase 3 is grammar infrastructure only -- no source code is actually
+parsed until phase 4 plugs in the ingester.
+
+- **``mnemo.parsers.tree_sitter`` module.** Single entry point
+  (``get_parser(language) -> tree_sitter.Parser``) hides three sources
+  of churn from callers: the capsule-to-``Language`` conversion that
+  changed across the 0.21 / 0.22 / 0.23 binding releases; the
+  per-package quirks (``tree-sitter-typescript`` exposes
+  ``language_typescript()`` and ``language_tsx()`` instead of
+  ``language()``; ``tree-sitter-markdown`` exposes both block and
+  inline grammars); and the bundled-vs-lazy split.
+- **Bundled launch set:** ``python``, ``javascript``, ``typescript``,
+  ``tsx``, ``go``, ``json``, ``yaml``, ``markdown``. These wheels are
+  direct dependencies so first run works offline. The set covers
+  every language Tier 2 (semantic call graph, phase 5) needs plus
+  config / docs surfaces for the ``/code`` UI.
+- **Lazy set:** ``rust``, ``java``, ``c``, ``cpp``, ``ruby``, ``php``,
+  ``c_sharp``, ``kotlin``, ``swift``, ``bash``. Not bundled; the
+  loader names the right pip package in the
+  ``GrammarNotAvailableError`` so users can copy-paste the install
+  command. Rounds out the 16-grammar Tier 1 set the design promises.
+- **Extension dispatch (``language_for_extension``).** Maps
+  ``.py`` -> ``python``, ``.tsx`` -> ``tsx``, ``.jsx`` ->
+  ``javascript``, etc. Case-insensitive so ``Path.suffix`` on Windows
+  resolves correctly. Phase 4's ingester walks files and routes via
+  this helper.
+- **Parser cache.** ``get_parser`` caches by language; repeated calls
+  return the same ``Parser`` so downstream code can compare ``is`` for
+  identity.
+- **``paths.grammars_dir()``.** Reserved under ``mnemo_home() /
+  "grammars"`` for future lazy-downloaded wheels (a v2.0.x feature).
+  ``ensure_runtime_dirs()`` creates it on first launch.
+
+### Dependencies added
+
+```
+tree-sitter>=0.23
+tree-sitter-python>=0.23
+tree-sitter-javascript>=0.23
+tree-sitter-typescript>=0.23
+tree-sitter-go>=0.23
+tree-sitter-json>=0.23
+tree-sitter-yaml>=0.7
+tree-sitter-markdown>=0.4
+```
+
+### Tests (phase 3)
+
+- ``tests/unit/test_tree_sitter.py`` -- 17 tests covering the
+  bundled / lazy registries, extension dispatch (case sensitivity,
+  TSX disambiguation), end-to-end parse sanity for Python /
+  TypeScript / TSX / Markdown, the unknown-language path, the
+  lazy-grammar install-hint path, and the parser cache.
+- ``tests/unit/test_paths.py`` -- 2 new tests for ``grammars_dir()``
+  and the ``ensure_runtime_dirs()`` extension.
+
+Combined: phase 1 + 2 + 3 -> 478 -> 539 passing tests, 0 failing.
+
 ## [1.2.1] - 2026-05-11
 
 **Closing the 1.2.x line.** A real-use test of v1.2.0 against a

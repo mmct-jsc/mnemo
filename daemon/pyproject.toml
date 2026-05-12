@@ -19,6 +19,21 @@ dependencies = [
     "jinja2>=3.1",
     "pathspec>=0.12",
     "pypdf>=6.11.0",
+    # v2.0 phase 3: tree-sitter grammar bundle. The launch core is
+    # Python + TypeScript (+ TSX) + JavaScript + Go (Tier 2 targets)
+    # plus Markdown + JSON + YAML (config / docs under any code_repo).
+    # Tier 1 languages beyond this (Rust, Java, C, C++, Ruby, PHP,
+    # C#, Kotlin, Swift, Bash) are listed in LAZY_LANGUAGES inside
+    # ``mnemo.parsers.tree_sitter`` -- users install them on demand
+    # via ``pip install tree-sitter-<lang>``.
+    "tree-sitter>=0.23",
+    "tree-sitter-python>=0.23",
+    "tree-sitter-javascript>=0.23",
+    "tree-sitter-typescript>=0.23",
+    "tree-sitter-go>=0.23",
+    "tree-sitter-json>=0.23",
+    "tree-sitter-yaml>=0.7",
+    "tree-sitter-markdown>=0.4",
 ]
 
 [tool.hatch.build.targets.wheel.sources]

@@ -44,3 +44,22 @@ def test_ensure_runtime_dirs_creates(monkeypatch: pytest.MonkeyPatch, tmp_path: 
     assert home.is_dir()
     assert (target / "cache").is_dir()
     assert (target / "logs").is_dir()
+
+
+# --- v2.0 phase 3: grammars_dir for lazy-downloaded tree-sitter wheels ----
+
+
+def test_grammars_dir_under_mnemo_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("MNEMO_HOME", str(tmp_path))
+    assert paths.grammars_dir() == tmp_path / "grammars"
+
+
+def test_ensure_runtime_dirs_creates_grammars_dir(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """v2.0 phase 3: ``grammars/`` must exist after ``ensure_runtime_dirs``
+    so lazy-downloaded tree-sitter wheels have a home on first launch."""
+    target = tmp_path / "fresh"
+    monkeypatch.setenv("MNEMO_HOME", str(target))
+    paths.ensure_runtime_dirs()
+    assert (target / "grammars").is_dir()
