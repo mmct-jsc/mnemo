@@ -260,6 +260,9 @@ def parse_code_file(path: Path, *, project_key: str | None = None) -> list[Parse
         # post-pass can read it back after the node is upserted.
         # v2.0 phase 5: call_sites travel here too -- the scope
         # resolver consumes them after Tier 1 edges are wired.
+        # v2.0 phase 6: framework-extracted routes thread their
+        # handler pointer + framework metadata through the same
+        # ``code_unit`` block.
         edge_intent: dict[str, object] = {
             "imports": u.imports,
             "children_source_paths": u.children_source_paths,
@@ -268,6 +271,10 @@ def parse_code_file(path: Path, *, project_key: str | None = None) -> list[Parse
                 {"callee": cs.callee_name, "receiver": cs.receiver, "line": cs.line}
                 for cs in u.call_sites
             ],
+            "framework": u.framework,
+            "route_method": u.route_method,
+            "route_path": u.route_path,
+            "handler_source_path": u.handler_source_path,
         }
         fm = {"code_unit": edge_intent}
         out.append(
@@ -558,7 +565,7 @@ def _resolve_code_edges(store: Store, node_ids: list[str]) -> None:
         # ``import name`` -> ``name.py`` case.
         stem = Path(n.source_path).stem
         name_to_module_id.setdefault(stem, n.id)
-    for ct in ("code_class", "code_function", "code_method"):
+    for ct in ("code_class", "code_function", "code_method", "code_route"):
         for n in store.list_nodes(type=ct, limit=1_000_000):
             sp_to_id[n.source_path] = n.id
 
@@ -600,6 +607,17 @@ def _resolve_code_edges(store: Store, node_ids: list[str]) -> None:
                 # Inferred edges carry calibrated uncertainty; imports
                 # is the most-confident structural inference at Tier 1.
                 store.add_edge(node.id, target, "imports", confidence=0.9)
+
+        # v2.0 phase 6: routes_to. A ``code_route`` node carries its
+        # handler's source_path in the intent block; resolve it to a
+        # node id and wire the edge. Confidence 0.95 mirrors the
+        # within-file resolution semantics (the extractor identified
+        # the exact decorator + handler pair in the same parse).
+        handler_sp = intent.get("handler_source_path")
+        if isinstance(handler_sp, str) and handler_sp in sp_to_id:
+            target_id = sp_to_id[handler_sp]
+            if target_id != node.id:
+                store.add_edge(node.id, target_id, "routes_to", confidence=0.95)
 
 
 def register_default_sources(store: Store, claude_home: Path) -> int:
