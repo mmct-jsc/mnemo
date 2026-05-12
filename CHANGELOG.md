@@ -2,6 +2,77 @@
 
 All notable changes to mnemo are documented here.
 
+## [2.0.0] - 2026-05-13
+
+**Code Intelligence.** The headline v2.0 release: every registered
+``code_repo`` source produces a typed code graph (modules, functions,
+classes, methods + Tier 2 ``calls`` edges + Tier 3 routes /
+components / endpoint anchors), plus the seven mnemo:code skills
+that turn the graph into natural-language Q&A inside Claude Code.
+
+### Headline capabilities
+
+- **Cross-stack sitemap.** "This React button calls this Express
+  handler which queries this Postgres table." A single graph
+  traversal walks ``Component -> Endpoint <- Route -> Handler`` via
+  the new ``at_endpoint`` join, rendered at
+  ``/code/<project>/sitemap``.
+- **Code-aware retrieval.** "Where is ``<function>`` called from?"
+  returns correct callers via the Tier 2 ``calls`` edges. Confidence
+  scores (0.95 within-file, 0.8 cross-file) carry uncertainty into
+  retrieval ranking.
+- **Auto-routing with safety.** ``mnemo source add <path>`` runs
+  the auto-router; dry-run preview shows proposed kind + file
+  breakdown before any DB write. 50,000-file safety ceiling
+  prevents Duyen-class accidents.
+
+### Roadmap completion
+
+Phases shipped through ``release/2.0.0`` (in order):
+
+1. Schema: ``code_repo`` / ``docs_dir`` source kinds, ``commit``
+   node type, edge ``confidence`` column, provenance edges.
+2. Source auto-router with dry-run preview + 50k file ceiling.
+3. Tree-sitter grammar bundle + lazy-download stub.
+4. Tier 1 universal code ingestion (8 bundled languages; Python
+   full extractor, other languages module-only fallback).
+5. Tier 2 Python call-graph resolver (constructor + ``self``/``this``
+   resolution; same-file 0.95 / cross-file 0.8 confidence).
+6. FastAPI + Flask + Express framework extractors (Tier 3
+   backend); ``code_route`` nodes + ``routes_to`` edges.
+7. React framework extractor + cross-stack ``code_endpoint`` nodes
+   (Tier 3 frontend); ``at_endpoint`` + ``renders`` edges.
+11-13. ``/code`` UI: landing + project overview + function detail
+   with 2-hop ego-network + cross-stack sitemap. New top-bar tab.
+14. Seven new code skills: ``mnemo:explore-codebase``,
+   ``mnemo:trace-call``, ``mnemo:trace-route``,
+   ``mnemo:explain-design``, ``mnemo:debug-with-code``,
+   ``mnemo:why-is-this-here``, ``mnemo:impact-analysis``.
+
+### Deferred to follow-on point releases
+
+- **Phase 8 -- Django framework extractor.** FastAPI / Flask /
+  Express cover the dominant Python and Node webdev surfaces;
+  Django lands in v2.0.1 alongside the JS / TS / Go Tier 2
+  resolvers (left out of phase 5).
+- **Phase 9 -- Git-log ingestion + auto-linker.** The
+  ``references_function`` / ``motivated_by`` / ``closed_by``
+  schema is in place (phase 1) and the ``mnemo:why-is-this-here``
+  skill is wired against it; the ingester slots in cleanly in
+  v2.0.1. Until then the skill falls back to ``git log -L``.
+- **Phase 10 -- Per-file incremental watcher.** Current full
+  reindex flow handles real-world repos under a few thousand
+  files; the per-file debounced watcher is a v2.0.x performance
+  upgrade once the indexing budget bites in production.
+- **Phase 15 -- Migration banner for pre-v2.0 sources.** First
+  daemon start post-2.0 would benefit from a "your existing
+  ``memory_dir`` registration looks like a ``code_repo`` -- want
+  to reclassify?" banner. The auto-router that powers it is
+  shipped; the UI surface lands in v2.0.x.
+
+Full test suite: 604 passing, 2 skipped, 0 failing.
+Ruff: clean. Format: clean.
+
 ## [Unreleased]
 
 ### Added (v2.0 phase 1 -- schema migration)
