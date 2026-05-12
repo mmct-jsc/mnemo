@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 from mnemo.compress import CompressedHit
 from mnemo.ingest import ReindexReport
 from mnemo.retrieve import RetrievalResult
-from mnemo.store import ActiveProject, Node, Query, Source
+from mnemo.store import ActiveProject, FeedbackEvent, Node, Query, Source
 
 # --- Nodes ----------------------------------------------------------------
 
@@ -255,6 +255,52 @@ class KnownProjectItem(BaseModel):
     sample_path: str | None
     node_count: int
     source_count: int
+
+
+# --- Feedback (v1.2 phase 1) ----------------------------------------------
+
+
+class FeedbackIn(BaseModel):
+    """Body for ``POST /v1/feedback``.
+
+    The four `reason` values map to canonical `signal` magnitudes
+    (+1 / -1 / +0.5 / -0.5). Callers can omit `signal` to accept the
+    default; explicit values let the inferred-re-query detector use a
+    different magnitude than the corresponding explicit thumb.
+
+    Idempotent on ``(query_id, node_id, reason)`` -- re-POSTing the
+    same triple updates the existing row rather than inserting a
+    duplicate.
+    """
+
+    query_id: str
+    node_id: str
+    reason: str = Field(
+        description="thumbs_up | thumbs_down | cite_copied | inferred_requery",
+    )
+    # Range matches the magnitudes we actually emit. The validator on
+    # ``reason`` happens before this so a bad reason short-circuits.
+    signal: float | None = Field(default=None, ge=-1.0, le=1.0)
+
+
+class FeedbackOut(BaseModel):
+    id: int
+    query_id: str
+    node_id: str
+    signal: float
+    reason: str
+    created_at: int
+
+    @classmethod
+    def from_event(cls, e: FeedbackEvent) -> FeedbackOut:
+        return cls(
+            id=e.id,
+            query_id=e.query_id,
+            node_id=e.node_id,
+            signal=e.signal,
+            reason=e.reason,
+            created_at=e.created_at,
+        )
 
 
 class KnownProjectsOut(BaseModel):

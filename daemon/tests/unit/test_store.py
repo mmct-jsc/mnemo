@@ -383,6 +383,135 @@ def test_recent_queries_orders_newest_first(store: Store) -> None:
     assert recent[1].prompt == "first"
 
 
+# --- Feedback events (v1.2) ------------------------------------------------
+
+
+def _seed_query_and_node(store: Store) -> tuple[str, Node]:
+    """Convenience: write one node + one query so feedback FKs resolve."""
+    n = _make_node(source_path="/feedback-fixture.md")
+    store.upsert_node(n)
+    qid = store.log_query(
+        prompt="why?",
+        intent_tags=["debug"],
+        retrieved_ids=[n.id],
+        scores={n.id: 0.91},
+    )
+    return qid, n
+
+
+def test_log_feedback_event_basic_insert(store: Store) -> None:
+    """v1.2 phase 1: log_feedback_event writes a row to feedback_event
+    with the supplied (query_id, node_id, signal, reason) tuple and a
+    server-side timestamp."""
+    n = _make_node(source_path="/x.md")
+    store.upsert_node(n)
+    qid = store.log_query(
+        prompt="why mqtt?",
+        intent_tags=["debug"],
+        retrieved_ids=[n.id],
+        scores={n.id: 0.91},
+    )
+
+    store.log_feedback_event(
+        query_id=qid,
+        node_id=n.id,
+        signal=1.0,
+        reason="thumbs_up",
+    )
+
+    events = store.list_feedback_events(query_id=qid)
+    assert len(events) == 1
+    e = events[0]
+    assert e.query_id == qid
+    assert e.node_id == n.id
+    assert e.signal == 1.0
+    assert e.reason == "thumbs_up"
+    assert isinstance(e.created_at, int)
+    assert e.created_at > 0
+
+
+def test_log_feedback_event_idempotent_on_same_triple(store: Store) -> None:
+    """Re-logging the same (query_id, node_id, reason) updates rather
+    than duplicating. The UI may fire the POST twice on a double-click;
+    the inferred detector may re-fire if the user repeats a similar
+    query inside the 5-min window. Both must converge to a single row."""
+    qid, n = _seed_query_and_node(store)
+    first = store.log_feedback_event(
+        query_id=qid, node_id=n.id, signal=1.0, reason="thumbs_up", when=1000
+    )
+    second = store.log_feedback_event(
+        query_id=qid, node_id=n.id, signal=1.0, reason="thumbs_up", when=2000
+    )
+    # Same primary key, refreshed timestamp.
+    assert second.id == first.id
+    assert second.created_at == 2000
+    events = store.list_feedback_events(query_id=qid)
+    assert len(events) == 1
+
+
+def test_log_feedback_event_distinct_reasons_coexist(store: Store) -> None:
+    """A single (query_id, node_id) can carry multiple signals as long
+    as the `reason` differs. cite_copied + thumbs_up on the same hit is
+    a real case (user copied citation then thumbed it up)."""
+    qid, n = _seed_query_and_node(store)
+    store.log_feedback_event(query_id=qid, node_id=n.id, signal=1.0, reason="thumbs_up")
+    store.log_feedback_event(query_id=qid, node_id=n.id, signal=0.5, reason="cite_copied")
+    events = store.list_feedback_events(query_id=qid)
+    assert {e.reason for e in events} == {"thumbs_up", "cite_copied"}
+
+
+def test_list_feedback_events_orders_newest_first(store: Store) -> None:
+    qid, n = _seed_query_and_node(store)
+    store.log_feedback_event(query_id=qid, node_id=n.id, signal=1.0, reason="thumbs_up", when=1000)
+    store.log_feedback_event(
+        query_id=qid, node_id=n.id, signal=0.5, reason="cite_copied", when=2000
+    )
+    events = store.list_feedback_events(query_id=qid)
+    assert [e.reason for e in events] == ["cite_copied", "thumbs_up"]
+
+
+def test_list_feedback_events_filters_by_node_id(store: Store) -> None:
+    """Aggregator UI needs to fetch all feedback for a node across all
+    queries (e.g. for the auto-tuner's per-node signal aggregation)."""
+    qid, n1 = _seed_query_and_node(store)
+    n2 = _make_node(source_path="/other.md")
+    store.upsert_node(n2)
+    store.log_feedback_event(query_id=qid, node_id=n1.id, signal=1.0, reason="thumbs_up")
+    store.log_feedback_event(query_id=qid, node_id=n2.id, signal=-1.0, reason="thumbs_down")
+    events_n1 = store.list_feedback_events(node_id=n1.id)
+    assert len(events_n1) == 1
+    assert events_n1[0].node_id == n1.id
+
+
+def test_log_feedback_event_rejects_unknown_reason(store: Store) -> None:
+    qid, n = _seed_query_and_node(store)
+    with pytest.raises(ValueError, match="unknown feedback reason"):
+        store.log_feedback_event(query_id=qid, node_id=n.id, signal=1.0, reason="emoji_smiley")
+
+
+def test_delete_node_cascades_feedback(store: Store) -> None:
+    """FK ON DELETE CASCADE: removing a node also drops any feedback
+    rows that targeted it. Without this, post-1.1.1 cascade removals
+    would leak feedback rows pointing at vanished nodes."""
+    qid, n = _seed_query_and_node(store)
+    store.log_feedback_event(query_id=qid, node_id=n.id, signal=1.0, reason="thumbs_up")
+    store.delete_node(n.id)
+    assert store.list_feedback_events(query_id=qid) == []
+
+
+def test_signal_for_reason_helper_returns_canonical_values() -> None:
+    """The HTTP layer trusts this helper to default signal magnitudes
+    when callers only supply `reason`. All four reasons must map."""
+    from mnemo.store import signal_for_reason
+
+    assert signal_for_reason("thumbs_up") == 1.0
+    assert signal_for_reason("thumbs_down") == -1.0
+    assert signal_for_reason("cite_copied") == 0.5
+    assert signal_for_reason("inferred_requery") == -0.5
+    with pytest.raises(ValueError, match="unknown feedback reason"):
+        signal_for_reason("not_a_reason")
+
+
 # --- Context manager -------------------------------------------------------
 
 

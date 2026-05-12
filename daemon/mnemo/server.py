@@ -19,6 +19,7 @@ The OpenAPI schema is filtered to v1-only paths and exposed at both
 from __future__ import annotations
 
 import logging
+import sqlite3
 import threading
 import time
 from contextlib import asynccontextmanager
@@ -32,6 +33,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from mnemo import __version__, config, ingest, paths, retrieve
 from mnemo.api_schemas import (
     ActiveProjectOut,
+    FeedbackIn,
+    FeedbackOut,
     FsSuggestOut,
     HealthOut,
     KnownProjectItem,
@@ -50,7 +53,7 @@ from mnemo.api_schemas import (
     SourceUpdateIn,
 )
 from mnemo.embed import Embedder
-from mnemo.store import Store
+from mnemo.store import FEEDBACK_REASONS, Store, signal_for_reason
 
 log = logging.getLogger(__name__)
 
@@ -474,6 +477,68 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
     @v1.get("/audit", response_model=list[QueryAuditOut])
     def audit(limit: int = 50, s: Store = Depends(get_store)) -> list[QueryAuditOut]:
         return [QueryAuditOut.from_query(q) for q in s.recent_queries(limit=limit)]
+
+    # --- Feedback (v1.2 phase 1) -----------------------------------------
+
+    @v1.post("/feedback", response_model=FeedbackOut)
+    def post_feedback(body: FeedbackIn, s: Store = Depends(get_store)) -> FeedbackOut:
+        """Record a feedback signal on a retrieval hit.
+
+        Idempotent on ``(query_id, node_id, reason)``. If ``signal`` is
+        omitted, the daemon defaults it from ``reason`` via
+        :func:`signal_for_reason` (thumbs_up -> 1.0, thumbs_down -> -1.0,
+        cite_copied -> 0.5, inferred_requery -> -0.5).
+
+        404 if ``query_id`` does not exist in the audit log; the FK
+        constraint would also block the insert, but we check up-front
+        for a cleaner error message.
+        """
+        if body.reason not in FEEDBACK_REASONS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"unknown feedback reason: {body.reason!r}",
+            )
+        # Verify the query_id exists. Cheaper + clearer than letting
+        # the FK fire an IntegrityError that the user has to decode.
+        recent_ids = {q.id for q in s.recent_queries(limit=100_000)}
+        if body.query_id not in recent_ids:
+            raise HTTPException(
+                status_code=404,
+                detail=f"query_id not in audit log: {body.query_id!r}",
+            )
+        # Resolve effective signal: explicit override > canonical default.
+        sig = body.signal if body.signal is not None else signal_for_reason(body.reason)
+        try:
+            event = s.log_feedback_event(
+                query_id=body.query_id,
+                node_id=body.node_id,
+                signal=sig,
+                reason=body.reason,
+            )
+        except sqlite3.IntegrityError as exc:
+            # FK violation on node_id (or unlikely query_id race) lands here.
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return FeedbackOut.from_event(event)
+
+    @v1.get("/feedback", response_model=list[FeedbackOut])
+    def list_feedback(
+        query_id: str | None = None,
+        node_id: str | None = None,
+        s: Store = Depends(get_store),
+    ) -> list[FeedbackOut]:
+        """List feedback events, newest first.
+
+        Requires at least one of ``query_id`` / ``node_id`` -- without a
+        filter the response could be enormous and accidentally
+        expensive on a long-lived store.
+        """
+        if query_id is None and node_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail="provide ?query_id=... and/or ?node_id=...",
+            )
+        events = s.list_feedback_events(query_id=query_id, node_id=node_id)
+        return [FeedbackOut.from_event(e) for e in events]
 
     # --- Config ----------------------------------------------------------
 
