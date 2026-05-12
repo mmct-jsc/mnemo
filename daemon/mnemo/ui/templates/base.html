@@ -153,10 +153,33 @@
           <p class="hint" x-show="!active" x-cloak>
             No project active. Set one so retrieval boosts hits from your current workspace.
           </p>
-          <label>Set / change to path
-            <input type="text" x-model="newPath" placeholder="absolute path of your workspace"
-                   @keydown.enter="setActive()">
-          </label>
+          <label>Set / change to path</label>
+          {# v1.2: filesystem-aware autocomplete with shared recents. #}
+          <div class="ac-wrap"
+               @click.outside="pathAc.open = false"
+               @keydown.escape="pathAc.open = false">
+            <input type="text"
+                   x-model="newPath"
+                   autocomplete="off" spellcheck="false"
+                   placeholder="absolute path of your workspace"
+                   @focus="pathAc.show(newPath)"
+                   @input.debounce.180ms="pathAc.show(newPath)"
+                   @keydown.down.prevent="pathAc.show(newPath); pathAc.move(1)"
+                   @keydown.up.prevent="pathAc.show(newPath); pathAc.move(-1)"
+                   @keydown.enter.prevent="if (pathAc.activeIdx >= 0) { newPath = pathAc.entries[pathAc.activeIdx].value; pathAc.open = false; pathAc.recordRecent(newPath); } else { setActive(); }">
+            <div class="ac-pop" x-show="pathAc.open && pathAc.entries.length" x-cloak>
+              <template x-for="(e, i) in pathAc.entries" :key="e.kind + ':' + e.value">
+                <button type="button"
+                        class="ac-item"
+                        :class="{ active: i === pathAc.activeIdx }"
+                        @mousedown.prevent="newPath = e.value; pathAc.open = false; pathAc.recordRecent(e.value)"
+                        @mouseenter="pathAc.activeIdx = i">
+                  <span class="ac-item-kind" :class="'ac-kind-' + e.kind" x-text="e.kind === 'recent' ? 'recent' : 'fs'"></span>
+                  <span class="ac-item-value" x-text="e.value"></span>
+                </button>
+              </template>
+            </div>
+          </div>
           <div class="active-proj-actions">
             <button class="primary" @click="setActive()" :disabled="busy || !newPath">
               <span x-show="!busy">Set active</span>
@@ -245,6 +268,78 @@
     // re-declaring it here (would be a SyntaxError that nukes all JS).
     const TOAST_HISTORY_LIMIT = 50;
 
+    // Reusable autocomplete factory. Used by the topbar's active-project
+    // path input and by the Sources page's "Add source" path + project-key
+    // inputs. Lives in base.html (not per-page) so any HTMX-swapped
+    // fragment can call it without re-registering.
+    //
+    //   const ac = makeAutocomplete({
+    //     recentsKey: 'mnemo.recent.<...>',
+    //     fetchSuggestions: async (q) => [{ value: '...', kind?, meta? }, ...],
+    //   });
+    //   ac.init();              // load recents from localStorage
+    //   ac.show(currentValue);  // open with recents + fresh suggestions
+    //   ac.refresh(typedValue); // re-fetch suggestions (debounce upstream)
+    //   ac.move(+/-1);          // arrow-key cursor
+    //   ac.recordRecent(picked);// persist a freshly chosen value
+    //
+    // Each entry is { kind, value, meta? } where kind = 'recent' | 'fs' | 'known'.
+    function makeAutocomplete({ recentsKey, fetchSuggestions }) {
+      return {
+        open: false,
+        activeIdx: -1,
+        recents: [],            // strings
+        suggestions: [],        // { value, meta? }[]
+        init() {
+          try {
+            const raw = localStorage.getItem(recentsKey);
+            this.recents = Array.isArray(JSON.parse(raw)) ? JSON.parse(raw) : [];
+          } catch (_) { this.recents = []; }
+        },
+        show(currentValue) {
+          this.open = true;
+          this.activeIdx = -1;
+          this.refresh(currentValue || '');
+        },
+        async refresh(query) {
+          try {
+            this.suggestions = await fetchSuggestions(query || '');
+          } catch (_) { this.suggestions = []; }
+        },
+        get entries() {
+          // Merge recents + live suggestions, dedup by value, recents first.
+          const seen = new Set();
+          const out = [];
+          for (const v of this.recents) {
+            if (seen.has(v)) continue;
+            seen.add(v);
+            out.push({ kind: 'recent', value: v });
+            if (out.length >= 8) break;
+          }
+          for (const s of this.suggestions) {
+            const v = typeof s === 'string' ? s : s.value;
+            if (seen.has(v)) continue;
+            seen.add(v);
+            out.push({ kind: s.kind || 'fs', value: v, meta: s.meta || null });
+            if (out.length >= 30) break;
+          }
+          return out;
+        },
+        move(delta) {
+          const n = this.entries.length;
+          if (!n) { this.activeIdx = -1; return; }
+          this.activeIdx = (this.activeIdx + delta + n) % n;
+        },
+        recordRecent(value) {
+          if (!value) return;
+          this.recents = [value, ...this.recents.filter(v => v !== value)].slice(0, 12);
+          try {
+            localStorage.setItem(recentsKey, JSON.stringify(this.recents));
+          } catch (_) { /* quota etc */ }
+        },
+      };
+    }
+
     function toastStack() {
       return {
         items: [],
@@ -291,7 +386,23 @@
         newPath: '',
         popoverOpen: false,
         busy: false,
+        // v1.2: filesystem path autocomplete on the "Set path" input
+        // -- same /v1/fs/suggest backed suggestions as the Sources
+        // page so the user gets continuous discovery, not just a
+        // text field. ``recentsKey`` is intentionally shared with
+        // the Sources page so a path the user typed in either place
+        // shows up in the other.
+        pathAc: makeAutocomplete({
+          recentsKey: 'mnemo.recent.paths',
+          fetchSuggestions: async (q) => {
+            const r = await fetch('/v1/fs/suggest?prefix=' + encodeURIComponent(q || ''));
+            if (!r.ok) return [];
+            const data = await r.json();
+            return (data.candidates || []).map(p => ({ value: p, kind: 'fs' }));
+          },
+        }),
         async init() {
+          this.pathAc.init();
           await this.refresh();
         },
         async refresh() {
