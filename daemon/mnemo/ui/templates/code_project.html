@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+{% block title %} - code/{{ project_key }}{% endblock %}
+
+{% block content %}
+<section class="code-project">
+  <header class="page-header">
+    <p class="breadcrumb"><a href="/code">Code</a> / <strong>{{ project_key }}</strong></p>
+    <h2>{{ project_key }}</h2>
+    <div class="code-stats">
+      <span><strong>{{ stats.modules }}</strong> modules</span>
+      <span><strong>{{ stats.functions }}</strong> functions</span>
+      <span><strong>{{ stats.classes }}</strong> classes</span>
+      <span><strong>{{ stats.methods }}</strong> methods</span>
+      <span><strong>{{ stats.routes }}</strong> routes</span>
+      <span><strong>{{ stats.components }}</strong> components</span>
+    </div>
+    <p>
+      <a href="/code/{{ project_key | urlencode }}/sitemap" class="sitemap-link">
+        Cross-stack sitemap &rarr;
+      </a>
+    </p>
+  </header>
+
+  <div class="code-columns">
+    {% if ranked_functions %}
+    <section class="code-section">
+      <h3>Most-connected functions
+        <span class="hint">by call-graph degree, top 25</span>
+      </h3>
+      <ul class="code-list">
+        {% for fn in ranked_functions %}
+        <li>
+          <a href="/code/{{ project_key | urlencode }}/function/{{ fn.id }}">
+            <span class="badge type-code_{{ 'method' if fn.type == 'code_method' else 'function' }}">
+              {{ 'method' if fn.type == 'code_method' else 'fn' }}
+            </span>
+            <code>{{ fn.name }}</code>
+          </a>
+          <span class="hint">{{ fn.source_path | replace('\\', '/') }}</span>
+        </li>
+        {% endfor %}
+      </ul>
+    </section>
+    {% endif %}
+
+    {% if routes %}
+    <section class="code-section">
+      <h3>Routes <span class="hint">({{ routes | length }})</span></h3>
+      <ul class="code-list">
+        {% for r in routes %}
+        <li>
+          <a href="/node/{{ r.id }}">
+            <span class="badge http-method">{{ r.name.split(' ', 1)[0] }}</span>
+            <code>{{ r.name.split(' ', 1)[1] if ' ' in r.name else r.name }}</code>
+          </a>
+        </li>
+        {% endfor %}
+      </ul>
+    </section>
+    {% endif %}
+
+    {% if components %}
+    <section class="code-section">
+      <h3>Components <span class="hint">({{ components | length }})</span></h3>
+      <ul class="code-list">
+        {% for c in components %}
+        <li>
+          <a href="/node/{{ c.id }}">
+            <span class="badge">React</span>
+            <code>{{ c.name }}</code>
+          </a>
+        </li>
+        {% endfor %}
+      </ul>
+    </section>
+    {% endif %}
+
+    {% if modules %}
+    <section class="code-section">
+      <h3>Modules <span class="hint">({{ modules | length }})</span></h3>
+      <ul class="code-list code-list-files">
+        {% for m in modules[:50] %}
+        <li>
+          <a href="/node/{{ m.id }}"><code>{{ m.name }}</code></a>
+          <span class="hint">{{ m.source_path | replace('\\', '/') }}</span>
+        </li>
+        {% endfor %}
+      </ul>
+      {% if modules | length > 50 %}
+      <p class="hint">+ {{ modules | length - 50 }} more</p>
+      {% endif %}
+    </section>
+    {% endif %}
+
+    {% if feedback_nodes %}
+    <section class="code-section lessons">
+      <h3>Lessons learned
+        <span class="hint">memory_feedback scoped to this project</span>
+      </h3>
+      <ul class="code-list">
+        {% for fb in feedback_nodes %}
+        <li>
+          <a href="/node/{{ fb.id }}">
+            <span class="badge type-memory_feedback">feedback</span>
+            <code>{{ fb.name }}</code>
+          </a>
+          {% if fb.description %}
+          <p class="hint">{{ fb.description | truncate(140) }}</p>
+          {% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+    </section>
+    {% endif %}
+  </div>
+</section>
+{% endblock %}

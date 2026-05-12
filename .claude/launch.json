@@ -1,0 +1,22 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "mnemo-daemon",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": [
+        "run",
+        "--directory",
+        "daemon",
+        "uvicorn",
+        "mnemo.server:create_app",
+        "--factory",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "7374"
+      ],
+      "port": 7374
+    }
+  ]
+}

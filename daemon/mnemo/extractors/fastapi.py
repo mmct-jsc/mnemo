@@ -56,25 +56,79 @@ def extract(
     handler_index = _index_handlers_by_line(tier1_units)
 
     routes: list[CodeUnit] = []
-    for child in tree.root_node.children:
-        if child.type != "decorated_definition":
-            continue
-        decorators = _decorators_of(child)
-        inner = _inner_function_of(child)
-        if inner is None:
-            continue
-        # Tree-sitter ``start_point`` is 0-indexed; our source_path
-        # convention is 1-indexed, matching what editors show.
-        start_line = inner.start_point[0] + 1
-        end_line = inner.end_point[0] + 1
-        handler = handler_index.get((start_line, end_line))
-        if handler is None:
-            continue
-        for dec in decorators:
-            route = _route_from_decorator(dec, source, file_path, handler)
-            if route is not None:
-                routes.append(route)
+    # v2.0 phase 6.1: walk the whole tree, not just the top level.
+    # The ``create_app()`` factory pattern is the dominant FastAPI
+    # idiom in real codebases (routes live inside a function), so a
+    # top-level-only walker would miss most of the routes a typical
+    # repo declares. The handler-index lookup still gates on a Tier 1
+    # function existing at that line range, so we don't accidentally
+    # promote stray decorators inside nested classes / dict comps.
+    _walk_for_decorated_functions(tree.root_node, source, file_path, handler_index, routes)
     return routes
+
+
+def _walk_for_decorated_functions(
+    node: tree_sitter.Node,
+    source: bytes,
+    file_path: str,
+    handler_index: dict[tuple[int, int], CodeUnit],
+    routes: list[CodeUnit],
+) -> None:
+    """DFS for ``decorated_definition`` nodes wrapping a function.
+
+    We descend into every child by default but skip into nested
+    ``function_definition`` / ``class_definition`` bodies separately
+    (the route's handler must still exist as a Tier 1 unit, and Tier 1
+    only extracts top-level + class-method functions, so decorators on
+    deeply-nested helpers wouldn't have a handler to wire to anyway --
+    the index lookup naturally filters them).
+    """
+    if node.type == "decorated_definition":
+        inner = _inner_function_of(node)
+        if inner is not None:
+            start_line = inner.start_point[0] + 1
+            end_line = inner.end_point[0] + 1
+            handler = handler_index.get((start_line, end_line))
+            if handler is None:
+                # Inner function isn't a Tier 1 unit (nested inside a
+                # factory or other function). Synthesize a stand-in so
+                # the route still has a handler pointer; the post-pass
+                # will silently skip ``routes_to`` if no Tier 1 unit
+                # exists at that source_path. The route itself is
+                # still queryable, which is what the user cares about.
+                handler = _synthesize_handler_unit(inner, file_path)
+            for dec in _decorators_of(node):
+                route = _route_from_decorator(dec, source, file_path, handler)
+                if route is not None:
+                    routes.append(route)
+    for child in node.children:
+        _walk_for_decorated_functions(child, source, file_path, handler_index, routes)
+
+
+def _synthesize_handler_unit(inner: tree_sitter.Node, file_path: str) -> CodeUnit:
+    """Build a minimal :class:`CodeUnit` shell for the inner function
+    of a decorated definition that Tier 1 didn't extract (because the
+    function is nested). Only the ``source_path`` and ``name`` matter
+    here -- they thread through to the route's
+    ``handler_source_path`` and display string."""
+    name_node = inner.child_by_field_name("name")
+    name = ""
+    if name_node is not None:
+        text = getattr(name_node, "text", None)
+        if isinstance(text, bytes):
+            name = text.decode("utf-8", errors="replace")
+        elif isinstance(text, str):
+            name = text
+    start_line = inner.start_point[0] + 1
+    end_line = inner.end_point[0] + 1
+    return CodeUnit(
+        type="code_function",
+        name=name or "<anonymous>",
+        body="",
+        source_path=f"{file_path}:{start_line}-{end_line}",
+        description=None,
+        hash="",
+    )
 
 
 # --- AST helpers ----------------------------------------------------------
