@@ -347,6 +347,61 @@ def test_query_active_project_boost(store: Store, fake_embedder: FakeEmbedder) -
     assert result.hits[0].node_id == a.id
 
 
+def test_query_strict_isolation_keeps_project_key_none_nodes(
+    store: Store, fake_embedder: FakeEmbedder
+) -> None:
+    """v1.2.1 regression: under strict isolation with an active project,
+    nodes whose ``project_key`` is None (e.g. CLAUDE.md global memory,
+    plan_docs, any cross-cutting entry) MUST survive the hard filter.
+
+    Pre-fix: ``None != active_project`` was True so the filter dropped
+    them silently. That made global memory invisible whenever a project
+    was active -- one of the dominant 'common query returns nothing'
+    causes in v1.2.0.
+    """
+    in_proj = Node.new(
+        type="memory_project",
+        name="in-p1",
+        body="content about deployment",
+        source_path="/in_p1.md",
+        source_kind="memory_dir",
+        project_key="P1",
+    )
+    other_proj = Node.new(
+        type="memory_project",
+        name="in-p2",
+        body="content about deployment",
+        source_path="/in_p2.md",
+        source_kind="memory_dir",
+        project_key="P2",
+    )
+    global_doc = Node.new(
+        # No project_key -- mimics a CLAUDE.md / plan_doc / cross-cutting
+        # memory entry. NOT BASE-flagged.
+        type="project_doc",
+        name="global-claude-md",
+        body="content about deployment",
+        source_path="/CLAUDE.md",
+        source_kind="claude_md",
+        project_key=None,
+    )
+    for n in (in_proj, other_proj, global_doc):
+        store.upsert_node(n)
+        vec = fake_embedder.embed_text("deployment")
+        store.upsert_chunks(n.id, [(0, vec, "content about deployment")])
+
+    result = retrieve.query(store, fake_embedder, "deployment", k=5, active_project="P1")
+    surfaced = {h.node_id for h in result.hits}
+
+    # The active-project node and the global (None project_key) node
+    # both survive strict isolation; the other-project one is filtered.
+    assert in_proj.id in surfaced, "active-project node must surface"
+    assert global_doc.id in surfaced, "project_key=None must survive strict isolation (v1.2.1 fix)"
+    assert other_proj.id not in surfaced, (
+        "other-project node must be hard-filtered under strict isolation"
+    )
+
+
 # --- Vector dimension safety --------------------------------------------
 
 

@@ -168,6 +168,18 @@ def test_query_validation(client: TestClient) -> None:
     assert resp.status_code == 422
 
 
+def test_query_budget_below_floor_rejected(client: TestClient) -> None:
+    """v1.2.1: ``budget_tokens`` minimum is 20. Below that, the first
+    hit's description line can't fit and the response is silently
+    empty -- masking the real cause. Reject with 422 instead so the
+    caller knows their budget is too small."""
+    resp = client.post("/v1/query", json={"prompt": "x", "budget_tokens": 10})
+    assert resp.status_code == 422
+    # And exactly the floor still works.
+    resp_ok = client.post("/v1/query", json={"prompt": "x", "budget_tokens": 20})
+    assert resp_ok.status_code == 200
+
+
 # --- /audit --------------------------------------------------------------
 
 
