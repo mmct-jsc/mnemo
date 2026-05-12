@@ -345,6 +345,53 @@
       };
     }
 
+    // v1.2 phase 3: thumbs feedback factory. Bound on the hits <ul>
+    // produced by _search_results.html. One instance per HTMX search
+    // swap; queryId is baked in at render time so the POST body needs
+    // no DOM scraping.
+    //
+    // The server already deduplicates on (query_id, node_id, reason)
+    // so a double-click is idempotent. We still track `pending` to
+    // disable the button mid-flight and avoid the visible flicker
+    // between optimistic update and confirmation.
+    function hitsFeedback(queryId) {
+      return {
+        queryId: queryId,
+        feedback: {},   // nodeId -> 'up' | 'down' (visible state)
+        pending: {},    // nodeId -> bool (POST in flight)
+        async vote(nodeId, reason) {
+          if (this.pending[nodeId]) return;
+          // Optimistic UI: flip immediately, revert on error.
+          const newState = reason === 'thumbs_up' ? 'up' : 'down';
+          const prevState = this.feedback[nodeId] || null;
+          this.feedback[nodeId] = newState;
+          this.pending[nodeId] = true;
+          try {
+            const r = await fetch('/v1/feedback', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                query_id: this.queryId,
+                node_id: nodeId,
+                reason: reason,
+              }),
+            });
+            if (!r.ok) throw new Error(await r.text());
+            window.toast(
+              reason === 'thumbs_up' ? 'Marked helpful' : 'Marked not helpful',
+              'success', 3000);
+          } catch (e) {
+            // Roll back the optimistic flip on failure.
+            if (prevState) this.feedback[nodeId] = prevState;
+            else delete this.feedback[nodeId];
+            window.toast('Feedback failed: ' + e, 'error');
+          } finally {
+            this.pending[nodeId] = false;
+          }
+        },
+      };
+    }
+
     function bellHistory() {
       return {
         items: [],
