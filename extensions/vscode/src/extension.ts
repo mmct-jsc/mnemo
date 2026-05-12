@@ -152,10 +152,45 @@ function formatQueryAsMarkdown(prompt: string, result: { hits: any[]; intent_tag
   return lines.join("\n");
 }
 
-async function cmdAddNote(_daemon: MnemoDaemon): Promise<void> {
-  // v1.1: notes go through the daemon's filesystem watcher. Open the UI
-  // with a hint at the dashboard. /v1/nodes gets a POST endpoint in v1.2.
-  void vscode.env.openExternal(vscode.Uri.parse(MnemoDaemon.configuredUrl() + "/nodes-page"));
+async function cmdAddNote(daemon: MnemoDaemon): Promise<void> {
+  // v1.2: POST /v1/nodes creates memory entries directly. We prompt
+  // for the minimum fields (type / name / body) inline; the
+  // dashboard's full editor is still available for richer edits.
+  const TYPES = [
+    "memory_user",
+    "memory_feedback",
+    "memory_project",
+    "memory_reference",
+  ];
+  const type = await vscode.window.showQuickPick(TYPES, {
+    placeHolder: "Memory type",
+  });
+  if (!type) return;
+  const name = await vscode.window.showInputBox({
+    prompt: "Short slug for this entry (e.g. 'mqtt-broker-auth')",
+  });
+  if (!name) return;
+  const description = await vscode.window.showInputBox({
+    prompt: "One-line description (optional)",
+  });
+  const body = await vscode.window.showInputBox({
+    prompt: "Body content",
+  });
+  if (!body) return;
+
+  const created = await daemon.addNote({
+    type,
+    name,
+    description: description || undefined,
+    body,
+  });
+  if (!created) {
+    void vscode.window.showErrorMessage("Failed to create memory entry.");
+    return;
+  }
+  void vscode.window.showInformationMessage(
+    `Added ${created.type}: ${created.name}`
+  );
 }
 
 async function cmdSetActiveProject(

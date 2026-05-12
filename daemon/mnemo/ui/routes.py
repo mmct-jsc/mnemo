@@ -238,6 +238,9 @@ def mount_ui(
                 budget=cfg.defaults.budget_tokens,
                 k=cfg.defaults.k,
                 recency_half_life_days=cfg.recency_half_life_days,
+                # v1.2 phase 6: needed by the retune panel for the
+                # "needs at least N labeled queries" hint.
+                retune_min_queries=cfg.retune_min_queries,
             ),
         )
 

@@ -158,10 +158,13 @@ def test_co_occurrence_edges_emerge(smoke: SmokeContext) -> None:
 def test_http_endpoints_all_200(smoke: SmokeContext) -> None:
     app = create_app(store=smoke["store"], embedder=smoke["embedder"])
     with TestClient(app) as client:
+        # v1.2 phase 7 dropped the legacy 308 redirects; API endpoints
+        # live under /v1/ now. UI HTML pages keep their un-versioned
+        # paths.
         for path in [
-            "/health",
-            "/sources",
-            "/audit",
+            "/v1/health",
+            "/v1/sources",
+            "/v1/audit",
             "/",
             "/graph",
             "/sources-page",
@@ -176,7 +179,7 @@ def test_http_endpoints_all_200(smoke: SmokeContext) -> None:
 def test_http_health_reports_real_counts(smoke: SmokeContext) -> None:
     app = create_app(store=smoke["store"], embedder=smoke["embedder"])
     with TestClient(app) as client:
-        data = client.get("/health").json()
+        data = client.get("/v1/health").json()
         assert data["ok"] is True
         assert data["node_count"] > 0
         assert data["source_count"] > 0
@@ -196,7 +199,9 @@ def test_http_search_fragment_returns_html_with_citation(
 def test_http_query_endpoint_round_trip(smoke: SmokeContext) -> None:
     app = create_app(store=smoke["store"], embedder=smoke["embedder"])
     with TestClient(app) as client:
-        r = client.post("/query", json={"prompt": "deploy process", "k": 3, "budget_tokens": 200})
+        r = client.post(
+            "/v1/query", json={"prompt": "deploy process", "k": 3, "budget_tokens": 200}
+        )
         assert r.status_code == 200
         body = r.json()
         assert "hits" in body

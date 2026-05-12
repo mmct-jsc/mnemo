@@ -19,6 +19,7 @@ daemon and tests can tune them.
 
 from __future__ import annotations
 
+import logging
 import math
 import re
 import time
@@ -29,6 +30,8 @@ from mnemo.compress import CompressedHit, ScoredHit
 from mnemo.embed import Embedder
 from mnemo.intent import classify_intent, type_priority_for
 from mnemo.store import Node, Store
+
+log = logging.getLogger(__name__)
 
 # Scoring weights are now in mnemo.config (editable via UI / API).
 # These module attributes are kept for backwards-compatible imports and
@@ -107,6 +110,10 @@ def query(
     nodes_by_id = store.get_nodes_by_ids(candidate_ids)
     isolation_mode = getattr(cfg, "project_isolation_mode", "strict")
     scored: list[ScoredHit] = []
+    # v1.2 phase 5: capture unweighted 6-term components per candidate
+    # so the auto-tuner can rescore with alternative weights without
+    # rerunning the embedder. Logged with the audit row below.
+    components_by_node: dict[str, dict[str, float]] = {}
     for nid in candidate_ids:
         node = nodes_by_id.get(nid)
         if node is None:
@@ -118,19 +125,67 @@ def query(
             and node.project_key != active_project
         ):
             continue  # hard-filter: outside active project, not BASE
+        c_vector = vec_scores.get(nid, 0.0)
+        c_graph = graph_scores.get(nid, 0.0)
+        c_recency = _recency_score(node.updated_at, now, cfg.recency_half_life_days)
+        c_type = type_pri.get(node.type, 0.0)
+        c_project = _project_score(node.project_key, active_project)
+        c_lexical = _lexical_score(q_tokens, node)
         s = (
-            sw.alpha * vec_scores.get(nid, 0.0)
-            + sw.beta * graph_scores.get(nid, 0.0)
-            + sw.gamma * _recency_score(node.updated_at, now, cfg.recency_half_life_days)
-            + sw.delta * type_pri.get(node.type, 0.0)
-            + sw.epsilon * _project_score(node.project_key, active_project)
-            + sw.zeta * _lexical_score(q_tokens, node)
+            sw.alpha * c_vector
+            + sw.beta * c_graph
+            + sw.gamma * c_recency
+            + sw.delta * c_type
+            + sw.epsilon * c_project
+            + sw.zeta * c_lexical
         )
+        components_by_node[nid] = {
+            "vector": c_vector,
+            "graph": c_graph,
+            "recency": c_recency,
+            "type": c_type,
+            "project": c_project,
+            "lexical": c_lexical,
+        }
         idx, text = chunk_info.get(nid, (None, None))
         scored.append(ScoredHit(node=node, score=s, chunk_idx=idx, chunk_text=text))
 
     scored.sort(key=lambda h: -h.score)
-    top = scored[:k]
+
+    # 4b. v1.2 phase 4: MMR re-rank on an oversampled top pool.
+    #
+    # Without this the top-K is the pure score-sort; near-duplicate
+    # nodes (e.g. five paraphrases of the same feedback retro) crowd
+    # out distinct angles. MMR penalizes the diversity penalty so the
+    # output spans more distinct chunks while still leaning on
+    # relevance (lambda = 0.7 by default).
+    if cfg.mmr_lambda < 1.0 and len(scored) > k:
+        from mnemo import rerank as _rerank  # local import to avoid cycles
+
+        pool_size = max(k * 2, 20)
+        top_pool = scored[:pool_size]
+        # Read back each candidate's best-chunk embedding so MMR can
+        # compute the cosine diversity penalty. Pairs are (node_id,
+        # chunk_idx); chunk_info captured them during the vec_search
+        # dedup pass.
+        wanted: list[tuple[str, int]] = []
+        for h in top_pool:
+            info = chunk_info.get(h.node.id)
+            if info is not None:
+                wanted.append((h.node.id, info[0]))
+        chunk_embs = store.get_chunk_embeddings(wanted) if wanted else {}
+        # Re-key by node_id so mmr_select can look up by ScoredHit.node.id.
+        emb_by_node: dict[str, list[float]] = {}
+        for h in top_pool:
+            info = chunk_info.get(h.node.id)
+            if info is None:
+                continue
+            v = chunk_embs.get((h.node.id, info[0]))
+            if v is not None:
+                emb_by_node[h.node.id] = v
+        top = _rerank.mmr_select(top_pool, k=k, lambda_=cfg.mmr_lambda, embeddings=emb_by_node)
+    else:
+        top = scored[:k]
 
     # 5. Compress to budget.
     hits, used = compress.compress_to_budget(top, budget_tokens=budget_tokens)
@@ -140,11 +195,45 @@ def query(
     if update_graph and len(retrieved_ids) >= 2:
         graph.update_co_occurrence(store, retrieved_ids)
 
+    # 6b. v1.2 phase 2: inferred-re-query feedback.
+    #
+    # BEFORE we persist the current query, look at the recent audit
+    # log. If any prior query within the window is cosine-similar to
+    # this one, treat it as evidence the user re-asked because the
+    # earlier hits missed -- emit feedback against those earlier hits.
+    # Running this before log_query is what keeps us from comparing
+    # the current query to itself.
+    from mnemo import feedback as _fb  # local import to avoid cycle
+
+    try:
+        _fb.infer_requery_feedback(
+            store,
+            query_emb=query_vec,
+            window_seconds=cfg.requery_window_seconds,
+            threshold=cfg.requery_cosine_threshold,
+            top_n=cfg.requery_top_n_hits,
+        )
+    except Exception:
+        # Never let a feedback-detection error abort the user's query.
+        log.exception("inferred_requery detector failed; continuing")
+
+    # v1.2 phase 5: log per-hit components for the top pool (caps audit
+    # row size while keeping enough candidates for the auto-tuner to
+    # consider rescoring). Use the top ``max(k*2, 20)`` candidates so a
+    # post-tune ordering can pull from them.
+    pool_size = max(k * 2, 20)
+    pool_nids = [h.node.id for h in scored[:pool_size]]
+    components_log = {
+        nid: components_by_node[nid] for nid in pool_nids if nid in components_by_node
+    }
+
     qid = store.log_query(
         prompt=prompt,
         intent_tags=sorted(tags),
         retrieved_ids=retrieved_ids,
         scores={h.node_id: round(h.score, 4) for h in hits},
+        embedding=query_vec,
+        score_components=components_log,
     )
 
     return RetrievalResult(hits=hits, intent_tags=sorted(tags), tokens_used=used, query_id=qid)

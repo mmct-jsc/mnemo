@@ -533,7 +533,7 @@ wheels = [
 
 [[package]]
 name = "mnemo"
-version = "1.1.1"
+version = "1.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
@@ -573,7 +573,7 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.15.12" },
     { name = "sentence-transformers", specifier = ">=5.4.1" },
     { name = "sqlite-vec", specifier = ">=0.1.6" },
-    { name = "typer", specifier = ">=0.9" },
+    { name = "typer", specifier = ">=0.25.1" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.27" },
     { name = "watchfiles", specifier = ">=1.1.1" },
 ]

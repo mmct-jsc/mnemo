@@ -43,9 +43,9 @@ def _seed(client: TestClient, tmp_path: Path) -> str:
         ),
         encoding="utf-8",
     )
-    client.post("/sources", json={"path": str(src), "kind": "memory_dir"})
-    client.post("/reindex")
-    return client.get("/nodes").json()[0]["id"]
+    client.post("/v1/sources", json={"path": str(src), "kind": "memory_dir"})
+    client.post("/v1/reindex")
+    return client.get("/v1/nodes").json()[0]["id"]
 
 
 # --- pages ---------------------------------------------------------------
@@ -114,6 +114,19 @@ def test_settings_page_renders(client: TestClient) -> None:
     assert "budget_tokens" in r.text
 
 
+def test_settings_page_includes_retune_panel(client: TestClient) -> None:
+    """v1.2 phase 6: the /settings page hosts an auto-tune panel that
+    posts to /v1/retune and shows the diff before applying. We assert
+    the panel's anchor strings are present; the JS behavior itself is
+    browser-only and not tested at the Python layer."""
+    r = client.get("/settings")
+    assert r.status_code == 200
+    assert "Auto-tune" in r.text or "retune" in r.text.lower()
+    # The Alpine state factory + the Run button copy.
+    assert "runRetune" in r.text
+    assert "/v1/retune" in r.text
+
+
 def test_node_page_404_when_missing(client: TestClient) -> None:
     r = client.get("/node/nonexistent")
     assert r.status_code == 404
@@ -145,6 +158,47 @@ def test_search_fragment_returns_hits_html(client: TestClient, tmp_path: Path) -
     assert "intent:" in r.text
     assert "rule-x" in r.text
     assert "[mnemo:" in r.text
+
+
+def test_search_fragment_renders_thumb_buttons_per_hit(client: TestClient, tmp_path: Path) -> None:
+    """v1.2 phase 3: every rendered hit gets a thumb-up and thumb-down
+    button. The buttons carry the node_id so the click handler can POST
+    /v1/feedback with the right body."""
+    nid = _seed(client, tmp_path)
+    r = client.get("/ui/search", params={"q": "rule"})
+    assert r.status_code == 200
+    # Two thumb buttons should appear -- one up, one down.
+    assert 'class="thumb-btn thumb-up"' in r.text
+    assert 'class="thumb-btn thumb-down"' in r.text
+    # The node_id flows into the click handler so the POST body resolves.
+    assert nid in r.text
+
+
+def test_search_fragment_embeds_query_id_for_feedback(client: TestClient, tmp_path: Path) -> None:
+    """The Alpine x-data factory needs the query_id passed in at render
+    time so it can include it in the POST /v1/feedback body without
+    parsing the page. ``hitsFeedback(<query_id>)`` is the canonical call
+    site."""
+    _seed(client, tmp_path)
+    r = client.get("/ui/search", params={"q": "rule"})
+    assert r.status_code == 200
+    assert "hitsFeedback(" in r.text  # factory invocation
+    # The current query_id is rendered into the call. Audit log
+    # confirms a query exists post-fetch; grab its id and check.
+    audit = client.get("/v1/audit").json()
+    assert audit
+    latest_qid = audit[0]["id"]
+    assert latest_qid in r.text
+
+
+def test_base_page_defines_hits_feedback_factory(client: TestClient) -> None:
+    """The Alpine factory must be declared in base.html (or an asset
+    base.html loads) so any page hosting the search-results HTMX swap
+    can use it. We assert the factory function name is visible on a
+    plain page render."""
+    r = client.get("/")
+    assert r.status_code == 200
+    assert "function hitsFeedback" in r.text
 
 
 def test_graph_data_returns_elements(client: TestClient, tmp_path: Path) -> None:

@@ -51,6 +51,25 @@ class Config:
     # scoring boost via epsilon). Useful when the user wants more
     # cross-project surfacing.
     project_isolation_mode: str = "strict"
+    # v1.2 phase 2: inferred-re-query detector. When a new prompt is
+    # cosine-similar to a query within the look-back window, the daemon
+    # writes a `signal=-0.5, reason='inferred_requery'` row against the
+    # older query's top-N hits. Tuned conservatively -- 0.85 cosine + 5
+    # minute window matches the design doc's heuristic. Disable by
+    # setting threshold > 1.0.
+    requery_window_seconds: int = 300
+    requery_cosine_threshold: float = 0.85
+    requery_top_n_hits: int = 3
+    # v1.2 phase 4: MMR re-rank lambda. 0.7 leans toward relevance
+    # with enough diversity penalty to nuke near-duplicates. 1.0
+    # bypasses MMR (pre-v1.2 behavior; saves ~0.5ms/query). 0.0 is
+    # pure diversity, mostly a diagnostic.
+    mmr_lambda: float = 0.7
+    # v1.2 phase 5: auto-tuner minimum labeled-query threshold. Below
+    # this count, ``mnemo retune`` refuses to run because MRR estimates
+    # are too noisy. 30 is the design-doc default; users can lower it
+    # for tighter feedback loops at the cost of overfit risk.
+    retune_min_queries: int = 30
 
 
 # --- Load / save ----------------------------------------------------------
@@ -98,6 +117,11 @@ def save(cfg: Config) -> None:
         "scoring": asdict(cfg.scoring),
         "defaults": asdict(cfg.defaults),
         "recency_half_life_days": cfg.recency_half_life_days,
+        "requery_window_seconds": cfg.requery_window_seconds,
+        "requery_cosine_threshold": cfg.requery_cosine_threshold,
+        "requery_top_n_hits": cfg.requery_top_n_hits,
+        "mmr_lambda": cfg.mmr_lambda,
+        "retune_min_queries": cfg.retune_min_queries,
         "project_isolation_mode": cfg.project_isolation_mode,
     }
     with _lock:
@@ -145,3 +169,13 @@ def _apply(cfg: Config, raw: dict) -> None:
         mode = raw["project_isolation_mode"].strip().lower()
         if mode in ("strict", "boost"):
             cfg.project_isolation_mode = mode
+    if isinstance(raw.get("requery_window_seconds"), int):
+        cfg.requery_window_seconds = max(0, int(raw["requery_window_seconds"]))
+    if isinstance(raw.get("requery_cosine_threshold"), int | float):
+        cfg.requery_cosine_threshold = max(0.0, min(2.0, float(raw["requery_cosine_threshold"])))
+    if isinstance(raw.get("requery_top_n_hits"), int):
+        cfg.requery_top_n_hits = max(0, min(100, int(raw["requery_top_n_hits"])))
+    if isinstance(raw.get("mmr_lambda"), int | float):
+        cfg.mmr_lambda = max(0.0, min(1.0, float(raw["mmr_lambda"])))
+    if isinstance(raw.get("retune_min_queries"), int):
+        cfg.retune_min_queries = max(1, int(raw["retune_min_queries"]))

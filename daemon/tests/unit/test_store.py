@@ -383,6 +383,285 @@ def test_recent_queries_orders_newest_first(store: Store) -> None:
     assert recent[1].prompt == "first"
 
 
+def test_log_query_stores_embedding_when_provided(store: Store) -> None:
+    """v1.2 phase 2: an optional ``embedding`` arg to log_query persists
+    the query's vector representation, so the inferred-re-query detector
+    can do cosine similarity over recent prompts. None by default keeps
+    pre-1.2 callers working unchanged."""
+    emb = [0.1] * 384  # match EMBEDDING_DIM
+    qid = store.log_query(
+        prompt="why mqtt?",
+        intent_tags=["debug"],
+        retrieved_ids=["n1"],
+        scores={"n1": 0.9},
+        embedding=emb,
+    )
+
+    # Reading via the new helper returns the persisted vector verbatim.
+    rows = store.recent_queries_with_embeddings(window_seconds=3600)
+    matching = [r for r in rows if r.id == qid]
+    assert len(matching) == 1
+    persisted_emb = matching[0].embedding
+    assert persisted_emb is not None
+    assert len(persisted_emb) == 384
+    # serialize_float32 truncates to float32 precision; compare with tolerance.
+    for x, y in zip(emb, persisted_emb, strict=True):
+        assert abs(x - y) < 1e-6
+
+
+def test_log_query_without_embedding_stays_backward_compat(store: Store) -> None:
+    """Pre-v1.2 callers that don't pass ``embedding`` must keep working
+    -- the audit row lands and is visible via the (non-filtered)
+    ``recent_queries`` helper; only the new ``recent_queries_with_
+    embeddings`` filter excludes it."""
+    qid = store.log_query(
+        prompt="legacy",
+        intent_tags=[],
+        retrieved_ids=[],
+        scores={},
+    )
+    # Audit row is queryable.
+    all_recent = store.recent_queries()
+    assert any(q.id == qid for q in all_recent)
+    # But the embedding-aware helper drops it (covered by the null-filter
+    # test below; restating here as a backward-compat invariant).
+    embed_aware = store.recent_queries_with_embeddings(window_seconds=3600)
+    assert all(q.id != qid for q in embed_aware)
+
+
+def test_recent_queries_with_embeddings_excludes_older_than_window(store: Store) -> None:
+    """The inferred-re-query detector filters by a time window. Anything
+    older than ``window_seconds`` must be excluded so the cosine loop
+    stays bounded (~10-20 rows)."""
+    emb = [0.2] * 384
+    # Two queries: one logged 'now' and one stamped 10 minutes in the past.
+    store.log_query(prompt="recent", intent_tags=[], retrieved_ids=[], scores={}, embedding=emb)
+    # Write a second row, then manually backdate it via raw SQL so we
+    # don't have to sleep 600 seconds in a test.
+    qid_old = store.log_query(
+        prompt="ancient", intent_tags=[], retrieved_ids=[], scores={}, embedding=emb
+    )
+    now = int(time.time())
+    store.conn.execute("UPDATE queries SET ts = ? WHERE id = ?", (now - 600, qid_old))
+    store.conn.commit()
+
+    rows = store.recent_queries_with_embeddings(window_seconds=300)
+    prompts = {r.prompt for r in rows}
+    assert "recent" in prompts
+    assert "ancient" not in prompts
+
+
+def test_recent_queries_with_embeddings_excludes_null_embedding_rows(store: Store) -> None:
+    """A query row with no embedding (e.g. pre-1.2 legacy data) cannot
+    contribute to the cosine loop. The helper filters them out so the
+    detector loop doesn't have to defensively skip None."""
+    store.log_query(prompt="no-emb", intent_tags=[], retrieved_ids=[], scores={})
+    rows = store.recent_queries_with_embeddings(window_seconds=3600)
+    assert all(r.embedding is not None for r in rows)
+    assert rows == []  # only the no-embedding row exists; helper drops it
+
+
+def test_log_query_stores_score_components_when_provided(store: Store) -> None:
+    """v1.2 phase 5: ``score_components`` is the per-hit breakdown of
+    the 6-term score (alpha vector, beta graph, gamma recency, ...).
+    Retune reads this so it can rescore with new weights without
+    re-running the embedder. Backward compatible -- omit it on legacy
+    callers and the row keeps a NULL components column."""
+    comps = {
+        "node_a": {
+            "vector": 0.85,
+            "graph": 0.20,
+            "recency": 0.80,
+            "type": 1.00,
+            "project": 0.50,
+            "lexical": 0.40,
+        },
+        "node_b": {
+            "vector": 0.72,
+            "graph": 0.00,
+            "recency": 0.30,
+            "type": 0.50,
+            "project": 0.00,
+            "lexical": 0.60,
+        },
+    }
+    qid = store.log_query(
+        prompt="why?",
+        intent_tags=[],
+        retrieved_ids=["node_a", "node_b"],
+        scores={"node_a": 0.9, "node_b": 0.6},
+        score_components=comps,
+    )
+    rows = store.recent_queries_with_components(min_feedback=0, limit=10)
+    matching = [r for r in rows if r.id == qid]
+    assert len(matching) == 1
+    assert matching[0].score_components == comps
+
+
+def test_recent_queries_with_components_filters_unlabeled(store: Store) -> None:
+    """The auto-tuner only consumes queries with at least one feedback
+    event (otherwise MRR is undefined). The helper enforces that filter
+    via min_feedback >= 1."""
+    n = _make_node(source_path="/x.md")
+    store.upsert_node(n)
+    qid_labeled = store.log_query(
+        prompt="labeled",
+        intent_tags=[],
+        retrieved_ids=[n.id],
+        scores={n.id: 0.9},
+        score_components={n.id: {"vector": 0.9}},
+    )
+    store.log_query(
+        prompt="unlabeled",
+        intent_tags=[],
+        retrieved_ids=[n.id],
+        scores={n.id: 0.9},
+        score_components={n.id: {"vector": 0.9}},
+    )
+    store.log_feedback_event(query_id=qid_labeled, node_id=n.id, signal=1.0, reason="thumbs_up")
+
+    labeled = store.recent_queries_with_components(min_feedback=1, limit=10)
+    assert {q.id for q in labeled} == {qid_labeled}
+
+
+def test_recent_queries_with_components_skips_null_components(store: Store) -> None:
+    """Pre-1.2 queries have NULL score_components and can't be rescored.
+    The helper drops them so the optimizer never feeds NULL into the
+    rescore function."""
+    store.log_query(prompt="legacy", intent_tags=[], retrieved_ids=[], scores={})  # no components
+    rows = store.recent_queries_with_components(min_feedback=0, limit=10)
+    assert rows == []
+
+
+# --- Feedback events (v1.2) ------------------------------------------------
+
+
+def _seed_query_and_node(store: Store) -> tuple[str, Node]:
+    """Convenience: write one node + one query so feedback FKs resolve."""
+    n = _make_node(source_path="/feedback-fixture.md")
+    store.upsert_node(n)
+    qid = store.log_query(
+        prompt="why?",
+        intent_tags=["debug"],
+        retrieved_ids=[n.id],
+        scores={n.id: 0.91},
+    )
+    return qid, n
+
+
+def test_log_feedback_event_basic_insert(store: Store) -> None:
+    """v1.2 phase 1: log_feedback_event writes a row to feedback_event
+    with the supplied (query_id, node_id, signal, reason) tuple and a
+    server-side timestamp."""
+    n = _make_node(source_path="/x.md")
+    store.upsert_node(n)
+    qid = store.log_query(
+        prompt="why mqtt?",
+        intent_tags=["debug"],
+        retrieved_ids=[n.id],
+        scores={n.id: 0.91},
+    )
+
+    store.log_feedback_event(
+        query_id=qid,
+        node_id=n.id,
+        signal=1.0,
+        reason="thumbs_up",
+    )
+
+    events = store.list_feedback_events(query_id=qid)
+    assert len(events) == 1
+    e = events[0]
+    assert e.query_id == qid
+    assert e.node_id == n.id
+    assert e.signal == 1.0
+    assert e.reason == "thumbs_up"
+    assert isinstance(e.created_at, int)
+    assert e.created_at > 0
+
+
+def test_log_feedback_event_idempotent_on_same_triple(store: Store) -> None:
+    """Re-logging the same (query_id, node_id, reason) updates rather
+    than duplicating. The UI may fire the POST twice on a double-click;
+    the inferred detector may re-fire if the user repeats a similar
+    query inside the 5-min window. Both must converge to a single row."""
+    qid, n = _seed_query_and_node(store)
+    first = store.log_feedback_event(
+        query_id=qid, node_id=n.id, signal=1.0, reason="thumbs_up", when=1000
+    )
+    second = store.log_feedback_event(
+        query_id=qid, node_id=n.id, signal=1.0, reason="thumbs_up", when=2000
+    )
+    # Same primary key, refreshed timestamp.
+    assert second.id == first.id
+    assert second.created_at == 2000
+    events = store.list_feedback_events(query_id=qid)
+    assert len(events) == 1
+
+
+def test_log_feedback_event_distinct_reasons_coexist(store: Store) -> None:
+    """A single (query_id, node_id) can carry multiple signals as long
+    as the `reason` differs. cite_copied + thumbs_up on the same hit is
+    a real case (user copied citation then thumbed it up)."""
+    qid, n = _seed_query_and_node(store)
+    store.log_feedback_event(query_id=qid, node_id=n.id, signal=1.0, reason="thumbs_up")
+    store.log_feedback_event(query_id=qid, node_id=n.id, signal=0.5, reason="cite_copied")
+    events = store.list_feedback_events(query_id=qid)
+    assert {e.reason for e in events} == {"thumbs_up", "cite_copied"}
+
+
+def test_list_feedback_events_orders_newest_first(store: Store) -> None:
+    qid, n = _seed_query_and_node(store)
+    store.log_feedback_event(query_id=qid, node_id=n.id, signal=1.0, reason="thumbs_up", when=1000)
+    store.log_feedback_event(
+        query_id=qid, node_id=n.id, signal=0.5, reason="cite_copied", when=2000
+    )
+    events = store.list_feedback_events(query_id=qid)
+    assert [e.reason for e in events] == ["cite_copied", "thumbs_up"]
+
+
+def test_list_feedback_events_filters_by_node_id(store: Store) -> None:
+    """Aggregator UI needs to fetch all feedback for a node across all
+    queries (e.g. for the auto-tuner's per-node signal aggregation)."""
+    qid, n1 = _seed_query_and_node(store)
+    n2 = _make_node(source_path="/other.md")
+    store.upsert_node(n2)
+    store.log_feedback_event(query_id=qid, node_id=n1.id, signal=1.0, reason="thumbs_up")
+    store.log_feedback_event(query_id=qid, node_id=n2.id, signal=-1.0, reason="thumbs_down")
+    events_n1 = store.list_feedback_events(node_id=n1.id)
+    assert len(events_n1) == 1
+    assert events_n1[0].node_id == n1.id
+
+
+def test_log_feedback_event_rejects_unknown_reason(store: Store) -> None:
+    qid, n = _seed_query_and_node(store)
+    with pytest.raises(ValueError, match="unknown feedback reason"):
+        store.log_feedback_event(query_id=qid, node_id=n.id, signal=1.0, reason="emoji_smiley")
+
+
+def test_delete_node_cascades_feedback(store: Store) -> None:
+    """FK ON DELETE CASCADE: removing a node also drops any feedback
+    rows that targeted it. Without this, post-1.1.1 cascade removals
+    would leak feedback rows pointing at vanished nodes."""
+    qid, n = _seed_query_and_node(store)
+    store.log_feedback_event(query_id=qid, node_id=n.id, signal=1.0, reason="thumbs_up")
+    store.delete_node(n.id)
+    assert store.list_feedback_events(query_id=qid) == []
+
+
+def test_signal_for_reason_helper_returns_canonical_values() -> None:
+    """The HTTP layer trusts this helper to default signal magnitudes
+    when callers only supply `reason`. All four reasons must map."""
+    from mnemo.store import signal_for_reason
+
+    assert signal_for_reason("thumbs_up") == 1.0
+    assert signal_for_reason("thumbs_down") == -1.0
+    assert signal_for_reason("cite_copied") == 0.5
+    assert signal_for_reason("inferred_requery") == -0.5
+    with pytest.raises(ValueError, match="unknown feedback reason"):
+        signal_for_reason("not_a_reason")
+
+
 # --- Context manager -------------------------------------------------------
 
 
