@@ -170,6 +170,79 @@ tree-sitter-markdown>=0.4
 
 Combined: phase 1 + 2 + 3 -> 478 -> 539 passing tests, 0 failing.
 
+### Added (v2.0 phase 4 -- Tier 1 universal code_repo ingestion)
+
+The first phase that produces real code-graph nodes. Tier 1 covers
+language-structure extraction: one node per file, one per top-level
+declaration, one per class method, plus three structural edge types
+(``defines`` / ``method_of`` / ``imports``).
+
+Tier 2 (cross-file call resolution) and Tier 3 (framework extractors)
+land in phases 5-8.
+
+- **Four new node types.** ``code_module`` (one per source file),
+  ``code_function`` (top-level function), ``code_class`` (top-level
+  class), ``code_method`` (method on a class). All four go through
+  ``Node.new()`` and the standard ingest path -- they're indexed,
+  retrievable, and BASE-aware just like memory_* types.
+- **Three new edge relations.** ``defines`` (module -> top-level
+  declaration), ``method_of`` (method -> containing class),
+  ``imports`` (module -> module, best-effort cross-file). Inferred
+  edges carry ``confidence`` so retrieval can downweight uncertain
+  links: ``imports`` lands at 0.9 (high confidence inside the file's
+  AST, lower than 1.0 because the cross-file resolution is
+  shallow / single-segment match).
+- **``mnemo.parsers.code`` module.** Walks a tree-sitter AST and
+  emits :class:`CodeUnit` records. Languages with a structural
+  extractor at launch: Python (top-level defs, classes, methods
+  including decorated ones, docstring -> description, imports).
+  Other bundled languages (JS / TS / TSX / Go / JSON / YAML /
+  Markdown) get a module-only fallback so the file's existence
+  stays queryable; per-language extractors for those land in
+  follow-on phases.
+- **``mnemo.ingest.parse_code_file``.** New dispatch path: a
+  ``code_repo`` source maps each file through the tree-sitter
+  extractor and yields multiple :class:`ParsedFile` records (one
+  per :class:`CodeUnit`). Edge intent (children / parent / imports)
+  travels in ``frontmatter_json`` under a ``code_unit`` key.
+- **``reindex`` post-pass.** After the upsert loop, code units'
+  edge intent gets resolved against the freshly-populated graph.
+  ``defines`` and ``method_of`` are within-file and always
+  resolve; ``imports`` is best-effort -- unmatched targets
+  silently produce no edge so stdlib / pip-installed imports
+  don't pollute the graph with dangling pointers.
+- **``code_repo`` default include patterns.** A registered
+  ``code_repo`` source with no user-supplied include set walks the
+  bundled tree-sitter extensions (``*.py``, ``*.ts``, ``*.tsx``,
+  ``*.js``, ``*.go``, ``*.json``, ``*.yaml``, ``*.md``, ...). The
+  walker reuses ``auto_router.DEFAULT_SKIP_DIRS`` so ``.git`` /
+  ``node_modules`` / ``__pycache__`` / etc. never reach the
+  extractor.
+- **Line-range source_paths.** Declaration nodes use
+  ``<file>:<start>-<end>`` as their ``source_path`` so two same-name
+  functions in the same file (overloads, conditional definitions)
+  get distinct keys. ``paths.path_under_source`` strips the suffix
+  before path comparison so reconciliation + cascade delete continue
+  to work correctly. Modules keep the bare file path.
+- **Body truncation.** Function and module bodies > 60 lines get a
+  ``... (N more lines)`` trailing marker so retrieval hits don't
+  blow the token budget on a 5,000-line file.
+
+### Tests (phase 4)
+
+- ``tests/unit/test_v2_schema.py`` -- 8 new tests covering the four
+  code node types and the three structural edge relations.
+- ``tests/unit/test_parsers_code.py`` -- 16 tests covering the
+  Python extractor (decls, decorated methods, docstrings, imports,
+  body truncation, line-range source_paths) and the module-only
+  fallback for JSON / Markdown / JS / unknown.
+- ``tests/unit/test_ingest_code_repo.py`` -- 10 tests covering the
+  ingest wiring: default include, scan_source dispatch, skip-dirs
+  passthrough, and the reindex edge post-pass for ``defines`` /
+  ``method_of`` / ``imports``.
+
+Combined: phases 1 -> 4 advance 478 -> 573 passing tests, 0 failing.
+
 ## [1.2.1] - 2026-05-11
 
 **Closing the 1.2.x line.** A real-use test of v1.2.0 against a
