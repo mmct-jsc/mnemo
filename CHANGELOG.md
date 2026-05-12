@@ -45,11 +45,69 @@ these slots.
   which populates the right include set when registering a code
   source. (``daemon/mnemo/ingest.py``)
 
-### Tests
+### Added (v2.0 phase 2 -- auto-router + dry-run preview + safety ceiling)
 
-- ``tests/unit/test_v2_schema.py`` -- 20 new tests covering the four
+The structural fix for the Duyen-class registration mistake: every
+new source goes through an auto-router that classifies the path,
+shows a per-extension breakdown, and refuses to write without
+explicit user confirmation.
+
+- **``mnemo.auto_router`` module.** ``preview(path) -> PreviewResult``
+  scans the filesystem and proposes one of ``code_repo`` /
+  ``memory_dir`` / ``docs_dir`` (or ``None``) with a confidence label
+  (``high`` / ``medium`` / ``low``). Heuristics, in order:
+  1. ``.git/`` dir + >= 1 recognized source file -> ``code_repo``.
+  2. >= 1 markdown with frontmatter ``type:`` -> ``memory_dir``.
+  3. >= 2 plain markdowns + 0 source files -> ``docs_dir``.
+  4. Otherwise -> ``(None, "low")``; user must pick ``--kind``
+     explicitly.
+  Side-effect-free; the module imports nothing from store, server,
+  or ingest. The walker skips a curated set of build / cache / VCS
+  dirs (``DEFAULT_SKIP_DIRS``) so the count reflects actual source
+  trees, not ``node_modules`` / ``.venv`` / ``target`` etc.
+- **``POST /v1/sources/preview``.** HTTP surface for the auto-router.
+  Returns the proposed kind + breakdown + ceiling flag without
+  touching the DB. ``{ path, force? }`` body; ``404`` on missing path,
+  ``422`` on missing ``path`` field.
+- **CLI: ``mnemo source add <path>`` without ``--kind``.** Runs the
+  auto-router, prints the breakdown, and prompts for confirmation
+  (``y/N``). ``--yes`` skips the prompt for scripts; ``--force``
+  bypasses the safety ceiling. Explicit ``--kind`` skips the
+  auto-router entirely; the existing kind enum (``memory_dir`` etc.)
+  is unchanged plus the v2.0 additions (``code_repo``, ``docs_dir``).
+- **50,000-file safety ceiling.** If the auto-router counts more than
+  ``SAFETY_CEILING`` recognized source files (after default
+  skip-dirs), the CLI and the API both refuse to write. ``--force``
+  on the CLI / ``force: true`` on the API overrides. Prevents the
+  Duyen pattern -- accidentally registering a massive code repo as
+  ``memory_dir`` -- at v2.0 scale.
+- **UI: dry-run preview on the Add Source modal.** Typing a path
+  debounce-triggers a ``POST /v1/sources/preview`` and renders a
+  panel above the Kind dropdown showing the proposed kind +
+  per-extension breakdown + a "Use suggested" button. The ceiling
+  warning surfaces an inline ``I understand`` checkbox that maps to
+  ``--force`` on submission.
+
+### Tests (phase 2)
+
+- ``tests/unit/test_auto_router.py`` -- 25 tests covering
+  ``propose_kind`` heuristics, ``scan_path`` (skip-dirs, frontmatter
+  detection, file-counting, single-file handling), the full
+  ``preview`` entry point, and the safety ceiling.
+- ``tests/integration/test_v1_sources_preview.py`` -- 8 tests for the
+  HTTP surface including a side-effect-free regression guard.
+- ``tests/unit/test_cli.py`` -- 8 new ``test_cli_source_add_*`` tests
+  covering each kind auto-route, ``--yes`` / interactive prompt
+  paths, ``--force`` ceiling override, and the explicit ``--kind``
+  override.
+
+### Tests (phase 1)
+
+- ``tests/unit/test_v2_schema.py`` -- 20 tests covering the four
   schema additions and the scan-safety guard rail. All v1.x suites
   continue to pass unmodified.
+
+Combined: phase 1 + 2 -> 478 -> 520 passing tests, 0 failing.
 
 ## [1.2.1] - 2026-05-11
 

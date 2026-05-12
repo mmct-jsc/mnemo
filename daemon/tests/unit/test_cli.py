@@ -84,6 +84,122 @@ def test_cli_source_add_invalid_kind(runner: CliRunner, tmp_path: Path) -> None:
     assert result.exit_code != 0
 
 
+# --- v2.0 phase 2: auto-router + --yes / --force flags --------------------
+
+
+def test_cli_source_add_auto_routes_memory_dir(runner: CliRunner, tmp_path: Path) -> None:
+    """Without --kind, the CLI runs the auto-router. Typed-frontmatter
+    markdown -> memory_dir; --yes accepts the suggestion."""
+    src = _seed_memory(tmp_path)
+    result = runner.invoke(app, ["source", "add", str(src), "--yes"])
+    assert result.exit_code == 0, result.stdout
+    assert "memory_dir" in result.stdout
+    listing = runner.invoke(app, ["source", "list", "--json"])
+    data = json.loads(listing.stdout)
+    assert len(data) == 1
+    assert data[0]["kind"] == "memory_dir"
+
+
+def test_cli_source_add_auto_routes_code_repo(runner: CliRunner, tmp_path: Path) -> None:
+    """`.git/` + `.py` files -> code_repo; --yes accepts."""
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "main.py").write_text("x = 1\n", encoding="utf-8")
+    result = runner.invoke(app, ["source", "add", str(tmp_path), "--yes"])
+    assert result.exit_code == 0, result.stdout
+    assert "code_repo" in result.stdout
+    listing = runner.invoke(app, ["source", "list", "--json"])
+    data = json.loads(listing.stdout)
+    assert data[0]["kind"] == "code_repo"
+
+
+def test_cli_source_add_auto_routes_docs_dir(runner: CliRunner, tmp_path: Path) -> None:
+    """Two plain markdowns, no source files, no .git -> docs_dir."""
+    (tmp_path / "intro.md").write_text("# Intro\n", encoding="utf-8")
+    (tmp_path / "guide.md").write_text("# Guide\n", encoding="utf-8")
+    result = runner.invoke(app, ["source", "add", str(tmp_path), "--yes"])
+    assert result.exit_code == 0, result.stdout
+    listing = runner.invoke(app, ["source", "list", "--json"])
+    data = json.loads(listing.stdout)
+    assert data[0]["kind"] == "docs_dir"
+
+
+def test_cli_source_add_no_kind_no_match_exits_nonzero(runner: CliRunner, tmp_path: Path) -> None:
+    """An empty directory has no auto-routable signal. The CLI MUST NOT
+    write a row and MUST tell the user to pass --kind explicitly."""
+    result = runner.invoke(app, ["source", "add", str(tmp_path), "--yes"])
+    assert result.exit_code != 0
+    assert "--kind" in result.stdout
+    listing = runner.invoke(app, ["source", "list", "--json"])
+    assert json.loads(listing.stdout) == []
+
+
+def test_cli_source_add_prompt_declined_does_not_register(
+    runner: CliRunner, tmp_path: Path
+) -> None:
+    """Without --yes, the CLI prompts. Feeding 'n' on stdin declines."""
+    src = _seed_memory(tmp_path)
+    result = runner.invoke(app, ["source", "add", str(src)], input="n\n")
+    # Exit code may be 0 (clean decline) or 1 (cancelled) -- either way,
+    # the source row must not exist.
+    listing = runner.invoke(app, ["source", "list", "--json"])
+    assert json.loads(listing.stdout) == []
+    # Cosmetic: declining should leave a "cancelled" hint somewhere.
+    assert result.exit_code in (0, 1)
+
+
+def test_cli_source_add_prompt_accepted_registers(runner: CliRunner, tmp_path: Path) -> None:
+    """Feeding 'y' on stdin accepts the suggestion."""
+    src = _seed_memory(tmp_path)
+    result = runner.invoke(app, ["source", "add", str(src)], input="y\n")
+    assert result.exit_code == 0, result.stdout
+    listing = runner.invoke(app, ["source", "list", "--json"])
+    data = json.loads(listing.stdout)
+    assert data[0]["kind"] == "memory_dir"
+
+
+def test_cli_source_add_kind_override_skips_prompt(runner: CliRunner, tmp_path: Path) -> None:
+    """Explicit --kind is an unambiguous user command; no prompt."""
+    (tmp_path / "anything.md").write_text("not a memory dir, but I said so\n", encoding="utf-8")
+    result = runner.invoke(app, ["source", "add", str(tmp_path), "--kind", "docs_dir"])
+    assert result.exit_code == 0
+    listing = runner.invoke(app, ["source", "list", "--json"])
+    data = json.loads(listing.stdout)
+    assert data[0]["kind"] == "docs_dir"
+
+
+def test_cli_source_add_ceiling_blocks_without_force(
+    runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A path with too many source files refuses without --force."""
+    from mnemo import auto_router
+
+    monkeypatch.setattr(auto_router, "SAFETY_CEILING", 3)
+    (tmp_path / ".git").mkdir()
+    for i in range(5):
+        (tmp_path / f"f{i}.py").write_text("x = 1\n", encoding="utf-8")
+    result = runner.invoke(app, ["source", "add", str(tmp_path), "--yes"])
+    assert result.exit_code != 0
+    assert "--force" in result.stdout or "ceiling" in result.stdout.lower()
+    listing = runner.invoke(app, ["source", "list", "--json"])
+    assert json.loads(listing.stdout) == []
+
+
+def test_cli_source_add_force_overrides_ceiling(
+    runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--force lets the user register past the safety ceiling."""
+    from mnemo import auto_router
+
+    monkeypatch.setattr(auto_router, "SAFETY_CEILING", 3)
+    (tmp_path / ".git").mkdir()
+    for i in range(5):
+        (tmp_path / f"f{i}.py").write_text("x = 1\n", encoding="utf-8")
+    result = runner.invoke(app, ["source", "add", str(tmp_path), "--yes", "--force"])
+    assert result.exit_code == 0, result.stdout
+    listing = runner.invoke(app, ["source", "list", "--json"])
+    assert json.loads(listing.stdout)[0]["kind"] == "code_repo"
+
+
 def test_cli_source_remove(runner: CliRunner, tmp_path: Path) -> None:
     src = tmp_path / "mem"
     src.mkdir()

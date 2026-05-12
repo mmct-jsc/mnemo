@@ -23,7 +23,7 @@ import logging
 
 import typer
 
-from mnemo import __version__, daemon, ingest, paths, retrieve
+from mnemo import __version__, auto_router, daemon, ingest, paths, retrieve
 from mnemo.embed import Embedder
 from mnemo.store import Store
 
@@ -287,13 +287,90 @@ def status() -> None:
 @source_app.command("add")
 def source_add(
     path: str,
-    kind: str = typer.Option(..., "--kind", help="memory_dir | claude_md | plan_dir"),
+    kind: str | None = typer.Option(
+        None,
+        "--kind",
+        help=(
+            "memory_dir | claude_md | plan_dir | transcripts | code_repo | docs_dir. "
+            "Omit to let the auto-router propose a kind based on the path's contents."
+        ),
+    ),
     project_key: str | None = typer.Option(None, "--project-key"),
+    yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help="Skip the auto-router confirmation prompt.",
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help=(
+            "Bypass the 50k-file safety ceiling. Only relevant when the "
+            "auto-router scans a large code_repo."
+        ),
+    ),
 ) -> None:
+    """Register a source. v2.0 phase 2: omit ``--kind`` to use the auto-router.
+
+    The auto-router scans the path on disk, proposes a kind
+    (``code_repo`` / ``memory_dir`` / ``docs_dir``) plus a confidence,
+    and prints a per-extension file breakdown. It never writes the row
+    without explicit confirmation -- pass ``--yes`` to skip the
+    interactive prompt in scripts.
+
+    Explicit ``--kind`` skips the auto-router entirely; the user has
+    committed to a classification and the source row is written
+    immediately. The safety ceiling does not apply on this path.
+    """
+    if kind is None:
+        # Auto-router path.
+        try:
+            result = auto_router.preview(path, force=force)
+        except FileNotFoundError as exc:
+            typer.echo(f"error: {exc}", err=True)
+            raise typer.Exit(code=1) from None
+
+        # Print the breakdown so the user can sanity-check before writing.
+        typer.echo(f"path: {result.path}")
+        typer.echo(
+            f"proposed kind: {result.proposed_kind or '(none)'}  (confidence: {result.confidence})"
+        )
+        typer.echo(f"total files (after skip-dirs): {result.breakdown.total_files}")
+        if result.breakdown.by_ext:
+            typer.echo("by extension:")
+            for ext, count in sorted(result.breakdown.by_ext.items(), key=lambda kv: -kv[1]):
+                typer.echo(f"  {ext or '(none)':<12} {count}")
+
+        if result.exceeds_safety_ceiling:
+            typer.echo(
+                "refusing: this path exceeds the "
+                f"{auto_router.SAFETY_CEILING}-file safety ceiling. "
+                "Re-run with --force to override, or narrow the source "
+                "with `--include` / `--exclude` after registration.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+
+        if result.proposed_kind is None:
+            typer.echo(
+                "auto-router couldn't propose a kind. Re-run with "
+                "--kind <memory_dir|claude_md|plan_dir|code_repo|docs_dir> "
+                "to register explicitly."
+            )
+            raise typer.Exit(code=1)
+
+        if not yes:
+            confirmed = typer.confirm(f"Register as {result.proposed_kind}?", default=False)
+            if not confirmed:
+                typer.echo("cancelled")
+                raise typer.Exit(code=0)
+        kind = result.proposed_kind
+
     store = _open_store()
     try:
         store.register_source(path, kind, project_key=project_key)
-        typer.echo(f"registered: {path}")
+        typer.echo(f"registered: {path}  [{kind}]")
     finally:
         store.close()
 
