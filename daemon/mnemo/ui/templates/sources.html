@@ -177,77 +177,10 @@
 </section>
 
 <script>
-/**
- * Reusable autocomplete component. Driven by an async fetcher and a
- * localStorage-backed recents list.
- *
- *   const ac = makeAutocomplete({
- *     recentsKey: 'mnemo.recent.<...>',
- *     fetchSuggestions: async (q) => [{ value: '...', meta: '...' }, ...],
- *   });
- *   ac.show(currentValue);    // open with recents only
- *   ac.refresh(typedValue);   // re-fetch suggestions, debounced upstream
- *   ac.move(±1);              // arrow-key navigation
- *   ac.recordRecent(picked);  // persist a freshly chosen value
- *
- * Each entry is { kind, value, meta? } where kind is 'recent' or 'known' or 'fs'.
- */
-function makeAutocomplete({ recentsKey, fetchSuggestions }) {
-  return {
-    open: false,
-    activeIdx: -1,
-    recents: [],            // strings
-    suggestions: [],        // { value, meta? }[]
-    init() {
-      try {
-        const raw = localStorage.getItem(recentsKey);
-        this.recents = Array.isArray(JSON.parse(raw)) ? JSON.parse(raw) : [];
-      } catch (_) { this.recents = []; }
-    },
-    show(currentValue) {
-      this.open = true;
-      this.activeIdx = -1;
-      this.refresh(currentValue || '');
-    },
-    async refresh(query) {
-      try {
-        this.suggestions = await fetchSuggestions(query || '');
-      } catch (_) { this.suggestions = []; }
-    },
-    get entries() {
-      // Merge recents (filtered to those starting with current value)
-      // and live suggestions, dedup by value, recents listed first.
-      const seen = new Set();
-      const out = [];
-      for (const v of this.recents) {
-        if (seen.has(v)) continue;
-        seen.add(v);
-        out.push({ kind: 'recent', value: v });
-        if (out.length >= 8) break;
-      }
-      for (const s of this.suggestions) {
-        const v = typeof s === 'string' ? s : s.value;
-        if (seen.has(v)) continue;
-        seen.add(v);
-        out.push({ kind: s.kind || 'fs', value: v, meta: s.meta || null });
-        if (out.length >= 30) break;
-      }
-      return out;
-    },
-    move(delta) {
-      const n = this.entries.length;
-      if (!n) { this.activeIdx = -1; return; }
-      this.activeIdx = (this.activeIdx + delta + n) % n;
-    },
-    recordRecent(value) {
-      if (!value) return;
-      this.recents = [value, ...this.recents.filter(v => v !== value)].slice(0, 12);
-      try {
-        localStorage.setItem(recentsKey, JSON.stringify(this.recents));
-      } catch (_) { /* quota etc */ }
-    },
-  };
-}
+// ``makeAutocomplete`` is now defined globally in base.html so the
+// active-project switcher in the topbar can share the same factory.
+// Don't redeclare it here -- a duplicate ``function`` declaration in
+// the same realm would shadow / SyntaxError depending on script order.
 
 function sourcesPage() {
   return {
@@ -465,78 +398,8 @@ function sourcesPage() {
   .source-form > p.hint { margin: 0 0 0.85rem; }
   .source-form > p.hint code { word-break: break-all; }
 
-  .ac-field { margin-top: 0.85rem; }
-  .ac-field > label { display: block; font-size: 0.85rem; color: var(--fg-muted); margin-bottom: 0.35rem; }
-  .ac-field > label > .hint { font-size: 0.72rem; margin-left: 0.35rem; }
-  .ac-field > input,
-  .ac-field > select {
-    width: 100%;
-    padding: 0.55rem 0.75rem;
-    font-family: var(--mono);
-    font-size: 0.88rem;
-  }
-  .ac-field .ac-hint { margin: 0.35rem 0 0; font-size: 0.75rem; }
-
-  .ac-wrap { position: relative; }
-  .ac-wrap input {
-    width: 100%;
-    padding: 0.55rem 0.75rem;
-    font-family: var(--mono);
-    font-size: 0.88rem;
-  }
-  .ac-pop {
-    position: absolute; top: calc(100% + 4px); left: 0; right: 0;
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
-    max-height: 280px;
-    overflow-y: auto;
-    z-index: 220;  /* above the modal-backdrop */
-    display: flex; flex-direction: column;
-    padding: 0.25rem;
-  }
-  .ac-item {
-    display: grid;
-    grid-template-columns: 56px 1fr auto;
-    align-items: center;
-    gap: 0.6rem;
-    padding: 0.45rem 0.6rem;
-    background: transparent;
-    border: 0;
-    border-radius: var(--radius);
-    color: var(--fg);
-    text-align: left;
-    cursor: pointer;
-    font: inherit;
-    transition: var(--transition);
-  }
-  .ac-item:hover, .ac-item.active {
-    background: var(--panel-2);
-  }
-  .ac-item-kind {
-    font-family: var(--mono);
-    font-size: 0.66rem;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    padding: 0.1rem 0.4rem;
-    border-radius: 999px;
-    text-align: center;
-    white-space: nowrap;
-  }
-  .ac-kind-recent { background: var(--accent-soft); color: var(--accent); }
-  .ac-kind-fs     { background: rgba(141, 182, 240, 0.16); color: var(--type-project); }
-  .ac-kind-known  { background: rgba(182, 232, 140, 0.16); color: var(--type-user); }
-  .ac-item-value {
-    font-family: var(--mono);
-    font-size: 0.85rem;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  }
-  .ac-item-meta {
-    font-size: 0.72rem;
-    color: var(--fg-dim);
-    white-space: nowrap;
-  }
+  /* .ac-* classes (the autocomplete primitive) now live in app.css so
+     the topbar's active-project switcher can use them too. */
 
   .source-form label.check {
     display: flex; align-items: center; gap: 0.5rem;
