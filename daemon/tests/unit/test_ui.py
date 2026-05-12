@@ -114,6 +114,19 @@ def test_settings_page_renders(client: TestClient) -> None:
     assert "budget_tokens" in r.text
 
 
+def test_settings_page_includes_retune_panel(client: TestClient) -> None:
+    """v1.2 phase 6: the /settings page hosts an auto-tune panel that
+    posts to /v1/retune and shows the diff before applying. We assert
+    the panel's anchor strings are present; the JS behavior itself is
+    browser-only and not tested at the Python layer."""
+    r = client.get("/settings")
+    assert r.status_code == 200
+    assert "Auto-tune" in r.text or "retune" in r.text.lower()
+    # The Alpine state factory + the Run button copy.
+    assert "runRetune" in r.text
+    assert "/v1/retune" in r.text
+
+
 def test_node_page_404_when_missing(client: TestClient) -> None:
     r = client.get("/node/nonexistent")
     assert r.status_code == 404

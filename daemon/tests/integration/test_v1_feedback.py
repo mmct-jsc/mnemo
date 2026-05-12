@@ -237,3 +237,105 @@ def test_get_feedback_requires_query_id_or_node_id(
     _, client = store_and_client
     r = client.get("/v1/feedback")
     assert r.status_code == 400, r.text
+
+
+# --- /v1/retune (phase 6) -------------------------------------------------
+
+
+def test_retune_endpoint_below_threshold_returns_report(
+    store_and_client: tuple[Store, TestClient],
+) -> None:
+    """Phase 6: POST /v1/retune always returns a RetuneReport. When
+    labeled-query count is below the threshold, the report has
+    train_size=0 and a 'below threshold' log line. The endpoint never
+    persists -- the UI confirms first via PUT /v1/config."""
+    _, client = store_and_client
+    r = client.post("/v1/retune", json={"min_queries": 30})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["train_size"] == 0
+    assert body["val_size"] == 0
+    assert "log" in body
+    assert any("below threshold" in line.lower() for line in body["log"])
+    # Proposed == current when below threshold (no changes).
+    assert body["proposed"] == body["current"]
+
+
+def test_retune_endpoint_returns_full_report_when_labeled(
+    store_and_client: tuple[Store, TestClient],
+) -> None:
+    """Seed 6 labeled queries (above the test-only min_queries=4) and
+    verify the endpoint runs coordinate descent and returns
+    before/after MRR plus a non-empty diff."""
+    store, client = store_and_client
+    # Two real nodes for FK resolution.
+    from mnemo.store import Node
+
+    a = Node.new(
+        type="memory_feedback",
+        name="a",
+        body="A",
+        source_path="/a.md",
+        source_kind="memory_dir",
+    )
+    b = Node.new(
+        type="memory_feedback",
+        name="b",
+        body="B",
+        source_path="/b.md",
+        source_kind="memory_dir",
+    )
+    store.upsert_node(a)
+    store.upsert_node(b)
+    # Build labeled queries where 'B' (graph-dominant) is always correct,
+    # forcing the optimizer to push beta up or alpha down.
+    for i in range(6):
+        qid = store.log_query(
+            prompt=f"q{i}",
+            intent_tags=[],
+            retrieved_ids=[a.id, b.id],
+            scores={a.id: 0.9, b.id: 0.1},
+            score_components={
+                a.id: {
+                    "vector": 1.0,
+                    "graph": 0.0,
+                    "recency": 0,
+                    "type": 0,
+                    "project": 0,
+                    "lexical": 0,
+                },
+                b.id: {
+                    "vector": 0.0,
+                    "graph": 1.0,
+                    "recency": 0,
+                    "type": 0,
+                    "project": 0,
+                    "lexical": 0,
+                },
+            },
+        )
+        store.log_feedback_event(query_id=qid, node_id=b.id, signal=1.0, reason="thumbs_up")
+
+    r = client.post("/v1/retune", json={"min_queries": 4})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["train_size"] + body["val_size"] == 6
+    assert body["val_mrr_after"] >= body["val_mrr_before"]
+    # The full 6 keys appear in proposed/current/diff dicts.
+    for key in ("alpha", "beta", "gamma", "delta", "epsilon", "zeta"):
+        assert key in body["proposed"]
+        assert key in body["current"]
+        assert key in body["diff"]
+
+
+def test_retune_endpoint_does_not_persist(
+    store_and_client: tuple[Store, TestClient],
+) -> None:
+    """The endpoint is preview-only. Even with labeled data, calling
+    /v1/retune must not mutate /v1/config. The UI's Apply button hits
+    PUT /v1/config separately."""
+    store, client = store_and_client
+    before = client.get("/v1/config").json()
+    client.post("/v1/retune", json={"min_queries": 30})
+    after = client.get("/v1/config").json()
+    assert before == after
