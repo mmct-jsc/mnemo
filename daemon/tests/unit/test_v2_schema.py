@@ -220,20 +220,23 @@ def test_add_edge_overwrite_updates_confidence(store: Store) -> None:
 # no kind-specific default yields nothing instead of every file.
 
 
-def test_scan_source_code_repo_with_no_include_yields_nothing(tmp_path) -> None:  # type: ignore[no-untyped-def]
-    """A freshly-registered code_repo (no include set, no parser yet)
-    must not walk every file in the directory tree.
+def test_scan_source_code_repo_walks_python_files_after_phase_4(  # type: ignore[no-untyped-def]
+    tmp_path,
+) -> None:
+    """v2.0 phase 4 wired the tree-sitter ingester for code_repo, so a
+    source pointing at a directory with ``.py`` files now produces
+    ``code_module`` (+ declaration) nodes.
 
-    Phase 2's auto-router will populate include patterns; phase 4 wires
-    the tree-sitter parser. Until then, scan_source on code_repo is a
-    no-op so accidental registration can't reproduce a Duyen-style mass
-    misclassification under the new kind.
+    Phase 1 originally asserted the opposite -- the safety rail
+    yielding nothing -- because no parser was wired. This test
+    replaces that assertion now that phase 4 ships a real ingester.
+    The detailed shape (one module + one function + edges) lives in
+    ``test_ingest_code_repo.py``; here we only assert non-emptiness.
     """
     from mnemo import ingest
     from mnemo.store import Source
 
-    (tmp_path / "main.py").write_text("def hello(): pass\n", encoding="utf-8")
-    (tmp_path / "README.md").write_text("# repo\n", encoding="utf-8")
+    (tmp_path / "main.py").write_text("def hello():\n    return 1\n", encoding="utf-8")
     src = Source(
         path=str(tmp_path),
         kind="code_repo",
@@ -242,7 +245,9 @@ def test_scan_source_code_repo_with_no_include_yields_nothing(tmp_path) -> None:
         enabled=True,
     )
     parsed = list(ingest.scan_source(src))
-    assert parsed == []
+    types = {p.type for p in parsed}
+    assert "code_module" in types
+    assert "code_function" in types
 
 
 def test_scan_source_docs_dir_with_no_include_yields_nothing(tmp_path) -> None:  # type: ignore[no-untyped-def]
@@ -260,3 +265,137 @@ def test_scan_source_docs_dir_with_no_include_yields_nothing(tmp_path) -> None: 
     )
     parsed = list(ingest.scan_source(src))
     assert parsed == []
+
+
+# --- v2.0 phase 4: Tier 1 code node types + edge relations ----------------
+
+
+def test_node_types_includes_tier1_code_types() -> None:
+    for t in ("code_module", "code_function", "code_class", "code_method"):
+        assert t in NODE_TYPES, t
+
+
+def test_edge_relations_includes_tier1_code_relations() -> None:
+    # `defines`: module -> top-level function / class
+    # `method_of`: method -> containing class
+    # `imports`: module -> imported module (best-effort cross-file)
+    for rel in ("defines", "method_of", "imports"):
+        assert rel in EDGE_RELATIONS, rel
+
+
+def test_node_new_accepts_code_module(store: Store) -> None:
+    n = Node.new(
+        type="code_module",
+        name="auth.py",
+        body="def login(): pass\n",
+        source_path="/repo/auth.py",
+        source_kind="code_repo",
+        description="Module: auth",
+    )
+    store.upsert_node(n)
+    got = store.get_node(n.id)
+    assert got is not None
+    assert got.type == "code_module"
+
+
+def test_node_new_accepts_code_function(store: Store) -> None:
+    n = Node.new(
+        type="code_function",
+        name="login",
+        body="def login():\n    return True\n",
+        source_path="/repo/auth.py:1-2",
+        source_kind="code_repo",
+        description="Authenticate a user.",
+    )
+    store.upsert_node(n)
+    got = store.get_node(n.id)
+    assert got is not None
+    assert got.type == "code_function"
+
+
+def test_node_new_accepts_code_class_and_method(store: Store) -> None:
+    cls = Node.new(
+        type="code_class",
+        name="Session",
+        body="class Session:\n    pass\n",
+        source_path="/repo/auth.py:5-10",
+        source_kind="code_repo",
+    )
+    method = Node.new(
+        type="code_method",
+        name="renew",
+        body="def renew(self):\n    pass\n",
+        source_path="/repo/auth.py:7-8",
+        source_kind="code_repo",
+    )
+    store.upsert_node(cls)
+    store.upsert_node(method)
+    assert store.get_node(cls.id) is not None
+    assert store.get_node(method.id) is not None
+
+
+def test_add_edge_accepts_defines_relation(store: Store) -> None:
+    mod = Node.new(
+        type="code_module",
+        name="auth.py",
+        body="",
+        source_path="/repo/auth.py",
+        source_kind="code_repo",
+    )
+    fn = Node.new(
+        type="code_function",
+        name="login",
+        body="",
+        source_path="/repo/auth.py:1-1",
+        source_kind="code_repo",
+    )
+    store.upsert_node(mod)
+    store.upsert_node(fn)
+    store.add_edge(mod.id, fn.id, "defines")
+    edges = store.get_edges(src_id=mod.id)
+    assert edges[0].relation == "defines"
+
+
+def test_add_edge_accepts_method_of_relation(store: Store) -> None:
+    cls = Node.new(
+        type="code_class",
+        name="Session",
+        body="",
+        source_path="/repo/auth.py:1-5",
+        source_kind="code_repo",
+    )
+    method = Node.new(
+        type="code_method",
+        name="renew",
+        body="",
+        source_path="/repo/auth.py:2-3",
+        source_kind="code_repo",
+    )
+    store.upsert_node(cls)
+    store.upsert_node(method)
+    store.add_edge(method.id, cls.id, "method_of")
+    edges = store.get_edges(src_id=method.id)
+    assert edges[0].relation == "method_of"
+
+
+def test_add_edge_accepts_imports_relation(store: Store) -> None:
+    a = Node.new(
+        type="code_module",
+        name="auth.py",
+        body="",
+        source_path="/repo/auth.py",
+        source_kind="code_repo",
+    )
+    b = Node.new(
+        type="code_module",
+        name="db.py",
+        body="",
+        source_path="/repo/db.py",
+        source_kind="code_repo",
+    )
+    store.upsert_node(a)
+    store.upsert_node(b)
+    store.add_edge(a.id, b.id, "imports", confidence=0.8)
+    edges = store.get_edges(src_id=a.id)
+    assert edges[0].relation == "imports"
+    assert edges[0].confidence == 0.8

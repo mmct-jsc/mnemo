@@ -9,6 +9,7 @@ paths and exposes overrides via the ``MNEMO_HOME`` environment variable
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 
@@ -107,6 +108,11 @@ def path_under_source(node_path: str, src_path: str, src_kind: str) -> bool:
     ``docs_dir`` to the directory family; both rely on the same "descendant
     of src_path" semantics so no per-kind branch is needed.
 
+    v2.0 phase 4: ``code_repo`` declaration nodes carry a line-range
+    suffix (``<file>:<start>-<end>``) so two same-name functions get
+    distinct keys. Strip the suffix before path comparison; the file
+    itself is what the source owns, not the line range.
+
     Used by:
     - ingest reconciliation (sweep nodes whose files vanished from a tracked
       source).
@@ -114,7 +120,7 @@ def path_under_source(node_path: str, src_path: str, src_kind: str) -> bool:
       unregistered, so the graph doesn't keep stale entries after the user
       cleans up a misclassified registration).
     """
-    np = Path(node_path)
+    np = Path(_strip_line_range(node_path))
     sp = Path(src_path)
     if src_kind == "claude_md":
         return np == sp
@@ -123,6 +129,16 @@ def path_under_source(node_path: str, src_path: str, src_kind: str) -> bool:
         return True
     except ValueError:
         return False
+
+
+_LINE_RANGE_RE = re.compile(r":\d+-\d+$")
+
+
+def _strip_line_range(source_path: str) -> str:
+    """Strip the v2.0 ``:<start>-<end>`` suffix from a code declaration
+    source_path. The ``:NUM-NUM`` pattern can't appear in real POSIX
+    or Windows paths so the pattern match is unambiguous."""
+    return _LINE_RANGE_RE.sub("", source_path)
 
 
 def project_key_from_abs(abs_path: str) -> str:

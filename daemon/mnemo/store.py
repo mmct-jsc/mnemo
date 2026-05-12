@@ -72,10 +72,17 @@ NODE_TYPES = frozenset(
         "session_summary",
         # v2.0 phase 1: decision provenance. One node per git commit
         # ingested from a code_repo source (phase 9 wires the parser).
-        # Tier 1/2/3 code node types (code_module, code_function, ...)
-        # arrive with their respective phases (4 / 5 / 6-8) so phase 1
-        # stays a narrowly-scoped schema migration.
         "commit",
+        # v2.0 phase 4: Tier 1 universal code graph. One node per
+        # source file (``code_module``) plus one per top-level
+        # declaration (``code_function`` / ``code_class``) and one per
+        # class method (``code_method``). Tier 1 is language-structure
+        # only -- call resolution lands in phase 5 (Tier 2), framework
+        # extractors in phases 6-8 (Tier 3).
+        "code_module",
+        "code_function",
+        "code_class",
+        "code_method",
     }
 )
 
@@ -108,6 +115,14 @@ EDGE_RELATIONS = frozenset(
         "references_function",  # commit -> code_function it touched
         "motivated_by",  # commit -> memory_feedback / plan_doc / memory_project
         "closed_by",  # memory_feedback / plan_doc -> commit that resolved it
+        # v2.0 phase 4: Tier 1 structural edges. ``defines`` links a
+        # ``code_module`` to its top-level declarations; ``method_of``
+        # links a ``code_method`` to its containing ``code_class``;
+        # ``imports`` links a module to another (best-effort cross-file
+        # resolution -- unresolved targets simply don't get an edge).
+        "defines",
+        "method_of",
+        "imports",
     }
 )
 
