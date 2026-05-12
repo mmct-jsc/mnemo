@@ -623,6 +623,101 @@ tr:hover td { background: var(--panel); }
   cursor: not-allowed;
 }
 
+/* --- Autocomplete primitive --------------------------------------- */
+/*
+ * Used by:
+ *   - Topbar active-project switcher (base.html, fs path suggest)
+ *   - Sources page "Add source" path + project_key inputs
+ *
+ * Markup:
+ *   <div class="ac-wrap">
+ *     <input ...>
+ *     <div class="ac-pop">
+ *       <button class="ac-item active?">
+ *         <span class="ac-item-kind ac-kind-<recent|fs|known>">...</span>
+ *         <span class="ac-item-value">...</span>
+ *         <span class="ac-item-meta">...</span>  -- optional
+ *       </button>
+ *     </div>
+ *   </div>
+ *
+ * ``.ac-field`` is a row layout used inside the Sources modal so the
+ * label, input, and hint stack consistently. Other surfaces (the
+ * topbar popover) skip ``ac-field`` and place ``ac-wrap`` directly.
+ */
+.ac-field { margin-top: 0.85rem; }
+.ac-field > label { display: block; font-size: 0.85rem; color: var(--fg-muted); margin-bottom: 0.35rem; }
+.ac-field > label > .hint { font-size: 0.72rem; margin-left: 0.35rem; }
+.ac-field > input,
+.ac-field > select {
+  width: 100%;
+  padding: 0.55rem 0.75rem;
+  font-family: var(--mono);
+  font-size: 0.88rem;
+}
+.ac-field .ac-hint { margin: 0.35rem 0 0; font-size: 0.75rem; }
+
+.ac-wrap { position: relative; }
+.ac-wrap input {
+  width: 100%;
+  padding: 0.55rem 0.75rem;
+  font-family: var(--mono);
+  font-size: 0.88rem;
+}
+.ac-pop {
+  position: absolute; top: calc(100% + 4px); left: 0; right: 0;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  max-height: 280px;
+  overflow-y: auto;
+  z-index: 220;  /* above modal-backdrop AND above the active-project popover */
+  display: flex; flex-direction: column;
+  padding: 0.25rem;
+}
+.ac-item {
+  display: grid;
+  grid-template-columns: 56px 1fr auto;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.45rem 0.6rem;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius);
+  color: var(--fg);
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  transition: var(--transition);
+}
+.ac-item:hover, .ac-item.active {
+  background: var(--panel-2);
+}
+.ac-item-kind {
+  font-family: var(--mono);
+  font-size: 0.66rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 0.1rem 0.4rem;
+  border-radius: 999px;
+  text-align: center;
+  white-space: nowrap;
+}
+.ac-kind-recent { background: var(--accent-soft); color: var(--accent); }
+.ac-kind-fs     { background: rgba(141, 182, 240, 0.16); color: var(--type-project); }
+.ac-kind-known  { background: rgba(182, 232, 140, 0.16); color: var(--type-user); }
+.ac-item-value {
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ac-item-meta {
+  font-size: 0.72rem;
+  color: var(--fg-dim);
+  white-space: nowrap;
+}
+
 /* --- Recent / lists ----------------------------------------------- */
 
 .section-head {
