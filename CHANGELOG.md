@@ -2,6 +2,55 @@
 
 All notable changes to mnemo are documented here.
 
+## [Unreleased]
+
+### Added (v2.0 phase 1 -- schema migration)
+
+The structural foundation for v2.0's code-intelligence work. Phase 1
+is schema-only: every later phase plugs a real producer into one of
+these slots.
+
+- **Two new source kinds: ``code_repo`` and ``docs_dir``.**
+  ``code_repo`` is the tree-sitter-indexed shape (the parser arrives
+  in phase 3-4); ``docs_dir`` is a markdown harvest without the
+  frontmatter discipline ``memory_dir`` requires. ``register_source``
+  now accepts both. Existing kinds (``memory_dir``, ``claude_md``,
+  ``plan_dir``, ``transcripts``) are unchanged.
+- **New ``commit`` node type.** Holds one node per git commit
+  ingested from a ``code_repo`` source. Wired up by phase 9's
+  ``git log`` walker; the schema is in place now so subsequent phases
+  can write through it without an additional migration.
+- **Three new edge relations -- the provenance family.**
+  ``references_function`` (commit -> code_function it touched),
+  ``motivated_by`` (commit -> ``memory_feedback`` / ``plan_doc`` that
+  motivated it), and ``closed_by`` (``memory_feedback`` / ``plan_doc``
+  -> commit that resolved it). Together they make the v2.0 headline
+  capability -- "why is this function here?" -- queryable.
+- **``edges.confidence FLOAT NOT NULL DEFAULT 1.0``.** Per-edge
+  uncertainty so Tier 2 unresolved ``calls`` (0.5), Tier 3 framework
+  matches (0.9), and auto-inferred provenance edges (0.6, bumped to
+  0.9 on explicit commit-body reference) can carry a calibrated
+  uncertainty into retrieval scoring. The column back-fills to 1.0
+  via the standard ``_ensure_columns`` migration path so v1.x edges
+  retain their bit-for-bit-identical behavior.
+  (``daemon/mnemo/store.py``)
+
+### Changed
+
+- **``scan_source`` yields nothing when include patterns are empty.**
+  Phase 1 safety: until phase 3-4 wire a tree-sitter parser, a
+  freshly-registered ``code_repo`` source must not silently walk every
+  file with the markdown parser. The new invariant -- empty include
+  set means "nothing to walk" -- pairs with phase 2's auto-router,
+  which populates the right include set when registering a code
+  source. (``daemon/mnemo/ingest.py``)
+
+### Tests
+
+- ``tests/unit/test_v2_schema.py`` -- 20 new tests covering the four
+  schema additions and the scan-safety guard rail. All v1.x suites
+  continue to pass unmodified.
+
 ## [1.2.1] - 2026-05-11
 
 **Closing the 1.2.x line.** A real-use test of v1.2.0 against a

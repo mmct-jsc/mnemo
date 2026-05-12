@@ -85,8 +85,11 @@ def path_under_source(node_path: str, src_path: str, src_kind: str) -> bool:
     """True if ``node_path`` is owned by the source rooted at ``src_path``.
 
     For ``claude_md`` sources the relationship is exact (a single file).
-    For directory-shaped sources (``memory_dir``, ``plan_dir``, ``transcripts``)
-    the node must be the directory itself or a descendant.
+    For directory-shaped sources (``memory_dir``, ``plan_dir``,
+    ``transcripts``, ``code_repo``, ``docs_dir``) the node must be the
+    directory itself or a descendant. v2.0 phase 1 adds ``code_repo`` and
+    ``docs_dir`` to the directory family; both rely on the same "descendant
+    of src_path" semantics so no per-kind branch is needed.
 
     Used by:
     - ingest reconciliation (sweep nodes whose files vanished from a tracked

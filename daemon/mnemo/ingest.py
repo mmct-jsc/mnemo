@@ -239,6 +239,15 @@ def _default_include_for_kind(kind: str) -> list[str]:
     parser registry knows how to handle (markdown, plain text, PDF).
     Sources that want narrower behavior set their own ``include``.
     claude_md: always matches its single configured file -- no walk.
+
+    v2.0 phase 1: the new ``code_repo`` and ``docs_dir`` kinds return
+    an empty default. Their parsers / include sets land in later
+    phases (phase 3-4 for code_repo, phase 2 for docs_dir). Returning
+    an empty list pairs with the
+    ``scan_source(...) -> nothing when include_patterns is empty``
+    invariant below: a freshly-registered code_repo source can't
+    silently walk every file with the markdown parser before its
+    real ingester is wired.
     """
     if kind in ("memory_dir", "plan_dir", "transcripts"):
         return ["**/*.md", "**/*.markdown", "**/*.txt", "**/*.pdf"]
@@ -289,6 +298,12 @@ def scan_source(source: Source) -> Iterator[ParsedFile]:
     include_patterns = _parse_pattern_field(source.include) or _default_include_for_kind(
         source.kind
     )
+    # v2.0 phase 1 safety: empty include set means "this kind has no
+    # parser wired yet" (currently only ``code_repo`` / ``docs_dir``
+    # before phase 2/3/4 ship). Yield nothing rather than letting the
+    # rglob fan-out feed every file to the markdown parser.
+    if not include_patterns:
+        return
     exclude_patterns = _parse_pattern_field(source.exclude)
     include_spec = _build_pathspec(include_patterns)
     exclude_spec = _build_pathspec(exclude_patterns)
