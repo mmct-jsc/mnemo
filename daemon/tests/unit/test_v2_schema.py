@@ -312,6 +312,45 @@ def test_add_edge_accepts_calls_relation(store: Store) -> None:
     assert edges[0].confidence == 0.95
 
 
+# --- v2.0 phase 6: Tier 3 framework extractors ---------------------------
+
+
+def test_node_types_includes_code_route() -> None:
+    """``code_route`` is a Tier 3 node emitted by backend framework
+    extractors (FastAPI, Express, Flask) when they detect a route
+    declaration. Phase 7 adds ``code_component`` + ``code_endpoint``."""
+    assert "code_route" in NODE_TYPES
+
+
+def test_edge_relations_includes_routes_to() -> None:
+    """``routes_to`` links a ``code_route`` node to the handler function
+    that services it. Phase 6's flagship edge for backend frameworks."""
+    assert "routes_to" in EDGE_RELATIONS
+
+
+def test_add_edge_accepts_routes_to_relation(store: Store) -> None:
+    route = Node.new(
+        type="code_route",
+        name="GET /api/users",
+        body="",
+        source_path="/repo/api.py:1-3",
+        source_kind="code_repo",
+    )
+    handler = Node.new(
+        type="code_function",
+        name="list_users",
+        body="",
+        source_path="/repo/api.py:4-6",
+        source_kind="code_repo",
+    )
+    store.upsert_node(route)
+    store.upsert_node(handler)
+    store.add_edge(route.id, handler.id, "routes_to", confidence=0.95)
+    edges = store.get_edges(src_id=route.id, relation="routes_to")
+    assert len(edges) == 1
+    assert edges[0].confidence == 0.95
+
+
 def test_node_new_accepts_code_module(store: Store) -> None:
     n = Node.new(
         type="code_module",

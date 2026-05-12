@@ -320,6 +320,64 @@ Combined: phases 1 -> 5 advance 478 -> 589 passing tests, 0 failing.
   produces ``code_module`` nodes for these languages so the
   graph isn't blocked on them.
 
+### Added (v2.0 phase 6 -- Tier 3 backend framework extractors)
+
+FastAPI, Flask, and Express route extraction. The first Tier 3
+phase wires the framework idioms each of those backends uses into
+graph nodes + edges, setting up the cross-stack sitemap that
+lands when phase 7 ships the React / Next.js side.
+
+- **``code_route`` node type.** One node per detected route
+  declaration. Carries ``framework`` (``fastapi`` / ``flask`` /
+  ``express``), HTTP method (uppercased), and path on its
+  ``code_unit`` intent block. The display ``name`` is
+  ``METHOD path`` (e.g. ``GET /api/users``) so retrieval hits
+  read naturally.
+- **``routes_to`` edge relation.** Route -> handler function.
+  Inferred edges with confidence 0.95 -- within-file resolution
+  is high-confidence by construction (the extractor matched the
+  decorator + handler in the same parse). The post-pass wires
+  the edge by source_path lookup.
+- **``mnemo.extractors.fastapi``.** Matches
+  ``@<receiver>.<method>(<path>, ...)`` decorators on top-level
+  functions where the method name is one of GET / POST / PUT /
+  DELETE / PATCH / HEAD / OPTIONS / TRACE. Stacked decorators on
+  the same handler each emit their own route. The receiver name
+  is intentionally permissive (``app`` / ``router`` / ``api`` /
+  ``v1`` are all valid in real codebases).
+- **``mnemo.extractors.flask``.** Matches
+  ``@<receiver>.route(<path>, methods=[...])`` decorators on
+  top-level functions. Default method is GET when ``methods``
+  is omitted; multi-method lists fan out to one route per verb.
+  ``@app.route`` and ``@blueprint.route`` are detected the same
+  way (any receiver name).
+- **``mnemo.extractors.express``.** Matches top-level
+  ``<receiver>.<method>(<path>, <handler>)`` call expressions
+  where the method name is GET / POST / PUT / DELETE / PATCH /
+  HEAD / OPTIONS / ALL / USE. JavaScript handler resolution is
+  deferred to phase 7 (when JS Tier 1 ships): the route node is
+  emitted but ``handler_source_path`` stays None, so
+  ``routes_to`` doesn't wire yet for Express. The endpoint
+  surface is still there for phase 7's React-side join.
+- **Framework dispatch in ``parsers.code.extract``.** After Tier 1
+  extraction runs, the appropriate set of framework extractors
+  (per ``FRAMEWORK_EXTRACTORS`` in ``mnemo.extractors``) walks
+  the same tree and emits Tier 3 units. A broken extractor is
+  caught defensively -- it can never crash the reindex.
+
+### Tests (phase 6)
+
+- ``tests/unit/test_v2_schema.py`` -- 3 new tests for the
+  ``code_route`` node type and the ``routes_to`` edge.
+- ``tests/unit/test_extractors.py`` -- 12 new tests: 6 for the
+  FastAPI extractor (GET, POST, APIRouter, name shape,
+  no-decorator regression, stacked decorators), 3 for Flask
+  (default GET, ``methods`` kwarg, blueprint), 2 for Express
+  (``app.get`` and ``router.post``), and 1 end-to-end integration
+  test asserting the ``routes_to`` edge appears after reindex.
+
+Combined: phases 1 -> 6 advance 478 -> 604 passing tests, 0 failing.
+
 ## [1.2.1] - 2026-05-11
 
 **Closing the 1.2.x line.** A real-use test of v1.2.0 against a

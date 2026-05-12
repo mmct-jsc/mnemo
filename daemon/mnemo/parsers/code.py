@@ -97,7 +97,9 @@ class CodeUnit:
     (overloads, conditionally-defined) get distinct keys.
     """
 
-    type: str  # "code_module" | "code_function" | "code_class" | "code_method"
+    type: str
+    # "code_module" | "code_function" | "code_class" | "code_method"
+    # | "code_route" (Tier 3)
     name: str
     body: str
     source_path: str
@@ -111,6 +113,15 @@ class CodeUnit:
     # functions / methods do, since Tier 2 emits caller-function
     # ``calls`` edges (not "module calls function" edges).
     call_sites: list[CallSite] = field(default_factory=list)
+    # v2.0 phase 6: Tier 3 backend framework routes carry their
+    # handler pointer here so the reindex post-pass can wire a
+    # ``routes_to`` edge by source_path lookup. ``framework``,
+    # ``method``, ``path`` are framework-tagged metadata. All four
+    # stay None on non-route units (the vast majority).
+    framework: str | None = None
+    route_method: str | None = None
+    route_path: str | None = None
+    handler_source_path: str | None = None
 
 
 # Per-language declaration extractor. Receives the parsed tree + the
@@ -129,10 +140,18 @@ def extract(path: Path, source: bytes, *, language: str) -> list[CodeUnit]:
     Always returns at least one element (the ``code_module`` unit).
     On parser failure, grammar unavailability, or unknown language,
     returns just the module node so the file stays queryable.
+
+    v2.0 phase 6: after Tier 1 extraction, runs any registered
+    Tier 3 framework extractors against the same tree and appends
+    their output. The framework extractors get the Tier 1 unit list
+    so they can thread ``handler_source_path`` pointers without
+    re-walking the AST.
     """
     module = _module_unit(path, source)
     extractor = _LANGUAGE_EXTRACTORS.get(language)
-    if extractor is None:
+    framework_extractors = _framework_extractors_for(language)
+
+    if extractor is None and not framework_extractors:
         return [module]
     try:
         parser = ts_loader.get_parser(language)
@@ -143,12 +162,29 @@ def extract(path: Path, source: bytes, *, language: str) -> list[CodeUnit]:
     except Exception:  # noqa: BLE001 -- C-extension; be defensive
         return [module]
 
-    declarations = extractor(tree, source, module.source_path)
+    declarations: list[CodeUnit] = []
+    if extractor is not None:
+        declarations = extractor(tree, source, module.source_path)
     module.children_source_paths = [
         u.source_path for u in declarations if u.type in ("code_function", "code_class")
     ]
     module.imports = _extract_imports(tree, language)
-    return [module, *declarations]
+
+    framework_units: list[CodeUnit] = []
+    for fx in framework_extractors:
+        try:
+            framework_units.extend(fx(tree, source, module.source_path, declarations))
+        except Exception:  # noqa: BLE001 -- defensive: a broken extractor mustn't crash ingest
+            continue
+    return [module, *declarations, *framework_units]
+
+
+def _framework_extractors_for(language: str) -> list[object]:
+    """Late import to avoid the import cycle:
+    ``parsers.code`` -> ``extractors`` -> ``parsers.code.CodeUnit``."""
+    from mnemo.extractors import FRAMEWORK_EXTRACTORS
+
+    return list(FRAMEWORK_EXTRACTORS.get(language, []))
 
 
 # --- Module node ----------------------------------------------------------

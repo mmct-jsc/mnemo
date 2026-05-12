@@ -83,6 +83,13 @@ NODE_TYPES = frozenset(
         "code_function",
         "code_class",
         "code_method",
+        # v2.0 phase 6: Tier 3 backend framework routes. One ``code_route``
+        # per detected route declaration (FastAPI ``@router.get(...)``,
+        # Flask ``@app.route(...)``, Express ``app.get(path, handler)``,
+        # ...). The ``routes_to`` edge wires each route to its handler
+        # function. Phase 7 adds ``code_component`` + ``code_endpoint``
+        # for the frontend / cross-stack side.
+        "code_route",
     }
 )
 
@@ -130,6 +137,11 @@ EDGE_RELATIONS = frozenset(
         # imports. Unresolved call sites do NOT emit an edge -- the
         # graph stays clean and the LLM can lexical-match if it cares.
         "calls",
+        # v2.0 phase 6: Tier 3 backend framework wiring. ``routes_to``
+        # links a ``code_route`` node to its handler function so
+        # cross-stack sitemap queries can walk Component -> Route ->
+        # Handler -> Service in phase 7+.
+        "routes_to",
     }
 )
 
