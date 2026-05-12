@@ -36,6 +36,24 @@ def _deserialize_float32(blob: bytes) -> list[float]:
     return list(struct.unpack(f"<{n}f", blob))
 
 
+def _edge_confidence(row: object) -> float:
+    """Read the ``confidence`` column from an edges row, defaulting to 1.0.
+
+    v2.0 phase 1 added the column via ``_ensure_columns`` so pre-v2.0
+    stores back-fill on first open. ``sqlite3.Row`` doesn't accept ``.get``,
+    so guard membership before indexing. Defensive against any future
+    SELECT that doesn't include the column.
+    """
+    try:
+        keys = row.keys()  # type: ignore[attr-defined]
+    except AttributeError:
+        return 1.0
+    if "confidence" not in keys:
+        return 1.0
+    val = row["confidence"]  # type: ignore[index]
+    return 1.0 if val is None else float(val)
+
+
 SCHEMA_VERSION = 1
 EMBEDDING_DIM = 384  # all-MiniLM-L6-v2 dim. Bump + reindex to switch models.
 
@@ -52,6 +70,12 @@ NODE_TYPES = frozenset(
         "project_doc",
         "plan_doc",
         "session_summary",
+        # v2.0 phase 1: decision provenance. One node per git commit
+        # ingested from a code_repo source (phase 9 wires the parser).
+        # Tier 1/2/3 code node types (code_module, code_function, ...)
+        # arrive with their respective phases (4 / 5 / 6-8) so phase 1
+        # stays a narrowly-scoped schema migration.
+        "commit",
     }
 )
 
@@ -61,6 +85,12 @@ SOURCE_KINDS = frozenset(
         "claude_md",
         "plan_dir",
         "transcripts",
+        # v2.0 phase 1: new source kinds. ``code_repo`` is the
+        # tree-sitter-indexed shape (phase 4 wires the parser);
+        # ``docs_dir`` is a markdown harvest without the frontmatter
+        # requirement that memory_dir enforces.
+        "code_repo",
+        "docs_dir",
     }
 )
 
@@ -72,6 +102,12 @@ EDGE_RELATIONS = frozenset(
         "supersedes",
         "mentions",
         "co_occurs_with",
+        # v2.0 phase 1: decision provenance family. Producers land in
+        # phase 9 (commit auto-linker). Carrying them in the schema now
+        # so the column / index plumbing is in place before parsers run.
+        "references_function",  # commit -> code_function it touched
+        "motivated_by",  # commit -> memory_feedback / plan_doc / memory_project
+        "closed_by",  # memory_feedback / plan_doc -> commit that resolved it
     }
 )
 
@@ -163,6 +199,13 @@ class Edge:
     weight: float
     source: str
     created_at: int
+    # v2.0 phase 1: per-edge uncertainty. Defaults to 1.0 so all v1.x
+    # edges and any hand-built Edge() in tests keep their old semantics
+    # without a value override. Later phases populate this for inferred
+    # edges: Tier 2 unresolved ``calls`` = 0.5, Tier 3 framework matches
+    # = 0.9, auto-inferred ``motivated_by`` / ``closed_by`` = 0.6 (bumped
+    # to 0.9 when the commit body cites the doc explicitly).
+    confidence: float = 1.0
 
 
 @dataclass
@@ -294,6 +337,9 @@ CREATE TABLE IF NOT EXISTS edges (
   weight     REAL NOT NULL DEFAULT 1.0,
   created_at INTEGER NOT NULL,
   source     TEXT NOT NULL,
+  -- v2.0 phase 1: per-edge uncertainty. Pre-v2.0 rows back-fill to 1.0
+  -- via the ADD COLUMN ... DEFAULT path in _ensure_columns.
+  confidence REAL NOT NULL DEFAULT 1.0,
   PRIMARY KEY (src_id, dst_id, relation),
   FOREIGN KEY (src_id) REFERENCES nodes(id) ON DELETE CASCADE,
   FOREIGN KEY (dst_id) REFERENCES nodes(id) ON DELETE CASCADE
@@ -436,6 +482,16 @@ class Store:
                 "score_components": "TEXT",
             },
         )
+        # v2.0 phase 1: per-edge uncertainty. Existing v1.x edges back-fill
+        # to 1.0 (the column DEFAULT) so retrieval scoring stays
+        # bit-for-bit identical until later phases start emitting <1.0
+        # values for Tier 2/3 inferred edges and the provenance auto-linker.
+        self._ensure_columns(
+            "edges",
+            {
+                "confidence": "REAL NOT NULL DEFAULT 1.0",
+            },
+        )
         row = self.conn.execute("SELECT version FROM schema_version").fetchone()
         if row is None:
             self.conn.execute("INSERT INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,))
@@ -560,6 +616,7 @@ class Store:
                 weight=r["weight"],
                 source=r["source"],
                 created_at=r["created_at"],
+                confidence=_edge_confidence(r),
             )
             for r in rows
         ]
@@ -673,6 +730,7 @@ class Store:
         *,
         weight: float = 1.0,
         source: str = "inferred",
+        confidence: float = 1.0,
     ) -> None:
         if relation not in EDGE_RELATIONS:
             raise ValueError(f"unknown edge relation: {relation!r}")
@@ -681,13 +739,14 @@ class Store:
         with self._lock:
             self.conn.execute(
                 """
-                INSERT INTO edges (src_id, dst_id, relation, weight, created_at, source)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO edges (src_id, dst_id, relation, weight, created_at, source, confidence)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(src_id, dst_id, relation) DO UPDATE SET
                   weight = excluded.weight,
-                  source = excluded.source
+                  source = excluded.source,
+                  confidence = excluded.confidence
                 """,
-                (src_id, dst_id, relation, weight, int(time.time()), source),
+                (src_id, dst_id, relation, weight, int(time.time()), source, confidence),
             )
             self.conn.commit()
 
@@ -722,6 +781,7 @@ class Store:
                 weight=r["weight"],
                 source=r["source"],
                 created_at=r["created_at"],
+                confidence=_edge_confidence(r),
             )
             for r in rows
         ]
