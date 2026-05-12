@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import struct
 import threading
 import time
 import uuid
@@ -21,6 +22,19 @@ from pathlib import Path
 import sqlite_vec
 
 from mnemo.paths import path_under_source
+
+
+def _deserialize_float32(blob: bytes) -> list[float]:
+    """Inverse of :func:`sqlite_vec.serialize_float32`.
+
+    sqlite-vec packs vectors as a little-endian ``float32`` array; the
+    library only provides the serializer because reads typically go
+    through SQL helpers like ``vec_to_json``. For v1.2 phase 2 we need
+    to round-trip query embeddings in Python, so unpack here.
+    """
+    n = len(blob) // 4
+    return list(struct.unpack(f"<{n}f", blob))
+
 
 SCHEMA_VERSION = 1
 EMBEDDING_DIM = 384  # all-MiniLM-L6-v2 dim. Bump + reindex to switch models.
@@ -174,6 +188,10 @@ class Query:
     retrieved_ids: list[str]
     scores: dict[str, float]
     ts: int
+    # v1.2 phase 2: the query embedding, persisted so the inferred-
+    # re-query detector can cosine-compare new prompts against recent
+    # ones. None for pre-1.2 rows that never had an embedding written.
+    embedding: list[float] | None = None
 
 
 @dataclass
@@ -394,6 +412,15 @@ class Store:
             "nodes",
             {
                 "base": "INTEGER NOT NULL DEFAULT 0",
+            },
+        )
+        # v1.2 phase 2: store the query embedding alongside the audit row
+        # so the inferred-re-query detector can do cosine over recent
+        # prompts. NULL on legacy rows; the detector skips those.
+        self._ensure_columns(
+            "queries",
+            {
+                "embedding": "BLOB",
             },
         )
         row = self.conn.execute("SELECT version FROM schema_version").fetchone()
@@ -918,13 +945,23 @@ class Store:
         intent_tags: list[str],
         retrieved_ids: list[str],
         scores: dict[str, float],
+        embedding: list[float] | None = None,
     ) -> str:
+        """Write one audit row. v1.2 phase 2 added the optional
+        ``embedding`` arg; pre-1.2 callers that omit it keep working
+        and their row gets a NULL embedding column."""
         qid = uuid.uuid4().hex
+        emb_blob: bytes | None = None
+        if embedding is not None:
+            if len(embedding) != EMBEDDING_DIM:
+                raise ValueError(f"embedding dim {len(embedding)} != expected {EMBEDDING_DIM}")
+            emb_blob = sqlite_vec.serialize_float32(embedding)
         with self._lock:
             self.conn.execute(
                 """
-                INSERT INTO queries (id, prompt, intent_tags, retrieved_ids, scores, ts)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO queries
+                  (id, prompt, intent_tags, retrieved_ids, scores, ts, embedding)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     qid,
@@ -933,6 +970,7 @@ class Store:
                     json.dumps(retrieved_ids),
                     json.dumps(scores),
                     int(time.time()),
+                    emb_blob,
                 ),
             )
             self.conn.commit()
@@ -953,9 +991,54 @@ class Store:
                 retrieved_ids=json.loads(r["retrieved_ids"]) if r["retrieved_ids"] else [],
                 scores=json.loads(r["scores"]) if r["scores"] else {},
                 ts=r["ts"],
+                embedding=None,
             )
             for r in rows
         ]
+
+    def recent_queries_with_embeddings(
+        self, *, window_seconds: int = 300, limit: int = 100
+    ) -> list[Query]:
+        """Return queries within the last ``window_seconds`` that have
+        an embedding stored, newest first.
+
+        v1.2 phase 2 helper for the inferred-re-query detector: filters
+        out null-embedding (pre-1.2 legacy) rows AND anything older than
+        the window so the cosine loop stays bounded.
+
+        ``limit`` caps the row count to keep the detector cheap even if
+        a burst of queries lands inside the window.
+        """
+        cutoff = int(time.time()) - window_seconds
+        with self._lock:
+            rows = self.conn.execute(
+                """
+                SELECT * FROM queries
+                WHERE ts >= ? AND embedding IS NOT NULL
+                ORDER BY ts DESC, rowid DESC
+                LIMIT ?
+                """,
+                (cutoff, limit),
+            ).fetchall()
+        result: list[Query] = []
+        for r in rows:
+            emb_blob = r["embedding"]
+            # Convert blob back to list[float]. sqlite-vec serializes as
+            # little-endian float32; numpy reads it the same way without
+            # an explicit dtype dance.
+            vec = list(_deserialize_float32(emb_blob)) if emb_blob else None
+            result.append(
+                Query(
+                    id=r["id"],
+                    prompt=r["prompt"],
+                    intent_tags=json.loads(r["intent_tags"]) if r["intent_tags"] else [],
+                    retrieved_ids=json.loads(r["retrieved_ids"]) if r["retrieved_ids"] else [],
+                    scores=json.loads(r["scores"]) if r["scores"] else {},
+                    ts=r["ts"],
+                    embedding=vec,
+                )
+            )
+        return result
 
     # --- Feedback events (v1.2 phase 1) ------------------------------------
 

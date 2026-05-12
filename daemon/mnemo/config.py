@@ -51,6 +51,15 @@ class Config:
     # scoring boost via epsilon). Useful when the user wants more
     # cross-project surfacing.
     project_isolation_mode: str = "strict"
+    # v1.2 phase 2: inferred-re-query detector. When a new prompt is
+    # cosine-similar to a query within the look-back window, the daemon
+    # writes a `signal=-0.5, reason='inferred_requery'` row against the
+    # older query's top-N hits. Tuned conservatively -- 0.85 cosine + 5
+    # minute window matches the design doc's heuristic. Disable by
+    # setting threshold > 1.0.
+    requery_window_seconds: int = 300
+    requery_cosine_threshold: float = 0.85
+    requery_top_n_hits: int = 3
 
 
 # --- Load / save ----------------------------------------------------------
@@ -98,6 +107,9 @@ def save(cfg: Config) -> None:
         "scoring": asdict(cfg.scoring),
         "defaults": asdict(cfg.defaults),
         "recency_half_life_days": cfg.recency_half_life_days,
+        "requery_window_seconds": cfg.requery_window_seconds,
+        "requery_cosine_threshold": cfg.requery_cosine_threshold,
+        "requery_top_n_hits": cfg.requery_top_n_hits,
         "project_isolation_mode": cfg.project_isolation_mode,
     }
     with _lock:
@@ -145,3 +157,9 @@ def _apply(cfg: Config, raw: dict) -> None:
         mode = raw["project_isolation_mode"].strip().lower()
         if mode in ("strict", "boost"):
             cfg.project_isolation_mode = mode
+    if isinstance(raw.get("requery_window_seconds"), int):
+        cfg.requery_window_seconds = max(0, int(raw["requery_window_seconds"]))
+    if isinstance(raw.get("requery_cosine_threshold"), int | float):
+        cfg.requery_cosine_threshold = max(0.0, min(2.0, float(raw["requery_cosine_threshold"])))
+    if isinstance(raw.get("requery_top_n_hits"), int):
+        cfg.requery_top_n_hits = max(0, min(100, int(raw["requery_top_n_hits"])))

@@ -383,6 +383,84 @@ def test_recent_queries_orders_newest_first(store: Store) -> None:
     assert recent[1].prompt == "first"
 
 
+def test_log_query_stores_embedding_when_provided(store: Store) -> None:
+    """v1.2 phase 2: an optional ``embedding`` arg to log_query persists
+    the query's vector representation, so the inferred-re-query detector
+    can do cosine similarity over recent prompts. None by default keeps
+    pre-1.2 callers working unchanged."""
+    emb = [0.1] * 384  # match EMBEDDING_DIM
+    qid = store.log_query(
+        prompt="why mqtt?",
+        intent_tags=["debug"],
+        retrieved_ids=["n1"],
+        scores={"n1": 0.9},
+        embedding=emb,
+    )
+
+    # Reading via the new helper returns the persisted vector verbatim.
+    rows = store.recent_queries_with_embeddings(window_seconds=3600)
+    matching = [r for r in rows if r.id == qid]
+    assert len(matching) == 1
+    persisted_emb = matching[0].embedding
+    assert persisted_emb is not None
+    assert len(persisted_emb) == 384
+    # serialize_float32 truncates to float32 precision; compare with tolerance.
+    for x, y in zip(emb, persisted_emb, strict=True):
+        assert abs(x - y) < 1e-6
+
+
+def test_log_query_without_embedding_stays_backward_compat(store: Store) -> None:
+    """Pre-v1.2 callers that don't pass ``embedding`` must keep working
+    -- the audit row lands and is visible via the (non-filtered)
+    ``recent_queries`` helper; only the new ``recent_queries_with_
+    embeddings`` filter excludes it."""
+    qid = store.log_query(
+        prompt="legacy",
+        intent_tags=[],
+        retrieved_ids=[],
+        scores={},
+    )
+    # Audit row is queryable.
+    all_recent = store.recent_queries()
+    assert any(q.id == qid for q in all_recent)
+    # But the embedding-aware helper drops it (covered by the null-filter
+    # test below; restating here as a backward-compat invariant).
+    embed_aware = store.recent_queries_with_embeddings(window_seconds=3600)
+    assert all(q.id != qid for q in embed_aware)
+
+
+def test_recent_queries_with_embeddings_excludes_older_than_window(store: Store) -> None:
+    """The inferred-re-query detector filters by a time window. Anything
+    older than ``window_seconds`` must be excluded so the cosine loop
+    stays bounded (~10-20 rows)."""
+    emb = [0.2] * 384
+    # Two queries: one logged 'now' and one stamped 10 minutes in the past.
+    store.log_query(prompt="recent", intent_tags=[], retrieved_ids=[], scores={}, embedding=emb)
+    # Write a second row, then manually backdate it via raw SQL so we
+    # don't have to sleep 600 seconds in a test.
+    qid_old = store.log_query(
+        prompt="ancient", intent_tags=[], retrieved_ids=[], scores={}, embedding=emb
+    )
+    now = int(time.time())
+    store.conn.execute("UPDATE queries SET ts = ? WHERE id = ?", (now - 600, qid_old))
+    store.conn.commit()
+
+    rows = store.recent_queries_with_embeddings(window_seconds=300)
+    prompts = {r.prompt for r in rows}
+    assert "recent" in prompts
+    assert "ancient" not in prompts
+
+
+def test_recent_queries_with_embeddings_excludes_null_embedding_rows(store: Store) -> None:
+    """A query row with no embedding (e.g. pre-1.2 legacy data) cannot
+    contribute to the cosine loop. The helper filters them out so the
+    detector loop doesn't have to defensively skip None."""
+    store.log_query(prompt="no-emb", intent_tags=[], retrieved_ids=[], scores={})
+    rows = store.recent_queries_with_embeddings(window_seconds=3600)
+    assert all(r.embedding is not None for r in rows)
+    assert rows == []  # only the no-embedding row exists; helper drops it
+
+
 # --- Feedback events (v1.2) ------------------------------------------------
 
 

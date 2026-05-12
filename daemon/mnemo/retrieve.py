@@ -19,6 +19,7 @@ daemon and tests can tune them.
 
 from __future__ import annotations
 
+import logging
 import math
 import re
 import time
@@ -29,6 +30,8 @@ from mnemo.compress import CompressedHit, ScoredHit
 from mnemo.embed import Embedder
 from mnemo.intent import classify_intent, type_priority_for
 from mnemo.store import Node, Store
+
+log = logging.getLogger(__name__)
 
 # Scoring weights are now in mnemo.config (editable via UI / API).
 # These module attributes are kept for backwards-compatible imports and
@@ -140,11 +143,34 @@ def query(
     if update_graph and len(retrieved_ids) >= 2:
         graph.update_co_occurrence(store, retrieved_ids)
 
+    # 6b. v1.2 phase 2: inferred-re-query feedback.
+    #
+    # BEFORE we persist the current query, look at the recent audit
+    # log. If any prior query within the window is cosine-similar to
+    # this one, treat it as evidence the user re-asked because the
+    # earlier hits missed -- emit feedback against those earlier hits.
+    # Running this before log_query is what keeps us from comparing
+    # the current query to itself.
+    from mnemo import feedback as _fb  # local import to avoid cycle
+
+    try:
+        _fb.infer_requery_feedback(
+            store,
+            query_emb=query_vec,
+            window_seconds=cfg.requery_window_seconds,
+            threshold=cfg.requery_cosine_threshold,
+            top_n=cfg.requery_top_n_hits,
+        )
+    except Exception:
+        # Never let a feedback-detection error abort the user's query.
+        log.exception("inferred_requery detector failed; continuing")
+
     qid = store.log_query(
         prompt=prompt,
         intent_tags=sorted(tags),
         retrieved_ids=retrieved_ids,
         scores={h.node_id: round(h.score, 4) for h in hits},
+        embedding=query_vec,
     )
 
     return RetrievalResult(hits=hits, intent_tags=sorted(tags), tokens_used=used, query_id=qid)
