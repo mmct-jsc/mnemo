@@ -165,12 +165,28 @@ export class MnemoDaemon {
     body: string;
     project_key?: string | null;
     base?: boolean;
-  }): Promise<unknown | null> {
-    // Daemon currently exposes upserts via PUT /v1/nodes/{id}; for adds
-    // the convention is to write a memory file under the project's
-    // memory dir and let the watcher reindex. The extension's "Add Note"
-    // command uses the local FS for that. This stub stays here as a
-    // future hook when /v1/nodes gets a POST.
-    return null;
+  }): Promise<{ id: string; name: string; type: string } | null> {
+    // v1.2 phase 7: POST /v1/nodes lets us create a memory entry over
+    // HTTP without writing a file the watcher then has to pick up.
+    // Returns the new node on success, null on failure (the caller
+    // decides what to surface to the user).
+    try {
+      const r = await fetch(`${MnemoDaemon.configuredUrl()}/v1/nodes`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: opts.type,
+          name: opts.name,
+          description: opts.description,
+          body: opts.body,
+          project_key: opts.project_key ?? null,
+          base: opts.base ?? false,
+        }),
+      });
+      if (!r.ok) return null;
+      return (await r.json()) as never;
+    } catch {
+      return null;
+    }
   }
 }

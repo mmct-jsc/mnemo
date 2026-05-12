@@ -1,12 +1,13 @@
-"""Integration tests for /v1 versioned API + 308 redirects from legacy paths.
+"""Integration tests for /v1 versioned API + legacy-path removal.
 
-Phase 1 of the v1.1 plan. We verify:
-- Public endpoints respond at /v1/...
-- Legacy paths return 308 to their /v1/... equivalent
-- 308 preserves the HTTP method (POST, DELETE)
-- Every response carries X-Mnemo-Api-Version: 1
-- /v1/openapi.json contains only /v1 paths
-- The default /openapi.json is also v1-only (used by /docs)
+The 308 bridge from v1.1 is GONE in v1.2 (phase 7 housekeeping):
+- ``/health``, ``/sources``, ``/nodes``, ``/audit``, ``/config`` no
+  longer redirect; they return 404 because they're not registered.
+- Every response still carries ``X-Mnemo-Api-Version: 1`` (that
+  middleware stayed -- adapters use it to sanity-check the daemon
+  they're talking to).
+- ``/v1/openapi.json`` and the default ``/openapi.json`` both still
+  expose only v1 paths.
 """
 
 from __future__ import annotations
@@ -50,7 +51,8 @@ def client(tmp_path: Path) -> Iterator[TestClient]:
     store = Store(db)
     embedder = _FakeEmbedder()
     app = create_app(store=store, embedder=embedder)
-    # follow_redirects=False so we can assert the 308 itself.
+    # follow_redirects=False so a stray 308 from an unintended re-add
+    # would show up cleanly in the test output.
     with TestClient(app, follow_redirects=False) as c:
         yield c
 
@@ -86,7 +88,7 @@ def test_default_openapi_also_v1_only(client: TestClient) -> None:
         assert p.startswith("/v1/")
 
 
-# --- Version header -------------------------------------------------------
+# --- Version header (kept in v1.2) ----------------------------------------
 
 
 def test_v1_response_has_api_version_header(client: TestClient) -> None:
@@ -94,13 +96,17 @@ def test_v1_response_has_api_version_header(client: TestClient) -> None:
     assert r.headers.get("X-Mnemo-Api-Version") == "1"
 
 
-def test_redirect_response_has_api_version_header(client: TestClient) -> None:
+def test_404_response_still_has_api_version_header(client: TestClient) -> None:
+    """Even the 404 from a now-removed legacy path should carry the
+    version header -- it's stamped by middleware that wraps everything,
+    so adapters introspecting failed requests still see the daemon
+    version."""
     r = client.get("/health")
-    assert r.status_code == 308
+    assert r.status_code == 404
     assert r.headers.get("X-Mnemo-Api-Version") == "1"
 
 
-# --- Legacy redirects -----------------------------------------------------
+# --- Legacy paths now 404 (the v1.2 cliff) --------------------------------
 
 
 @pytest.mark.parametrize(
@@ -111,55 +117,42 @@ def test_redirect_response_has_api_version_header(client: TestClient) -> None:
         "/nodes",
         "/audit",
         "/config",
+        "/reindex",
+        "/query",
     ],
 )
-def test_legacy_get_redirects_308_to_v1(client: TestClient, legacy: str) -> None:
+def test_legacy_paths_return_404(client: TestClient, legacy: str) -> None:
+    """v1.2 phase 7: the 308 bridge from v1.1 is gone. Anything that
+    tries the un-versioned path now gets a clean 404 -- not a redirect
+    chain -- so misbehaving adapters fail loudly instead of silently
+    routing through middleware that no longer exists."""
     r = client.get(legacy)
-    assert r.status_code == 308
-    assert r.headers["location"] == f"/v1{legacy}"
+    assert r.status_code == 404
 
 
-def test_legacy_get_with_query_string_preserves_query(client: TestClient) -> None:
-    r = client.get("/nodes?type=memory_user&limit=5")
-    assert r.status_code == 308
-    assert r.headers["location"] == "/v1/nodes?type=memory_user&limit=5"
-
-
-def test_legacy_get_with_path_tail_redirects(client: TestClient) -> None:
-    r = client.get("/nodes/abc123")
-    assert r.status_code == 308
-    assert r.headers["location"] == "/v1/nodes/abc123"
-
-
-def test_legacy_post_redirects_308_preserves_method(client: TestClient) -> None:
-    """308 must preserve the HTTP method. The TestClient with follow_redirects
-    will replay the POST against /v1/reindex if we let it."""
+def test_legacy_post_no_longer_redirects(client: TestClient) -> None:
+    """POST /reindex used to 308 to /v1/reindex; now it's a flat 404."""
     r = client.post("/reindex", json={})
-    assert r.status_code == 308
-    assert r.headers["location"] == "/v1/reindex"
-
-    # Now verify the redirect actually lands on a working POST endpoint.
-    with TestClient(client.app, follow_redirects=True) as following:
-        r2 = following.post("/reindex", json={})
-        assert r2.status_code == 200
+    assert r.status_code == 404
 
 
-def test_legacy_delete_redirects(client: TestClient) -> None:
-    r = client.delete("/sources?path=/nonexistent")
-    assert r.status_code == 308
-    assert r.headers["location"].startswith("/v1/sources?")
+def test_legacy_path_with_tail_returns_404(client: TestClient) -> None:
+    """``/nodes/abc123`` used to redirect; now 404."""
+    r = client.get("/nodes/abc123")
+    assert r.status_code == 404
 
 
-# --- UI HTML routes are NOT redirected ------------------------------------
+# --- UI HTML routes are untouched ------------------------------------------
 
 
 def test_ui_html_routes_unchanged(client: TestClient) -> None:
-    """The browser-facing pages should NOT be redirected -- they live at
-    their own paths. Sanity check a few."""
+    """The browser-facing pages still live at their own paths -- they
+    never went through the redirect middleware in the first place,
+    and removing the middleware can't affect them."""
     for ui_path in ("/", "/nodes-page", "/audit-page", "/sources-page", "/settings"):
         r = client.get(ui_path, headers={"Accept": "text/html"})
-        # 200 (page renders) or 404 (route exists but template missing in
-        # this test app) is fine -- the assertion is "NOT 308".
-        assert r.status_code != 308, (
-            f"UI path {ui_path} was redirected -- redirect middleware is too aggressive"
-        )
+        # 200 (page renders) is the happy path. We assert the request
+        # didn't accidentally redirect (which would mean the legacy
+        # middleware came back).
+        assert r.status_code != 308
+        assert r.status_code != 301
