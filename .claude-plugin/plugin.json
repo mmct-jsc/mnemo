@@ -1,6 +1,6 @@
 {
   "name": "mnemo",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "description": "Local-first knowledge memory for Claude Code: aggregate memory across projects, retrieve via hybrid Graph-RAG, and inject budget-capped context into every session.",
   "author": "mnemo contributors",
   "license": "MIT",
