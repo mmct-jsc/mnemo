@@ -1,63 +1,178 @@
 name: Release
 
+# Two entry points, one pipeline.
+#
+# 1) Push to main (after a PR merge). The job reads the current
+#    ``daemon/pyproject.toml`` version. If no matching ``v<version>``
+#    tag exists yet, it creates one and continues straight into the
+#    build + GitHub-release steps. Empty merges (no version bump)
+#    short-circuit harmlessly.
+#
+# 2) Push of a ``v*.*.*`` tag. Skips the auto-tag stage and runs the
+#    same build + release. Lets you re-tag manually for emergency
+#    releases without going through main.
+#
+# Set the repository variable ``PUBLISH_TO_PYPI=true`` (Settings ->
+# Secrets and variables -> Actions -> Variables) to also push the
+# built wheel + sdist to PyPI via OIDC trusted publishing. Requires
+# the PyPI project's "Trusted Publishers" config to point at this
+# repo + workflow first; otherwise the publish step will fail.
 on:
   push:
-    tags:
-      - "v*.*.*"
+    branches: [main]
+    tags: ["v*.*.*"]
 
 permissions:
-  contents: write
+  contents: write       # create tags + GitHub releases
+  id-token: write       # required for PyPI OIDC trusted publishing
+
+# Coalesce overlapping runs on the same ref. A second merge in quick
+# succession waits for the in-flight one rather than racing on tag push.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   release:
-    name: Build + GitHub release
+    name: Tag + build + publish
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
         with:
-          fetch-depth: 0  # need history for changelog extraction
+          fetch-depth: 0  # need history for tag check + changelog extraction
 
+      # ----- Determine which version we should release -----
+      #
+      # - Tag push: pull from ``refs/tags/v<version>``.
+      # - Branch push: pull from ``daemon/pyproject.toml``. We treat
+      #   that file as the source of truth so version bumps in PRs
+      #   automatically drive the release once merged.
+      - name: Determine version
+        id: ver
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            V="${GITHUB_REF#refs/tags/v}"
+            FROM_TAG=true
+          else
+            V=$(grep '^version' daemon/pyproject.toml | head -1 | cut -d '"' -f2)
+            FROM_TAG=false
+          fi
+          if [ -z "$V" ]; then
+            echo "::error::could not determine version"
+            exit 1
+          fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "from_tag=$FROM_TAG" >> "$GITHUB_OUTPUT"
+          echo "Releasing v$V (from_tag=$FROM_TAG)"
+
+      # Check whether ``v<version>`` already exists on the remote.
+      # If yes AND we're on a branch push, this is a no-op merge:
+      # main moved but version didn't bump. Skip the rest cleanly.
+      - name: Check existing tag
+        id: existing
+        run: |
+          V="${{ steps.ver.outputs.version }}"
+          if git ls-remote --tags origin "refs/tags/v$V" | grep -q .; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Skip when nothing to release
+        if: steps.ver.outputs.from_tag == 'false' && steps.existing.outputs.exists == 'true'
+        run: |
+          V="${{ steps.ver.outputs.version }}"
+          echo "::notice::v$V is already tagged + released; nothing to do."
+
+      # Subsequent steps only run when we're actually releasing:
+      # - Tag push (existing behavior), OR
+      # - Branch push whose version doesn't yet have a tag.
+      # We gate every following step on this condition.
+      - name: Set should_release output
+        id: gate
+        run: |
+          if [[ "${{ steps.ver.outputs.from_tag }}" == "true" ]] \
+             || [[ "${{ steps.existing.outputs.exists }}" == "false" ]]; then
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ----- Auto-tag (branch push, new version) -----
+      #
+      # Only fires when we're on main with a version that doesn't have
+      # a tag yet. Uses github-actions[bot] identity so it's clear in
+      # the history that the tag was machine-generated. Notes come from
+      # the CHANGELOG section if available, otherwise a placeholder.
+      - name: Auto-tag new version
+        if: steps.gate.outputs.should_release == 'true' && steps.ver.outputs.from_tag == 'false'
+        run: |
+          V="${{ steps.ver.outputs.version }}"
+          NOTES=$(awk -v v="$V" '
+            /^## \[/ {
+              if (found) exit;
+              if ($0 ~ "^## \\[" v "\\]") { found=1; next }
+            }
+            found
+          ' CHANGELOG.md)
+          [ -z "$NOTES" ] && NOTES="Auto-tagged on merge to main."
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "v$V" -m "v$V" -m "$NOTES"
+          git push origin "v$V"
+          echo "Pushed tag v$V"
+
+      # ----- Re-validate the codebase before publishing -----
+      #
+      # Duplicates CI but guards against tagging a tree that didn't go
+      # through the standard PR flow (e.g. manual tag on a branch).
       - uses: astral-sh/setup-uv@v7
+        if: steps.gate.outputs.should_release == 'true'
         with:
           enable-cache: true
           cache-dependency-glob: daemon/uv.lock
 
-      # Re-run validation locally before publishing. This duplicates CI but
-      # guards against tagging from a branch that didn't go through CI.
       - name: Install
+        if: steps.gate.outputs.should_release == 'true'
         working-directory: daemon
         run: uv sync --extra dev
 
       - name: ruff
+        if: steps.gate.outputs.should_release == 'true'
         working-directory: daemon
         run: |
           uv run ruff check .
           uv run ruff format --check .
 
       - name: Unit tests
+        if: steps.gate.outputs.should_release == 'true'
         working-directory: daemon
         run: uv run pytest tests/unit -q
 
+      # ----- Build + verify version match -----
       - name: Build wheel + sdist
+        if: steps.gate.outputs.should_release == 'true'
         working-directory: daemon
         run: uv build
 
       - name: Confirm package version matches tag
+        if: steps.gate.outputs.should_release == 'true'
         run: |
-          TAG_VERSION="${GITHUB_REF#refs/tags/v}"
-          PKG_VERSION=$(grep '^version' daemon/pyproject.toml | head -1 | cut -d '"' -f2)
-          echo "tag=$TAG_VERSION pkg=$PKG_VERSION"
-          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
-            echo "::error::tag $TAG_VERSION does not match pyproject version $PKG_VERSION"
+          V="${{ steps.ver.outputs.version }}"
+          PKG=$(grep '^version' daemon/pyproject.toml | head -1 | cut -d '"' -f2)
+          echo "release=$V pkg=$PKG"
+          if [ "$V" != "$PKG" ]; then
+            echo "::error::release version $V does not match pyproject version $PKG"
             exit 1
           fi
 
+      # ----- Extract release notes from the CHANGELOG -----
       - name: Extract release notes from CHANGELOG.md
+        if: steps.gate.outputs.should_release == 'true'
         id: notes
         run: |
-          VERSION="${GITHUB_REF#refs/tags/v}"
-          # Pull the section between '## [VERSION]' and the next '## [' header.
-          NOTES=$(awk -v v="$VERSION" '
+          V="${{ steps.ver.outputs.version }}"
+          NOTES=$(awk -v v="$V" '
             /^## \[/ {
               if (found) exit;
               if ($0 ~ "^## \\[" v "\\]") { found=1; next }
@@ -68,19 +183,54 @@ jobs:
             NOTES="See CHANGELOG.md for details."
           fi
           {
-            echo "version=$VERSION"
             echo "notes<<EOF_NOTES"
             echo "$NOTES"
             echo "EOF_NOTES"
           } >> "$GITHUB_OUTPUT"
 
+      # ----- GitHub release -----
+      #
+      # ``softprops/action-gh-release@v3`` is idempotent for a given
+      # tag -- repeat runs on the same tag update in place rather than
+      # erroring. ``fail_on_unmatched_files: true`` catches the
+      # version-bump-but-build-changed-name regression.
       - name: Create GitHub release
+        if: steps.gate.outputs.should_release == 'true'
         uses: softprops/action-gh-release@v3
         with:
-          name: mnemo ${{ steps.notes.outputs.version }}
+          tag_name: v${{ steps.ver.outputs.version }}
+          name: mnemo ${{ steps.ver.outputs.version }}
           body: ${{ steps.notes.outputs.notes }}
           files: |
             daemon/dist/*.whl
             daemon/dist/*.tar.gz
           generate_release_notes: false
           fail_on_unmatched_files: true
+
+      # ----- PyPI publish (gated) -----
+      #
+      # Off by default. To enable:
+      #
+      # 1. On PyPI, create the ``mnemo`` project (or claim it). Add a
+      #    Trusted Publisher entry pointing at:
+      #      - GitHub owner: ${{ github.repository_owner }}
+      #      - Repo name:    mnemo
+      #      - Workflow:     release.yml
+      #      - Environment:  (leave blank, or wire one up)
+      # 2. In repo settings -> Secrets and variables -> Actions ->
+      #    Variables, set ``PUBLISH_TO_PYPI = true``.
+      #
+      # The OIDC handshake means no API token lives in this repo;
+      # PyPI verifies the runner's claim against its trusted-publisher
+      # config. ``id-token: write`` (declared at the job level) is
+      # what lets the action mint the OIDC token.
+      - name: Publish to PyPI
+        if: steps.gate.outputs.should_release == 'true' && vars.PUBLISH_TO_PYPI == 'true'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: daemon/dist/
+          # No password / token -- OIDC handshake handles auth.
+          # Leave ``skip-existing: true`` so re-runs on an already-
+          # published version don't fail. PyPI versions are immutable
+          # so this is a safe default.
+          skip-existing: true
