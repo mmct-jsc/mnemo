@@ -243,6 +243,83 @@ land in phases 5-8.
 
 Combined: phases 1 -> 4 advance 478 -> 573 passing tests, 0 failing.
 
+### Added (v2.0 phase 5 -- Tier 2 call-graph resolver)
+
+The flagship Tier 2 capability: "where is ``<function>`` called from?"
+finally returns correct answers. Built around a Stack-Graphs-inspired
+scope resolver that walks the freshly-populated Tier 1 graph to
+match each call site with its callee.
+
+- **``calls`` edge relation.** Caller function / method -> callee
+  function / method / class (the constructor case). Inferred edges
+  carry calibrated confidence: 0.95 for within-file resolution and
+  0.8 for cross-file resolution via the ``imports`` edge. The design
+  pegs unresolved calls as "no edge" -- best-effort retrieval beats
+  fabricated edges.
+
+- **``mnemo.parsers.code.CallSite``.** New dataclass capturing a
+  recorded call expression: ``callee_name``, ``receiver`` (``None``
+  for free calls, ``"self"`` / ``"this"`` / ``"cls"`` for method
+  calls, or an identifier for ``module.f()`` qualified calls), and
+  the source line.
+
+- **Python call-site extraction.** ``_python_call_sites`` walks each
+  function / method body and collects ``call`` AST nodes. Recursive
+  through nested control flow (``if`` / ``for`` / ``with`` /
+  comprehensions) but NOT through nested function / class
+  definitions -- those have their own units and their own
+  ``call_sites``. Chained receivers (``a.b.c.method()``) are
+  reduced to the outermost identifier so the resolver can still
+  match against imports.
+
+- **``mnemo.parsers.scope`` module.** The Tier 2 resolver.
+  :func:`resolve_calls` builds a one-pass index of the code graph
+  (source_path -> Node, (module, name) -> Node, method_of /
+  imports lookups), then walks each touched node's call sites
+  applying three rules in order:
+
+  1. ``receiver in {self, this, cls}`` -> walk ``method_of`` to
+     the enclosing class, match by callee name on its methods.
+  2. ``receiver is None`` -> match against the enclosing module's
+     top-level declarations (functions + classes; the latter
+     handles constructor calls like ``Session()``).
+  3. ``receiver`` matches an imported module name -> walk the
+     ``imports`` edge to the target module and match by callee
+     name on its declarations.
+
+  Self-edges (a recursive function's name matching itself) are
+  suppressed so the graph stays clean.
+
+- **Reindex post-pass extension.** After Tier 1 edges (``defines``,
+  ``method_of``, ``imports``) are wired, the reindex pipeline
+  invokes :func:`scope_resolver.resolve_calls` with the same
+  touched-node batch. The resolver hits the just-populated graph so
+  same-run cross-file resolution works end-to-end (no second
+  reindex needed).
+
+### Tests (phase 5)
+
+- ``tests/unit/test_v2_schema.py`` -- 2 new tests for the ``calls``
+  edge relation and confidence persistence.
+- ``tests/unit/test_parsers_code.py`` -- 7 new tests covering the
+  ``CallSite`` dataclass shape, free / self / qualified call
+  capture, constructor detection, and nested-call attribution.
+- ``tests/unit/test_ingest_code_repo.py`` -- 7 new tests for the
+  end-to-end resolution: same-module free call, ``self.method``,
+  constructor -> class, cross-file via imports, unresolved (no
+  edge), and confidence levels for same-file vs cross-file.
+
+Combined: phases 1 -> 5 advance 478 -> 589 passing tests, 0 failing.
+
+### Deferred to follow-on phases
+
+- **JavaScript / TypeScript / Go resolvers.** The design promises
+  Tier 2 across all three; phase 5 ships Python end-to-end and
+  leaves the resolver framework / call-site extraction stubs for
+  these three to land in a follow-on commit. Tier 1 already
+  produces ``code_module`` nodes for these languages so the
+  graph isn't blocked on them.
+
 ## [1.2.1] - 2026-05-11
 
 **Closing the 1.2.x line.** A real-use test of v1.2.0 against a

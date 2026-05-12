@@ -283,6 +283,35 @@ def test_edge_relations_includes_tier1_code_relations() -> None:
         assert rel in EDGE_RELATIONS, rel
 
 
+def test_edge_relations_includes_tier2_calls() -> None:
+    """v2.0 phase 5 adds ``calls``: caller_function -> callee_function /
+    callee_method / class (constructor). Tier 2's flagship edge."""
+    assert "calls" in EDGE_RELATIONS
+
+
+def test_add_edge_accepts_calls_relation(store: Store) -> None:
+    a = Node.new(
+        type="code_function",
+        name="caller",
+        body="",
+        source_path="/repo/a.py:1-2",
+        source_kind="code_repo",
+    )
+    b = Node.new(
+        type="code_function",
+        name="callee",
+        body="",
+        source_path="/repo/a.py:4-5",
+        source_kind="code_repo",
+    )
+    store.upsert_node(a)
+    store.upsert_node(b)
+    store.add_edge(a.id, b.id, "calls", confidence=0.95)
+    edges = store.get_edges(src_id=a.id, relation="calls")
+    assert len(edges) == 1
+    assert edges[0].confidence == 0.95
+
+
 def test_node_new_accepts_code_module(store: Store) -> None:
     n = Node.new(
         type="code_module",
