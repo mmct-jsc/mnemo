@@ -63,6 +63,23 @@ EDGE_RELATIONS = frozenset(
 
 EDGE_SOURCES = frozenset({"inferred", "user", "frontmatter"})
 
+# v1.2: feedback_event.reason enumeration. Each reason maps to a signal:
+#   thumbs_up        -> +1.0 (explicit positive)
+#   thumbs_down      -> -1.0 (explicit negative)
+#   cite_copied      -> +0.5 (implicit positive; user copied the citation)
+#   inferred_requery -> -0.5 (implicit negative; user re-asked a similar
+#                              query within 5 min, suggesting earlier hits
+#                              missed the mark)
+# Stored as TEXT so future signals can be added without a schema migration.
+FEEDBACK_REASONS = frozenset(
+    {
+        "thumbs_up",
+        "thumbs_down",
+        "cite_copied",
+        "inferred_requery",
+    }
+)
+
 
 # --- Dataclasses -------------------------------------------------------------
 
@@ -160,6 +177,51 @@ class Query:
 
 
 @dataclass
+class FeedbackEvent:
+    """v1.2 phase 1: one row of user feedback on a retrieval hit.
+
+    Every signal source -- explicit thumbs in the UI, implicit
+    cite-copied tap, the daemon-side inferred re-query detector --
+    writes a row here with the same shape so the v1.2 auto-tuner has a
+    uniform input.
+
+    `signal` is the numeric weight the optimizer consumes:
+    +1.0 for thumbs_up, -1.0 for thumbs_down, +0.5 for cite_copied,
+    -0.5 for inferred_requery. The mapping is centralized in
+    :func:`signal_for_reason` so callers don't have to memorize it.
+
+    Idempotency: `(query_id, node_id, reason)` is unique. Re-logging
+    the same triple updates `signal` and `created_at` in place rather
+    than producing duplicates -- matters when a user double-clicks
+    the thumbs button or when the inferred detector fires twice.
+    """
+
+    id: int  # AUTOINCREMENT primary key; -1 means "not yet persisted"
+    query_id: str
+    node_id: str
+    signal: float
+    reason: str
+    created_at: int
+
+
+def signal_for_reason(reason: str) -> float:
+    """Canonical signal value for a given reason.
+
+    Centralized so the HTTP layer can default the signal field when
+    the caller only supplies `reason`, and so all signal sources
+    agree on magnitudes. Raises ValueError on unknown reasons.
+    """
+    if reason not in FEEDBACK_REASONS:
+        raise ValueError(f"unknown feedback reason: {reason!r}")
+    return {
+        "thumbs_up": 1.0,
+        "thumbs_down": -1.0,
+        "cite_copied": 0.5,
+        "inferred_requery": -0.5,
+    }[reason]
+
+
+@dataclass
 class ActiveProject:
     """Singleton row in the ``active_project`` table.
 
@@ -245,6 +307,33 @@ CREATE TABLE IF NOT EXISTS active_project (
   path         TEXT NOT NULL,
   since        INTEGER NOT NULL
 );
+
+-- v1.2 phase 1: user-feedback events on retrieval hits.
+--
+-- One row per (query_id, node_id, reason) tuple. Re-logging the same
+-- triple updates `signal` and `created_at` in place instead of
+-- producing duplicates -- the UNIQUE constraint + INSERT OR REPLACE
+-- in :meth:`Store.log_feedback_event` enforces this.
+--
+-- FK cascades on both sides so deleting a node or purging an old
+-- query row also drops any feedback that mentioned it. The query log
+-- is intentionally not purged today but the cascade keeps the option
+-- open without separate cleanup code.
+CREATE TABLE IF NOT EXISTS feedback_event (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  query_id    TEXT NOT NULL,
+  node_id     TEXT NOT NULL,
+  signal      REAL NOT NULL,
+  reason      TEXT NOT NULL,
+  created_at  INTEGER NOT NULL,
+  UNIQUE (query_id, node_id, reason),
+  FOREIGN KEY (query_id) REFERENCES queries(id) ON DELETE CASCADE,
+  FOREIGN KEY (node_id) REFERENCES nodes(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_feedback_query ON feedback_event(query_id);
+CREATE INDEX IF NOT EXISTS idx_feedback_node  ON feedback_event(node_id);
+CREATE INDEX IF NOT EXISTS idx_feedback_ts    ON feedback_event(created_at DESC);
 """
 
 
@@ -864,6 +953,100 @@ class Store:
                 retrieved_ids=json.loads(r["retrieved_ids"]) if r["retrieved_ids"] else [],
                 scores=json.loads(r["scores"]) if r["scores"] else {},
                 ts=r["ts"],
+            )
+            for r in rows
+        ]
+
+    # --- Feedback events (v1.2 phase 1) ------------------------------------
+
+    def log_feedback_event(
+        self,
+        *,
+        query_id: str,
+        node_id: str,
+        signal: float,
+        reason: str,
+        when: int | None = None,
+    ) -> FeedbackEvent:
+        """Insert or update one feedback row.
+
+        Idempotent on ``(query_id, node_id, reason)``: re-logging the
+        same triple refreshes ``signal`` and ``created_at`` rather than
+        creating duplicate rows. This is critical for the UI (a
+        double-clicked thumbs button shouldn't double-count) and for
+        the inferred re-query detector (which can fire repeatedly for
+        the same window).
+
+        ``when`` is exposed for tests; production callers leave it as
+        None and the row gets the current epoch.
+        """
+        if reason not in FEEDBACK_REASONS:
+            raise ValueError(f"unknown feedback reason: {reason!r}")
+        ts = when if when is not None else int(time.time())
+        with self._lock:
+            # Compose an UPSERT keyed on the unique (query_id, node_id, reason)
+            # constraint defined in the schema. ON CONFLICT...DO UPDATE keeps
+            # the original id (autoincrement primary key) and refreshes the
+            # mutable fields.
+            cur = self.conn.execute(
+                """
+                INSERT INTO feedback_event (query_id, node_id, signal, reason, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(query_id, node_id, reason)
+                DO UPDATE SET signal = excluded.signal,
+                              created_at = excluded.created_at
+                RETURNING id, query_id, node_id, signal, reason, created_at
+                """,
+                (query_id, node_id, signal, reason, ts),
+            )
+            row = cur.fetchone()
+            self.conn.commit()
+        return FeedbackEvent(
+            id=row["id"],
+            query_id=row["query_id"],
+            node_id=row["node_id"],
+            signal=row["signal"],
+            reason=row["reason"],
+            created_at=row["created_at"],
+        )
+
+    def list_feedback_events(
+        self,
+        *,
+        query_id: str | None = None,
+        node_id: str | None = None,
+        limit: int = 1000,
+    ) -> list[FeedbackEvent]:
+        """List feedback events, newest first.
+
+        Without filters returns the most recent ``limit`` rows globally
+        (useful for retune dataset assembly). With ``query_id`` set the
+        UI can show what feedback exists for a specific query; with
+        ``node_id`` set, what feedback a single node has accumulated.
+        """
+        clauses: list[str] = []
+        params: list[object] = []
+        if query_id is not None:
+            clauses.append("query_id = ?")
+            params.append(query_id)
+        if node_id is not None:
+            clauses.append("node_id = ?")
+            params.append(node_id)
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        params.append(limit)
+        with self._lock:
+            rows = self.conn.execute(
+                f"SELECT * FROM feedback_event {where} ORDER BY created_at DESC, id DESC LIMIT ?",
+                params,
+            ).fetchall()
+        return [
+            FeedbackEvent(
+                id=r["id"],
+                query_id=r["query_id"],
+                node_id=r["node_id"],
+                signal=r["signal"],
+                reason=r["reason"],
+                created_at=r["created_at"],
             )
             for r in rows
         ]
