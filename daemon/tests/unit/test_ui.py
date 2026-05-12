@@ -43,9 +43,9 @@ def _seed(client: TestClient, tmp_path: Path) -> str:
         ),
         encoding="utf-8",
     )
-    client.post("/sources", json={"path": str(src), "kind": "memory_dir"})
-    client.post("/reindex")
-    return client.get("/nodes").json()[0]["id"]
+    client.post("/v1/sources", json={"path": str(src), "kind": "memory_dir"})
+    client.post("/v1/reindex")
+    return client.get("/v1/nodes").json()[0]["id"]
 
 
 # --- pages ---------------------------------------------------------------
@@ -185,7 +185,7 @@ def test_search_fragment_embeds_query_id_for_feedback(client: TestClient, tmp_pa
     assert "hitsFeedback(" in r.text  # factory invocation
     # The current query_id is rendered into the call. Audit log
     # confirms a query exists post-fetch; grab its id and check.
-    audit = client.get("/audit").json()
+    audit = client.get("/v1/audit").json()
     assert audit
     latest_qid = audit[0]["id"]
     assert latest_qid in r.text

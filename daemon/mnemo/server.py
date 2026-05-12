@@ -6,10 +6,11 @@ process. Both are constructed in ``lifespan`` so requests never pay setup cost.
 Bind to ``127.0.0.1`` only. Never listen on ``0.0.0.0``.
 
 v1.1 introduced URL versioning: every public endpoint lives under ``/v1/``.
-Legacy paths (``/health``, ``/sources``, ``/reindex``, ``/nodes``, ``/query``,
-``/audit``, ``/config``) return ``308 Permanent Redirect`` to their ``/v1/...``
-equivalent so existing clients keep working through the v1.1 series. The
-redirects are scheduled to be removed in v1.2.
+v1.1 also kept a 308 bridge from legacy un-versioned paths
+(``/health`` -> ``/v1/health``, etc.) for a single minor version of
+backward compat. v1.2 phase 7 housekeeping **removed** that bridge --
+legacy paths now return 404. The ``X-Mnemo-Api-Version`` header was
+the standing signal telling adapters to migrate.
 
 The OpenAPI schema is filtered to v1-only paths and exposed at both
 ``/openapi.json`` (FastAPI default, used by the built-in /docs UI) and
@@ -27,7 +28,7 @@ from dataclasses import dataclass, field
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from fastapi.openapi.utils import get_openapi
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from mnemo import __version__, config, ingest, paths, retrieve
@@ -39,6 +40,7 @@ from mnemo.api_schemas import (
     HealthOut,
     KnownProjectItem,
     KnownProjectsOut,
+    NodeCreateIn,
     NodeOut,
     NodeUpdateIn,
     ProjectActivateIn,
@@ -55,45 +57,15 @@ from mnemo.api_schemas import (
     SourceUpdateIn,
 )
 from mnemo.embed import Embedder
-from mnemo.store import FEEDBACK_REASONS, Store, signal_for_reason
+from mnemo.store import FEEDBACK_REASONS, Node, Store, signal_for_reason
 
 log = logging.getLogger(__name__)
 
-# Roots that should 308 to their /v1/... equivalent. Each is matched as
-# "exact" or "prefix-with-trailing-segment". UI HTML routes are NOT here --
-# they live under their own paths (/, /nodes-page, /sources-page,
-# /audit-page, /settings, /graph, /node/<id>, /static/, /ui/) and are never
-# rewritten.
-LEGACY_API_ROOTS = (
-    "/health",
-    "/sources",
-    "/reindex",
-    "/nodes",
-    "/query",
-    "/audit",
-    "/config",
-)
-
-
-class _LegacyRedirectMiddleware(BaseHTTPMiddleware):
-    """Translate legacy un-versioned API calls to /v1/... with 308.
-
-    308 preserves the request method (POST stays POST, DELETE stays DELETE)
-    and the body, which is what we need for adapters that haven't migrated.
-    Browser fetch() follows 308 transparently when ``redirect: 'follow'`` is
-    set (the default).
-    """
-
-    async def dispatch(self, request: Request, call_next):
-        path = request.url.path
-        for root in LEGACY_API_ROOTS:
-            # Match either exact (/health) or with a path tail (/nodes/<id>).
-            if path == root or path.startswith(root + "/"):
-                target = "/v1" + path
-                if request.url.query:
-                    target += "?" + request.url.query
-                return RedirectResponse(url=target, status_code=308)
-        return await call_next(request)
+# v1.2 phase 7 removed the legacy 308 redirect bridge. The
+# ``_LegacyRedirectMiddleware`` previously living here translated
+# un-versioned paths like ``/health`` -> ``/v1/health``. It was a
+# one-version-only bridge and the ``X-Mnemo-Api-Version`` header has
+# been telling adapters to migrate throughout the v1.1 cycle.
 
 
 class _ApiVersionHeaderMiddleware(BaseHTTPMiddleware):
@@ -146,11 +118,9 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
                 state.store.close()
 
     app = FastAPI(title="mnemo", version=__version__, lifespan=lifespan)
-    # Starlette runs the LAST add_middleware OUTERMOST. We want the version
-    # header to stamp every response, including 308 redirects from the
-    # legacy-path middleware. So legacy-redirect goes in first (innermost)
-    # and the version header goes in last (outermost), wrapping it.
-    app.add_middleware(_LegacyRedirectMiddleware)
+    # The version header stamps every response (including 404s from
+    # now-removed legacy paths) so adapters introspecting failed
+    # requests still see the daemon version.
     app.add_middleware(_ApiVersionHeaderMiddleware)
 
     def get_store() -> Store:
@@ -291,6 +261,62 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
             NodeOut.from_node(n)
             for n in s.list_nodes(type=type, project_key=project_key, limit=limit)
         ]
+
+    @v1.post("/nodes", response_model=NodeOut)
+    def create_node(
+        body: NodeCreateIn,
+        s: Store = Depends(get_store),
+        e: Embedder = Depends(get_embedder),
+    ) -> NodeOut:
+        """v1.2 phase 7: HTTP-driven memory creation.
+
+        Lets clients that aren't writing files (VS Code "Add Note",
+        SaaS ingesters, scripts) create a memory entry directly. The
+        new node is embedded synchronously so it's queryable on the
+        next ``/v1/query`` -- matches the post-reindex contract that
+        filesystem-written entries get for free.
+
+        Validates ``type`` and ``source_kind`` against the store-level
+        enums; surfaces unknowns as ``400``. ``source_path`` defaults
+        to a synthetic ``http://api/<uuid>`` so the watcher never
+        tries to read it from disk.
+        """
+        import hashlib
+        import uuid as _uuid
+
+        synthetic_path = body.source_path or f"http://api/{_uuid.uuid4().hex}"
+        try:
+            node = Node.new(
+                type=body.type,
+                name=body.name,
+                body=body.body,
+                source_path=synthetic_path,
+                source_kind=body.source_kind or "memory_dir",
+                description=body.description,
+                project_key=body.project_key,
+                hash=hashlib.sha256(body.body.encode("utf-8")).hexdigest(),
+                base=body.base,
+            )
+        except ValueError as exc:
+            # Surfaces "unknown node type" / "unknown source kind".
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        s.upsert_node(node)
+
+        # Embed eagerly so the new node is searchable immediately.
+        # Matches the ``ingest.reindex`` post-write behavior for
+        # filesystem entries.
+        try:
+            from mnemo.ingest import _embed
+
+            _embed(s, node, e)
+        except Exception:
+            # Embedding failure shouldn't sink the create -- the node
+            # still exists; reindex (or a later edit) can backfill the
+            # vector. Log and move on.
+            log.exception("embed of HTTP-created node %s failed", node.id)
+
+        return NodeOut.from_node(node)
 
     @v1.get("/nodes/{node_id}", response_model=NodeOut)
     def get_node(node_id: str, s: Store = Depends(get_store)) -> NodeOut:

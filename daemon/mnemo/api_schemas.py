@@ -57,6 +57,28 @@ class NodeUpdateIn(BaseModel):
     base: bool | None = None
 
 
+class NodeCreateIn(BaseModel):
+    """v1.2 phase 7 housekeeping: HTTP-driven memory creation.
+
+    Lets non-filesystem clients (the VS Code "Add Note" command,
+    future SaaS ingesters, scripts) put a memory entry into the store
+    without first writing a markdown file under the project's memory
+    dir. ``source_path`` defaults to a synthetic ``http://api/<uuid>``
+    so the filesystem watcher doesn't try to reconcile it, and
+    ``source_kind`` defaults to ``memory_dir`` to match hand-written
+    memory entries.
+    """
+
+    type: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    body: str = Field(min_length=1)
+    description: str | None = None
+    project_key: str | None = None
+    base: bool = False
+    source_path: str | None = None
+    source_kind: str | None = None
+
+
 # --- Sources --------------------------------------------------------------
 
 
