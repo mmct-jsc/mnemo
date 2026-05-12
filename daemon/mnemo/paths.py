@@ -44,12 +44,28 @@ def pid_file() -> Path:
     return mnemo_home() / "pid"
 
 
+def grammars_dir() -> Path:
+    """v2.0 phase 3: home for lazy-downloaded tree-sitter grammar wheels.
+
+    The launch bundle (Python, TS/TSX, JavaScript, Go, JSON, YAML,
+    Markdown) ships as wheel dependencies so first launch works
+    offline. Beyond that the user (or future ``mnemo grammar install``
+    helper) drops additional language wheels under this directory.
+
+    Today the directory is reserved -- no wheels are downloaded into
+    it automatically. The location is a stable surface so subsequent
+    phases can fill in the install mechanism without moving the path.
+    """
+    return mnemo_home() / "grammars"
+
+
 def ensure_runtime_dirs() -> Path:
     """Create runtime directories if missing. Returns ``mnemo_home``."""
     home = mnemo_home()
     home.mkdir(parents=True, exist_ok=True)
     cache_dir().mkdir(exist_ok=True)
     logs_dir().mkdir(exist_ok=True)
+    grammars_dir().mkdir(exist_ok=True)
     return home
 
 
