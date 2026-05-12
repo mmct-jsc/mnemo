@@ -65,6 +65,11 @@ class Config:
     # bypasses MMR (pre-v1.2 behavior; saves ~0.5ms/query). 0.0 is
     # pure diversity, mostly a diagnostic.
     mmr_lambda: float = 0.7
+    # v1.2 phase 5: auto-tuner minimum labeled-query threshold. Below
+    # this count, ``mnemo retune`` refuses to run because MRR estimates
+    # are too noisy. 30 is the design-doc default; users can lower it
+    # for tighter feedback loops at the cost of overfit risk.
+    retune_min_queries: int = 30
 
 
 # --- Load / save ----------------------------------------------------------
@@ -116,6 +121,7 @@ def save(cfg: Config) -> None:
         "requery_cosine_threshold": cfg.requery_cosine_threshold,
         "requery_top_n_hits": cfg.requery_top_n_hits,
         "mmr_lambda": cfg.mmr_lambda,
+        "retune_min_queries": cfg.retune_min_queries,
         "project_isolation_mode": cfg.project_isolation_mode,
     }
     with _lock:
@@ -171,3 +177,5 @@ def _apply(cfg: Config, raw: dict) -> None:
         cfg.requery_top_n_hits = max(0, min(100, int(raw["requery_top_n_hits"])))
     if isinstance(raw.get("mmr_lambda"), int | float):
         cfg.mmr_lambda = max(0.0, min(1.0, float(raw["mmr_lambda"])))
+    if isinstance(raw.get("retune_min_queries"), int):
+        cfg.retune_min_queries = max(1, int(raw["retune_min_queries"]))

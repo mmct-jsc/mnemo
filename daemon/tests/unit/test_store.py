@@ -461,6 +461,78 @@ def test_recent_queries_with_embeddings_excludes_null_embedding_rows(store: Stor
     assert rows == []  # only the no-embedding row exists; helper drops it
 
 
+def test_log_query_stores_score_components_when_provided(store: Store) -> None:
+    """v1.2 phase 5: ``score_components`` is the per-hit breakdown of
+    the 6-term score (alpha vector, beta graph, gamma recency, ...).
+    Retune reads this so it can rescore with new weights without
+    re-running the embedder. Backward compatible -- omit it on legacy
+    callers and the row keeps a NULL components column."""
+    comps = {
+        "node_a": {
+            "vector": 0.85,
+            "graph": 0.20,
+            "recency": 0.80,
+            "type": 1.00,
+            "project": 0.50,
+            "lexical": 0.40,
+        },
+        "node_b": {
+            "vector": 0.72,
+            "graph": 0.00,
+            "recency": 0.30,
+            "type": 0.50,
+            "project": 0.00,
+            "lexical": 0.60,
+        },
+    }
+    qid = store.log_query(
+        prompt="why?",
+        intent_tags=[],
+        retrieved_ids=["node_a", "node_b"],
+        scores={"node_a": 0.9, "node_b": 0.6},
+        score_components=comps,
+    )
+    rows = store.recent_queries_with_components(min_feedback=0, limit=10)
+    matching = [r for r in rows if r.id == qid]
+    assert len(matching) == 1
+    assert matching[0].score_components == comps
+
+
+def test_recent_queries_with_components_filters_unlabeled(store: Store) -> None:
+    """The auto-tuner only consumes queries with at least one feedback
+    event (otherwise MRR is undefined). The helper enforces that filter
+    via min_feedback >= 1."""
+    n = _make_node(source_path="/x.md")
+    store.upsert_node(n)
+    qid_labeled = store.log_query(
+        prompt="labeled",
+        intent_tags=[],
+        retrieved_ids=[n.id],
+        scores={n.id: 0.9},
+        score_components={n.id: {"vector": 0.9}},
+    )
+    store.log_query(
+        prompt="unlabeled",
+        intent_tags=[],
+        retrieved_ids=[n.id],
+        scores={n.id: 0.9},
+        score_components={n.id: {"vector": 0.9}},
+    )
+    store.log_feedback_event(query_id=qid_labeled, node_id=n.id, signal=1.0, reason="thumbs_up")
+
+    labeled = store.recent_queries_with_components(min_feedback=1, limit=10)
+    assert {q.id for q in labeled} == {qid_labeled}
+
+
+def test_recent_queries_with_components_skips_null_components(store: Store) -> None:
+    """Pre-1.2 queries have NULL score_components and can't be rescored.
+    The helper drops them so the optimizer never feeds NULL into the
+    rescore function."""
+    store.log_query(prompt="legacy", intent_tags=[], retrieved_ids=[], scores={})  # no components
+    rows = store.recent_queries_with_components(min_feedback=0, limit=10)
+    assert rows == []
+
+
 # --- Feedback events (v1.2) ------------------------------------------------
 
 
