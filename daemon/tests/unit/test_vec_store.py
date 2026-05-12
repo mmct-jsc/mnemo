@@ -146,3 +146,42 @@ def test_upsert_rejects_wrong_dim(store: Store) -> None:
     store.upsert_node(n)
     with pytest.raises(ValueError, match="vector dim"):
         store.upsert_chunks(n.id, [(0, [0.0, 1.0], "bad")])
+
+
+def test_get_chunk_embeddings_bulk_roundtrip(store: Store) -> None:
+    """v1.2 phase 4: MMR re-rank reads each candidate's best-chunk
+    embedding back out so it can compute pairwise cosine. The bulk
+    helper fetches in one query keyed on (node_id, chunk_idx)."""
+    a = _node(source_path="/a.md")
+    b = _node(source_path="/b.md")
+    store.upsert_node(a)
+    store.upsert_node(b)
+    # Two chunks for a (idx 0 and 1), one for b (idx 0).
+    store.upsert_chunks(a.id, [(0, _basis(0), "a0"), (1, _basis(1), "a1")])
+    store.upsert_chunks(b.id, [(0, _basis(2), "b0")])
+
+    got = store.get_chunk_embeddings([(a.id, 1), (b.id, 0)])
+
+    assert set(got.keys()) == {(a.id, 1), (b.id, 0)}
+    # Each embedding deserializes back to the EXACT vector we wrote
+    # (float32 -> float64 widening; values still exact for unit
+    # vectors).
+    assert got[(a.id, 1)] == _basis(1)
+    assert got[(b.id, 0)] == _basis(2)
+
+
+def test_get_chunk_embeddings_missing_pair_omitted(store: Store) -> None:
+    """A (node_id, chunk_idx) pair that doesn't exist (e.g. node was
+    deleted between vec_search and MMR's read-back) simply doesn't
+    appear in the result dict. MMR treats missing entries as
+    zero-cosine."""
+    n = _node(source_path="/a.md")
+    store.upsert_node(n)
+    store.upsert_chunks(n.id, [(0, _basis(0), "a")])
+
+    got = store.get_chunk_embeddings([(n.id, 99), ("ghost", 0)])
+    assert got == {}
+
+
+def test_get_chunk_embeddings_empty_input_short_circuits(store: Store) -> None:
+    assert store.get_chunk_embeddings([]) == {}

@@ -133,7 +133,41 @@ def query(
         scored.append(ScoredHit(node=node, score=s, chunk_idx=idx, chunk_text=text))
 
     scored.sort(key=lambda h: -h.score)
-    top = scored[:k]
+
+    # 4b. v1.2 phase 4: MMR re-rank on an oversampled top pool.
+    #
+    # Without this the top-K is the pure score-sort; near-duplicate
+    # nodes (e.g. five paraphrases of the same feedback retro) crowd
+    # out distinct angles. MMR penalizes the diversity penalty so the
+    # output spans more distinct chunks while still leaning on
+    # relevance (lambda = 0.7 by default).
+    if cfg.mmr_lambda < 1.0 and len(scored) > k:
+        from mnemo import rerank as _rerank  # local import to avoid cycles
+
+        pool_size = max(k * 2, 20)
+        top_pool = scored[:pool_size]
+        # Read back each candidate's best-chunk embedding so MMR can
+        # compute the cosine diversity penalty. Pairs are (node_id,
+        # chunk_idx); chunk_info captured them during the vec_search
+        # dedup pass.
+        wanted: list[tuple[str, int]] = []
+        for h in top_pool:
+            info = chunk_info.get(h.node.id)
+            if info is not None:
+                wanted.append((h.node.id, info[0]))
+        chunk_embs = store.get_chunk_embeddings(wanted) if wanted else {}
+        # Re-key by node_id so mmr_select can look up by ScoredHit.node.id.
+        emb_by_node: dict[str, list[float]] = {}
+        for h in top_pool:
+            info = chunk_info.get(h.node.id)
+            if info is None:
+                continue
+            v = chunk_embs.get((h.node.id, info[0]))
+            if v is not None:
+                emb_by_node[h.node.id] = v
+        top = _rerank.mmr_select(top_pool, k=k, lambda_=cfg.mmr_lambda, embeddings=emb_by_node)
+    else:
+        top = scored[:k]
 
     # 5. Compress to budget.
     hits, used = compress.compress_to_budget(top, budget_tokens=budget_tokens)

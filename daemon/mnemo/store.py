@@ -1191,6 +1191,49 @@ class Store:
             self.conn.execute("DELETE FROM chunk_meta WHERE node_id = ?", (node_id,))
             self.conn.commit()
 
+    def get_chunk_embeddings(
+        self,
+        pairs: list[tuple[str, int]],
+    ) -> dict[tuple[str, int], list[float]]:
+        """Bulk-fetch chunk embeddings by ``(node_id, chunk_idx)`` pairs.
+
+        v1.2 phase 4 MMR re-rank reads back each candidate's best-chunk
+        embedding so it can compute pairwise cosine for the diversity
+        penalty. Doing it as one query (via a VALUES-CTE) instead of N
+        round-trips keeps the rerank step in the sub-millisecond budget.
+
+        Pairs that don't resolve (deleted node, stale chunk_idx) are
+        silently omitted from the result so the caller can rely on
+        ``dict.get(pair)`` returning None for those cases.
+        """
+        if not pairs:
+            return {}
+        self.ensure_vec()
+
+        # SQLite has no native tuple-IN; build a values list and JOIN.
+        placeholders = ",".join(["(?, ?)"] * len(pairs))
+        flat: list[object] = []
+        for nid, idx in pairs:
+            flat.append(nid)
+            flat.append(idx)
+        sql = f"""
+            WITH wanted(node_id, chunk_idx) AS (VALUES {placeholders})
+            SELECT m.node_id, m.chunk_idx, v.embedding
+            FROM wanted w
+            JOIN chunk_meta m
+              ON m.node_id = w.node_id AND m.chunk_idx = w.chunk_idx
+            JOIN vec_chunks v ON v.rowid = m.vec_rowid
+        """
+        with self._lock:
+            rows = self.conn.execute(sql, flat).fetchall()
+        out: dict[tuple[str, int], list[float]] = {}
+        for r in rows:
+            blob = r["embedding"]
+            if blob is None:
+                continue
+            out[(r["node_id"], r["chunk_idx"])] = _deserialize_float32(blob)
+        return out
+
     def list_embedded_node_ids(self) -> set[str]:
         self.ensure_vec()
         with self._lock:

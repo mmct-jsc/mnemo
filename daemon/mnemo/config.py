@@ -60,6 +60,11 @@ class Config:
     requery_window_seconds: int = 300
     requery_cosine_threshold: float = 0.85
     requery_top_n_hits: int = 3
+    # v1.2 phase 4: MMR re-rank lambda. 0.7 leans toward relevance
+    # with enough diversity penalty to nuke near-duplicates. 1.0
+    # bypasses MMR (pre-v1.2 behavior; saves ~0.5ms/query). 0.0 is
+    # pure diversity, mostly a diagnostic.
+    mmr_lambda: float = 0.7
 
 
 # --- Load / save ----------------------------------------------------------
@@ -110,6 +115,7 @@ def save(cfg: Config) -> None:
         "requery_window_seconds": cfg.requery_window_seconds,
         "requery_cosine_threshold": cfg.requery_cosine_threshold,
         "requery_top_n_hits": cfg.requery_top_n_hits,
+        "mmr_lambda": cfg.mmr_lambda,
         "project_isolation_mode": cfg.project_isolation_mode,
     }
     with _lock:
@@ -163,3 +169,5 @@ def _apply(cfg: Config, raw: dict) -> None:
         cfg.requery_cosine_threshold = max(0.0, min(2.0, float(raw["requery_cosine_threshold"])))
     if isinstance(raw.get("requery_top_n_hits"), int):
         cfg.requery_top_n_hits = max(0, min(100, int(raw["requery_top_n_hits"])))
+    if isinstance(raw.get("mmr_lambda"), int | float):
+        cfg.mmr_lambda = max(0.0, min(1.0, float(raw["mmr_lambda"])))
