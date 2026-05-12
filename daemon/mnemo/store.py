@@ -87,9 +87,15 @@ NODE_TYPES = frozenset(
         # per detected route declaration (FastAPI ``@router.get(...)``,
         # Flask ``@app.route(...)``, Express ``app.get(path, handler)``,
         # ...). The ``routes_to`` edge wires each route to its handler
-        # function. Phase 7 adds ``code_component`` + ``code_endpoint``
-        # for the frontend / cross-stack side.
+        # function.
         "code_route",
+        # v2.0 phase 7: Tier 3 frontend + cross-stack. ``code_component``
+        # is a React / Vue / Svelte component; ``code_endpoint`` is the
+        # cross-stack URI anchor that both backend routes and frontend
+        # fetches converge on, so a single graph traversal can walk
+        # Component -> Endpoint <- Route -> Handler.
+        "code_component",
+        "code_endpoint",
     }
 )
 
@@ -142,6 +148,15 @@ EDGE_RELATIONS = frozenset(
         # cross-stack sitemap queries can walk Component -> Route ->
         # Handler -> Service in phase 7+.
         "routes_to",
+        # v2.0 phase 7: ``renders`` links a parent component to a child
+        # component (React composition). ``at_endpoint`` is the
+        # cross-stack glue: both a ``code_route`` AND a
+        # ``code_component`` point at the same ``code_endpoint`` URI
+        # node when their HTTP-method + path match, which is what
+        # creates the Component <-> Route join via a single endpoint
+        # traversal.
+        "renders",
+        "at_endpoint",
     }
 )
 
