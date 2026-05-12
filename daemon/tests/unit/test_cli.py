@@ -199,6 +199,27 @@ def test_cli_reindex_unknown_source(runner: CliRunner) -> None:
     assert result.exit_code != 0
 
 
+def test_cli_retune_below_threshold_prints_message(runner: CliRunner) -> None:
+    """v1.2 phase 5: with no labeled queries in the store, retune
+    refuses to optimize and prints a friendly explanation."""
+    result = runner.invoke(app, ["retune", "--min-queries", "30"])
+    assert result.exit_code == 0
+    assert "below threshold" in result.stdout.lower()
+
+
+def test_cli_retune_json_emits_report(runner: CliRunner) -> None:
+    """--json mode produces a parseable RetuneReport dump even when
+    the store is empty (helps scripts probe the threshold state)."""
+    result = runner.invoke(app, ["retune", "--json", "--min-queries", "30"])
+    assert result.exit_code == 0
+    data = json.loads(result.stdout)
+    assert "proposed" in data
+    assert "current" in data
+    assert "val_mrr_before" in data
+    assert "iterations" in data
+    assert "log" in data
+
+
 def test_cli_query_json(runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("mnemo.cli.Embedder", lambda *a, **kw: FakeEmbedder())
     src = _seed_memory(tmp_path)

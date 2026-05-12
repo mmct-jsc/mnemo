@@ -110,6 +110,10 @@ def query(
     nodes_by_id = store.get_nodes_by_ids(candidate_ids)
     isolation_mode = getattr(cfg, "project_isolation_mode", "strict")
     scored: list[ScoredHit] = []
+    # v1.2 phase 5: capture unweighted 6-term components per candidate
+    # so the auto-tuner can rescore with alternative weights without
+    # rerunning the embedder. Logged with the audit row below.
+    components_by_node: dict[str, dict[str, float]] = {}
     for nid in candidate_ids:
         node = nodes_by_id.get(nid)
         if node is None:
@@ -121,14 +125,28 @@ def query(
             and node.project_key != active_project
         ):
             continue  # hard-filter: outside active project, not BASE
+        c_vector = vec_scores.get(nid, 0.0)
+        c_graph = graph_scores.get(nid, 0.0)
+        c_recency = _recency_score(node.updated_at, now, cfg.recency_half_life_days)
+        c_type = type_pri.get(node.type, 0.0)
+        c_project = _project_score(node.project_key, active_project)
+        c_lexical = _lexical_score(q_tokens, node)
         s = (
-            sw.alpha * vec_scores.get(nid, 0.0)
-            + sw.beta * graph_scores.get(nid, 0.0)
-            + sw.gamma * _recency_score(node.updated_at, now, cfg.recency_half_life_days)
-            + sw.delta * type_pri.get(node.type, 0.0)
-            + sw.epsilon * _project_score(node.project_key, active_project)
-            + sw.zeta * _lexical_score(q_tokens, node)
+            sw.alpha * c_vector
+            + sw.beta * c_graph
+            + sw.gamma * c_recency
+            + sw.delta * c_type
+            + sw.epsilon * c_project
+            + sw.zeta * c_lexical
         )
+        components_by_node[nid] = {
+            "vector": c_vector,
+            "graph": c_graph,
+            "recency": c_recency,
+            "type": c_type,
+            "project": c_project,
+            "lexical": c_lexical,
+        }
         idx, text = chunk_info.get(nid, (None, None))
         scored.append(ScoredHit(node=node, score=s, chunk_idx=idx, chunk_text=text))
 
@@ -199,12 +217,23 @@ def query(
         # Never let a feedback-detection error abort the user's query.
         log.exception("inferred_requery detector failed; continuing")
 
+    # v1.2 phase 5: log per-hit components for the top pool (caps audit
+    # row size while keeping enough candidates for the auto-tuner to
+    # consider rescoring). Use the top ``max(k*2, 20)`` candidates so a
+    # post-tune ordering can pull from them.
+    pool_size = max(k * 2, 20)
+    pool_nids = [h.node.id for h in scored[:pool_size]]
+    components_log = {
+        nid: components_by_node[nid] for nid in pool_nids if nid in components_by_node
+    }
+
     qid = store.log_query(
         prompt=prompt,
         intent_tags=sorted(tags),
         retrieved_ids=retrieved_ids,
         scores={h.node_id: round(h.score, 4) for h in hits},
         embedding=query_vec,
+        score_components=components_log,
     )
 
     return RetrievalResult(hits=hits, intent_tags=sorted(tags), tokens_used=used, query_id=qid)

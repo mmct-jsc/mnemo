@@ -192,6 +192,13 @@ class Query:
     # re-query detector can cosine-compare new prompts against recent
     # ones. None for pre-1.2 rows that never had an embedding written.
     embedding: list[float] | None = None
+    # v1.2 phase 5: per-hit breakdown of the 6-term scoring formula,
+    # captured at retrieval time so the auto-tuner can rescore with
+    # alternative weights without re-running the embedder. Shape:
+    # ``{node_id: {"vector": ..., "graph": ..., "recency": ...,
+    # "type": ..., "project": ..., "lexical": ...}, ...}``. None for
+    # pre-1.2 rows.
+    score_components: dict[str, dict[str, float]] | None = None
 
 
 @dataclass
@@ -417,10 +424,16 @@ class Store:
         # v1.2 phase 2: store the query embedding alongside the audit row
         # so the inferred-re-query detector can do cosine over recent
         # prompts. NULL on legacy rows; the detector skips those.
+        #
+        # v1.2 phase 5: store the per-hit 6-term score components so the
+        # auto-tuner can rescore with alternative weights without
+        # re-running the embedder. NULL on legacy rows; the optimizer
+        # filters them out.
         self._ensure_columns(
             "queries",
             {
                 "embedding": "BLOB",
+                "score_components": "TEXT",
             },
         )
         row = self.conn.execute("SELECT version FROM schema_version").fetchone()
@@ -946,22 +959,32 @@ class Store:
         retrieved_ids: list[str],
         scores: dict[str, float],
         embedding: list[float] | None = None,
+        score_components: dict[str, dict[str, float]] | None = None,
     ) -> str:
-        """Write one audit row. v1.2 phase 2 added the optional
-        ``embedding`` arg; pre-1.2 callers that omit it keep working
-        and their row gets a NULL embedding column."""
+        """Write one audit row.
+
+        v1.2 phase 2 added optional ``embedding`` for the inferred-
+        re-query detector. v1.2 phase 5 added optional
+        ``score_components`` for the auto-tuner. Pre-1.2 callers that
+        omit both keep working; their row gets NULL in those columns
+        and downstream consumers filter them out.
+        """
         qid = uuid.uuid4().hex
         emb_blob: bytes | None = None
         if embedding is not None:
             if len(embedding) != EMBEDDING_DIM:
                 raise ValueError(f"embedding dim {len(embedding)} != expected {EMBEDDING_DIM}")
             emb_blob = sqlite_vec.serialize_float32(embedding)
+        comps_json: str | None = (
+            json.dumps(score_components) if score_components is not None else None
+        )
         with self._lock:
             self.conn.execute(
                 """
                 INSERT INTO queries
-                  (id, prompt, intent_tags, retrieved_ids, scores, ts, embedding)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                  (id, prompt, intent_tags, retrieved_ids, scores, ts,
+                   embedding, score_components)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     qid,
@@ -971,6 +994,7 @@ class Store:
                     json.dumps(scores),
                     int(time.time()),
                     emb_blob,
+                    comps_json,
                 ),
             )
             self.conn.commit()
@@ -1036,6 +1060,71 @@ class Store:
                     scores=json.loads(r["scores"]) if r["scores"] else {},
                     ts=r["ts"],
                     embedding=vec,
+                    score_components=None,
+                )
+            )
+        return result
+
+    def recent_queries_with_components(
+        self,
+        *,
+        min_feedback: int = 1,
+        limit: int = 5000,
+    ) -> list[Query]:
+        """Return queries with ``score_components`` populated, oldest first.
+
+        v1.2 phase 5 helper for the auto-tuner:
+        - Drops rows with NULL ``score_components`` (pre-1.2 legacy or
+          embed-skipped paths) -- the optimizer cannot rescore them.
+        - With ``min_feedback >= 1`` (default), also requires at least
+          one row in ``feedback_event`` for that query so MRR has
+          ground truth to score against. ``min_feedback=0`` returns
+          everything with components (used by tests + diagnostic CLI).
+        - Order is **ascending by ts** -- the auto-tuner does a
+          time-ordered 80/20 train/val split and wants the oldest
+          queries first so newer feedback never leaks into training.
+
+        ``limit`` is a hard cap so a long-running daemon's audit log
+        doesn't load entirely into memory.
+        """
+        with self._lock:
+            if min_feedback <= 0:
+                rows = self.conn.execute(
+                    """
+                    SELECT * FROM queries
+                    WHERE score_components IS NOT NULL
+                    ORDER BY ts ASC, rowid ASC
+                    LIMIT ?
+                    """,
+                    (limit,),
+                ).fetchall()
+            else:
+                rows = self.conn.execute(
+                    """
+                    SELECT q.* FROM queries q
+                    WHERE q.score_components IS NOT NULL
+                      AND (
+                        SELECT COUNT(*) FROM feedback_event f
+                        WHERE f.query_id = q.id
+                      ) >= ?
+                    ORDER BY q.ts ASC, q.rowid ASC
+                    LIMIT ?
+                    """,
+                    (min_feedback, limit),
+                ).fetchall()
+        result: list[Query] = []
+        for r in rows:
+            comps = json.loads(r["score_components"]) if r["score_components"] else None
+            result.append(
+                Query(
+                    id=r["id"],
+                    prompt=r["prompt"],
+                    intent_tags=json.loads(r["intent_tags"]) if r["intent_tags"] else [],
+                    retrieved_ids=json.loads(r["retrieved_ids"]) if r["retrieved_ids"] else [],
+                    scores=json.loads(r["scores"]) if r["scores"] else {},
+                    ts=r["ts"],
+                    embedding=None,
+                    score_components=comps,
                 )
             )
         return result

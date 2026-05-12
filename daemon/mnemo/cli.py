@@ -173,6 +173,93 @@ def ui(
 
 
 @app.command()
+def retune(
+    apply: bool = typer.Option(
+        False,
+        "--apply",
+        help="Skip the y/N prompt and persist the proposed weights immediately.",
+    ),
+    min_queries: int | None = typer.Option(
+        None,
+        "--min-queries",
+        help="Override the default labeled-query threshold (config.retune_min_queries).",
+    ),
+    json_out: bool = typer.Option(False, "--json", help="Emit the report as JSON."),
+) -> None:
+    """Auto-tune the 6 scoring weights from accumulated feedback.
+
+    Runs coordinate descent over the alpha..zeta weights against the
+    audit-log + feedback_event signal. Prints a diff + before/after
+    MRR; persists only after the user confirms (or ``--apply``).
+
+    Below the minimum-labeled-queries threshold the command exits with
+    a friendly message so you can come back later.
+    """
+    from mnemo import config as cfg_mod
+    from mnemo.retune import retune as do_retune
+
+    cfg = cfg_mod.load()
+    threshold = min_queries if min_queries is not None else cfg.retune_min_queries
+
+    store = _open_store()
+    try:
+        report = do_retune(store, min_queries=threshold)
+    finally:
+        store.close()
+
+    if json_out:
+        import dataclasses
+
+        typer.echo(json.dumps(dataclasses.asdict(report), indent=2))
+        return
+
+    if report.train_size == 0 and report.val_size == 0:
+        # Below threshold or no labeled data -- the report's log line
+        # carries the human-readable reason.
+        for line in report.log:
+            typer.echo(line)
+        return
+
+    typer.echo("--- proposed weight changes ---")
+    moved = False
+    for k in ("alpha", "beta", "gamma", "delta", "epsilon", "zeta"):
+        cur = report.current[k]
+        new = report.proposed[k]
+        diff = report.diff[k]
+        if abs(diff) < 1e-9:
+            typer.echo(f"  {k:<8} {cur:.4f}  (unchanged)")
+        else:
+            moved = True
+            sign = "+" if diff > 0 else ""
+            typer.echo(f"  {k:<8} {cur:.4f} -> {new:.4f}  ({sign}{diff:.4f})")
+    typer.echo("")
+    typer.echo(
+        f"val_mrr:   {report.val_mrr_before:.4f} -> {report.val_mrr_after:.4f}"
+        f"  ({'+' if report.val_mrr_after >= report.val_mrr_before else ''}"
+        f"{report.val_mrr_after - report.val_mrr_before:.4f})"
+    )
+    typer.echo(f"train_mrr: {report.train_mrr_before:.4f} -> {report.train_mrr_after:.4f}")
+    typer.echo(f"samples:   train={report.train_size}, val={report.val_size}")
+    typer.echo(f"iterations: {report.iterations} in {report.elapsed_seconds:.2f}s")
+    typer.echo("--- log ---")
+    for line in report.log:
+        typer.echo(f"  {line}")
+
+    if not moved:
+        typer.echo("\nNothing to apply -- weights unchanged.")
+        return
+
+    if not apply:
+        confirm = typer.confirm("\nApply these weights to ~/.claude/mnemo/settings.json?")
+        if not confirm:
+            typer.echo("Discarded; no changes written.")
+            return
+
+    cfg_mod.update({"scoring": report.proposed})
+    typer.echo("Weights applied.")
+
+
+@app.command()
 def status() -> None:
     """Show node/source counts and daemon status."""
     store = _open_store()
