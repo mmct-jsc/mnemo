@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="code-landing">
+  <header class="page-header">
+    <h2>Code</h2>
+    <p class="hint">
+      Registered <code>code_repo</code> sources. Click a project to drill
+      into its files, functions, classes, and routes.
+    </p>
+  </header>
+
+  {% if projects %}
+  <div class="code-grid">
+    {% for p in projects %}
+    <a class="code-card" href="/code/{{ p.project_key | urlencode }}">
+      <div class="code-card-head">
+        <h3>{{ p.project_key }}</h3>
+        <span class="badge">{{ p.total }} node{% if p.total != 1 %}s{% endif %}</span>
+      </div>
+      <ul class="code-card-counts">
+        <li><span>Modules</span><strong>{{ p.by_type.get('code_module', 0) }}</strong></li>
+        <li><span>Functions</span><strong>{{ p.by_type.get('code_function', 0) }}</strong></li>
+        <li><span>Classes</span><strong>{{ p.by_type.get('code_class', 0) }}</strong></li>
+        <li><span>Methods</span><strong>{{ p.by_type.get('code_method', 0) }}</strong></li>
+        <li><span>Routes</span><strong>{{ p.by_type.get('code_route', 0) }}</strong></li>
+        <li><span>Components</span><strong>{{ p.by_type.get('code_component', 0) }}</strong></li>
+      </ul>
+      {% if p.source_path %}
+      <p class="code-card-path"><code>{{ p.source_path }}</code></p>
+      {% endif %}
+    </a>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <h3>No code repos indexed yet</h3>
+    <p>
+      Register a code repository via
+      <code>mnemo source add &lt;path&gt; --kind code_repo</code>
+      or from the <a href="/sources-page">Sources page</a> (the
+      auto-router will propose <code>code_repo</code> when it sees a
+      <code>.git/</code> dir plus source files).
+    </p>
+  </div>
+  {% endif %}
+
+  {% if endpoints %}
+  <section class="code-section">
+    <h3>Cross-stack endpoints
+      <span class="hint">({{ endpoints | length }})</span>
+    </h3>
+    <p class="hint">
+      URI anchors shared between backend routes and frontend components.
+      A route + component at the same path converge on a single endpoint.
+    </p>
+    <ul class="endpoint-list">
+      {% for ep in endpoints[:20] %}
+      <li>
+        <a href="/node/{{ ep.id }}">
+          <span class="badge http-method http-{{ ep.method | lower }}">{{ ep.method }}</span>
+          <code>{{ ep.path }}</code>
+        </a>
+        <span class="hint">{{ ep.fanout }} link{% if ep.fanout != 1 %}s{% endif %}</span>
+      </li>
+      {% endfor %}
+    </ul>
+    {% if endpoints | length > 20 %}
+    <p class="hint">+ {{ endpoints | length - 20 }} more</p>
+    {% endif %}
+  </section>
+  {% endif %}
+</section>
+{% endblock %}

@@ -36,20 +36,52 @@ def extract(
     handler_index = _index_handlers_by_line(tier1_units)
 
     routes: list[CodeUnit] = []
-    for child in tree.root_node.children:
-        if child.type != "decorated_definition":
-            continue
-        inner = _inner_function_of(child)
-        if inner is None:
-            continue
-        start_line = inner.start_point[0] + 1
-        end_line = inner.end_point[0] + 1
-        handler = handler_index.get((start_line, end_line))
-        if handler is None:
-            continue
-        for dec in _decorators_of(child):
-            routes.extend(_routes_from_decorator(dec, source, file_path, handler))
+    # v2.0 phase 6.1: walk the whole tree so we catch the
+    # ``create_app()`` factory idiom in Flask too.
+    _walk_for_decorated_functions(tree.root_node, source, file_path, handler_index, routes)
     return routes
+
+
+def _walk_for_decorated_functions(
+    node: tree_sitter.Node,
+    source: bytes,
+    file_path: str,
+    handler_index: dict[tuple[int, int], CodeUnit],
+    routes: list[CodeUnit],
+) -> None:
+    if node.type == "decorated_definition":
+        inner = _inner_function_of(node)
+        if inner is not None:
+            start_line = inner.start_point[0] + 1
+            end_line = inner.end_point[0] + 1
+            handler = handler_index.get((start_line, end_line))
+            if handler is None:
+                handler = _synthesize_handler_unit(inner, file_path)
+            for dec in _decorators_of(node):
+                routes.extend(_routes_from_decorator(dec, source, file_path, handler))
+    for child in node.children:
+        _walk_for_decorated_functions(child, source, file_path, handler_index, routes)
+
+
+def _synthesize_handler_unit(inner: tree_sitter.Node, file_path: str) -> CodeUnit:
+    name_node = inner.child_by_field_name("name")
+    name = ""
+    if name_node is not None:
+        text = getattr(name_node, "text", None)
+        if isinstance(text, bytes):
+            name = text.decode("utf-8", errors="replace")
+        elif isinstance(text, str):
+            name = text
+    start_line = inner.start_point[0] + 1
+    end_line = inner.end_point[0] + 1
+    return CodeUnit(
+        type="code_function",
+        name=name or "<anonymous>",
+        body="",
+        source_path=f"{file_path}:{start_line}-{end_line}",
+        description=None,
+        hash="",
+    )
 
 
 def _routes_from_decorator(
