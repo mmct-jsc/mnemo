@@ -570,11 +570,57 @@ tr:hover td { background: var(--panel); }
   overflow-y: auto;
 }
 .hit .cite {
-  display: block;
-  margin-top: 0.6rem;
   font-size: 0.75rem;
   color: var(--fg-dim);
   font-family: var(--mono);
+}
+
+/* v1.2 phase 3: thumb-up/down feedback per hit. */
+.hit-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-top: 0.6rem;
+}
+.hit-feedback {
+  display: inline-flex;
+  gap: 0.25rem;
+}
+.thumb-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  color: var(--fg-dim);
+  cursor: pointer;
+  transition: var(--transition);
+}
+.thumb-btn:hover {
+  color: var(--fg);
+  border-color: var(--accent);
+}
+.thumb-btn.active.thumb-up {
+  color: var(--type-feedback, #b6e88c);
+  border-color: var(--type-feedback, #b6e88c);
+  background: rgba(182, 232, 140, 0.12);
+}
+.thumb-btn.active.thumb-down {
+  color: var(--warn, #e88a6a);
+  border-color: var(--warn, #e88a6a);
+  background: rgba(232, 138, 106, 0.12);
+}
+.thumb-btn.busy {
+  opacity: 0.6;
+  cursor: progress;
+}
+.thumb-btn:disabled {
+  cursor: not-allowed;
 }
 
 /* --- Recent / lists ----------------------------------------------- */

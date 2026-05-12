@@ -9,9 +9,12 @@
     <p class="hint">Try simpler keywords or rephrase the question.</p>
   </div>
 {% else %}
-<ul class="hits">
+{# v1.2 phase 3: thumb-up/down feedback per hit. The Alpine factory
+   hitsFeedback() lives in base.html so it survives HTMX swaps; we
+   bind it on the <ul> so all hits share one query_id + state map. #}
+<ul class="hits" x-data='hitsFeedback({{ result.query_id | tojson }})'>
   {% for h in result.hits %}
-    <li class="hit">
+    <li class="hit" data-node-id="{{ h.node_id }}">
       <a href="/node/{{ h.node_id }}">
         <span class="score">{{ '%.3f' % h.score }}</span>
         <span class="badge type-{{ h.type }}">{{ h.type | replace('memory_','') | replace('_',' ') }}</span>
@@ -21,7 +24,35 @@
       {% if h.body %}
         <details class="body"><summary>Show body</summary><pre>{{ h.body }}</pre></details>
       {% endif %}
-      <code class="cite">{{ h.citation }}</code>
+      <div class="hit-footer">
+        <code class="cite">{{ h.citation }}</code>
+        <span class="hit-feedback">
+          <button type="button"
+                  class="thumb-btn thumb-up"
+                  :class="{ active: feedback[{{ h.node_id | tojson }}] === 'up', busy: pending[{{ h.node_id | tojson }}] }"
+                  :disabled="pending[{{ h.node_id | tojson }}]"
+                  aria-label="Helpful"
+                  title="Helpful"
+                  @click='vote({{ h.node_id | tojson }}, "thumbs_up")'>
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M7 11v9H4v-9h3z"/>
+              <path d="M7 11l4-8a2 2 0 0 1 3 2v4h5a2 2 0 0 1 2 2l-2 7a2 2 0 0 1-2 2H7"/>
+            </svg>
+          </button>
+          <button type="button"
+                  class="thumb-btn thumb-down"
+                  :class="{ active: feedback[{{ h.node_id | tojson }}] === 'down', busy: pending[{{ h.node_id | tojson }}] }"
+                  :disabled="pending[{{ h.node_id | tojson }}]"
+                  aria-label="Not helpful"
+                  title="Not helpful"
+                  @click='vote({{ h.node_id | tojson }}, "thumbs_down")'>
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M17 13V4h3v9h-3z"/>
+              <path d="M17 13l-4 8a2 2 0 0 1-3-2v-4H5a2 2 0 0 1-2-2l2-7a2 2 0 0 1 2-2h10"/>
+            </svg>
+          </button>
+        </span>
+      </div>
     </li>
   {% endfor %}
 </ul>
