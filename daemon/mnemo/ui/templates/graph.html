@@ -23,7 +23,10 @@
 {% endblock %}
 {% block layout %}
 <main class="full">
-  <section class="nebula-shell" x-data="nebula()" x-init="init()">
+  <!-- Alpine auto-invokes init() when it lives on the x-data object,
+       so no explicit x-init="init()" -- adding it would run init()
+       twice and force-render the fcose layout twice on first load. -->
+  <section class="nebula-shell" x-data="nebula()">
 
     <!-- Left: file tree (VSCode-style) -->
     <aside class="nebula-tree">
