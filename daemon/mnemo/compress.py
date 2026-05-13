@@ -38,6 +38,11 @@ class CompressedHit:
     score: float
     chunk_idx: int | None
     citation: str
+    # v2.1.x: carry the originating ``source_path`` so the search-result
+    # popover (and any other body-rendering UI) can pick a Prism
+    # language hint per hit. The path is harmless for callers that
+    # don't need it.
+    source_path: str | None = None
 
 
 def count_tokens(text: str) -> int:
@@ -79,6 +84,7 @@ def compress_to_budget(
                 score=hit.score,
                 chunk_idx=hit.chunk_idx,
                 citation=f"[{citation_prefix}:{hit.node.id}]",
+                source_path=hit.node.source_path,
             )
         )
         used += line_tokens

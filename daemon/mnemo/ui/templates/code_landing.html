@@ -24,21 +24,20 @@
 
         <div class="code-project-card-bars">
           {% set total_bar = (p.total or 1) %}
-          {% for t, color in [
-              ('code_module', '#06b6d4'),
-              ('code_function', '#2dd4bf'),
-              ('code_method', '#38bdf8'),
-              ('code_class', '#e879f9'),
-              ('code_route', '#fb923c'),
-              ('code_component', '#c084fc'),
-          ] %}
+          {# Iterate every code_* type recorded in the global palette so
+             new types (e.g. code_endpoint) show up automatically without
+             touching this template. #}
+          {% for t in ['code_module', 'code_function', 'code_method', 'code_class', 'code_route', 'code_component', 'code_endpoint'] %}
             {% set count = p.by_type.get(t, 0) %}
+            {% set color = type_colors.get(t, type_color_fallback) %}
             {% if count > 0 %}
-            <div class="bar-row" title="{{ count }} {{ t | replace('code_','') }}">
+            <div class="bar-row"
+                 title="{{ count }} {{ t | replace('code_','') }}"
+                 style="--type-color: {{ color }};">
               <span class="bar-dot" style="background: {{ color }}; box-shadow: 0 0 6px {{ color }}66;"></span>
               <span class="bar-label">{{ t | replace('code_','') }}</span>
               <span class="bar-track">
-                <span class="bar-fill" style="width: {{ (count * 100 / total_bar) | round(1) }}%; background: {{ color }};"></span>
+                <span class="bar-fill" style="width: {{ (count * 100 / total_bar) | round(1) }}%;"></span>
               </span>
               <span class="bar-count">{{ count }}</span>
             </div>

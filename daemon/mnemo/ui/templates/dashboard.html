@@ -36,7 +36,8 @@
       <ul class="type-bars">
         {% for type, n in sorted_counts %}
           {% set pct = (n / total_nodes) * 100 %}
-          <li>
+          {% set color = type_colors.get(type, type_color_fallback) %}
+          <li style="--type-color: {{ color }};">
             <div class="type-row">
               <span class="badge type-{{ type }}">{{ type | replace('memory_','') | replace('_',' ') }}</span>
               <span class="type-num">{{ n }}</span>
@@ -80,7 +81,7 @@
         {% for n, d in top_connected %}
           <li>
             <a href="/node/{{ n.id }}">
-              <span class="badge type-{{ n.type }}">{{ n.type | replace('memory_','') | replace('_',' ') }}</span>
+              <span class="badge type-{{ n.type }}" style="--type-color: {{ type_colors.get(n.type, type_color_fallback) }};">{{ n.type | replace('memory_','') | replace('_',' ') }}</span>
               <span class="name">{{ n.name }}</span>
               <span class="proj">{{ d }} edges</span>
             </a>
@@ -125,7 +126,7 @@
       {% for n in recent_nodes %}
         <li>
           <a href="/node/{{ n.id }}">
-            <span class="badge type-{{ n.type }}">{{ n.type | replace('memory_','') | replace('_',' ') }}</span>
+            <span class="badge type-{{ n.type }}" style="--type-color: {{ type_colors.get(n.type, type_color_fallback) }};">{{ n.type | replace('memory_','') | replace('_',' ') }}</span>
             <span class="name">{{ n.name }}</span>
             {% if n.project_key %}<span class="proj">{{ n.project_key }}</span>{% endif %}
           </a>

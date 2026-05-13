@@ -17,12 +17,43 @@
     <li class="hit" data-node-id="{{ h.node_id }}">
       <a href="/node/{{ h.node_id }}">
         <span class="score">{{ '%.3f' % h.score }}</span>
-        <span class="badge type-{{ h.type }}">{{ h.type | replace('memory_','') | replace('_',' ') }}</span>
+        <span class="badge type-{{ h.type }}" style="--type-color: {{ type_colors.get(h.type, type_color_fallback) }};">{{ h.type | replace('memory_','') | replace('_',' ') }}</span>
         <span class="name">{{ h.name }}</span>
       </a>
       {% if h.description %}<p class="desc">{{ h.description }}</p>{% endif %}
       {% if h.body %}
-        <details class="body"><summary>Show body</summary><pre>{{ h.body }}</pre></details>
+        {# Type-aware body preview. mnemoRenderBody picks Prism syntax
+           highlighting for code_* nodes, marked markdown for memory_*
+           / project_doc / plan_doc / session_summary nodes, and an
+           escaped <pre> for commit nodes. The raw body is held in a
+           data-* attribute so the renderer can fire on first open
+           AND on subsequent opens (the user can close + reopen with
+           no re-fetch). #}
+        <details class="body hit-body"
+                 data-node-type="{{ h.type }}"
+                 data-source-path="{{ h.source_path or '' }}"
+                 data-body="{{ h.body | e }}"
+                 @toggle="
+                   if ($event.target.open && !$event.target._rendered) {
+                     const slot = $event.target.querySelector('.hit-body-render');
+                     if (slot && window.mnemoRenderBody) {
+                       const mode = window.mnemoRenderBody(
+                         slot,
+                         $event.target.dataset.body || '',
+                         {
+                           type: $event.target.dataset.nodeType,
+                           sourcePath: $event.target.dataset.sourcePath
+                         }
+                       );
+                       $event.target.dataset.renderedAs = mode;
+                       $event.target._rendered = true;
+                     }
+                   }">
+          <summary>Show body</summary>
+          <div class="hit-body-render md-body">
+            <p class="hint" style="margin:0;">Loading preview...</p>
+          </div>
+        </details>
       {% endif %}
       <div class="hit-footer">
         <code class="cite">{{ h.citation }}</code>
