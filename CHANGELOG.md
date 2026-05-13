@@ -2,6 +2,83 @@
 
 All notable changes to mnemo are documented here.
 
+## [2.1.0] - 2026-05-13
+
+**Nebula — three-panel graph UX.** A focused UI refinement on top
+of v2.0's code graph. ``/graph`` is no longer a single canvas with
+side overlays -- it's a resizable three-panel shell (file tree |
+graph canvas | node detail) plus a sticky filter bar. The
+``/code`` cards now funnel into ``/graph?project=<key>``, so a
+single canonical visualization page serves both code-graph and
+memory-graph exploration.
+
+### Added
+
+- **Three-panel resizable shell** at ``/graph``. Drag the gutters
+  to resize; widths persist to localStorage. Default
+  240 / flex / 320.
+- **File tree (left panel).** Built from ``code_module``
+  source_paths. Single-child directory chains collapse so deep
+  Windows paths render compactly. Click a file -> focus + select
+  on canvas. The active file highlights in the tree.
+- **Detail panel (right).** Type badge + name + source_path +
+  body + ranked neighbors with relation + confidence labels.
+  Open-detail button links to ``/node/<id>``; copy-cite button
+  copies ``[mnemo:<id>]``.
+- **Filter bar (bottom).** Text search filters by name/type;
+  per-type chip toggles narrow visibility; confidence slider
+  hides edges below a threshold; hop selector (when in
+  node-scope mode); force / concentric / circle relayout
+  buttons; live node + edge counter.
+- **Cross-stack visual language.** 8 code-type colors + 7
+  memory-type colors are consistent across chips, tree dots,
+  detail badge, graph nodes. Node SHAPES disambiguate:
+  ``code_module`` = round-rectangle, ``code_route`` = diamond,
+  ``code_endpoint`` = hexagon, ``commit`` = tag.
+- **Confidence-encoded edges.** Line style by confidence:
+  ``>= 0.9`` solid, ``0.7-0.9`` dashed, ``< 0.7`` dotted. Edge
+  color encodes relation (calls = purple, routes_to = amber,
+  at_endpoint = green, imports = cyan, provenance = pink).
+  Arrowheads only on directional relations.
+
+### Changed
+
+- **``GET /ui/graph-data``** now accepts:
+  - ``?project=<key>`` -- filter to nodes with that project_key
+    plus cross-cutting (NULL / BASE) nodes connected to them.
+  - ``?node=<id>&hops=<n>`` -- ego-network BFS from ``<id>`` out
+    to ``n`` hops (default 2, capped at 4).
+  Response nodes now include ``source_path`` + ``description`` so
+  the file tree can group and the detail panel can render without
+  a second round-trip. Edges now carry ``confidence``.
+- **``/code`` project cards** now link to ``/graph?project=<key>``
+  (the new primary CTA). A small "summary" link still goes to the
+  list view at ``/code/<project>``.
+- **``/code/<project>``** overview shows two CTAs side-by-side:
+  "Open in graph" and "Cross-stack sitemap".
+
+### Tests
+
+- ``tests/unit/test_ui.py::test_graph_page_renders`` updated for
+  the new shell (canvas id ``cy`` -> ``cy-nebula`` + ``nebula-shell``
+  smoke).
+- Full suite: 604 passing, 2 skipped, 0 failing.
+
+### End-to-end UI verified
+
+Via the preview tool against the daemon's own indexed code
+(``mnemo-daemon`` project, 468 nodes after reindex):
+
+- ``/graph?project=mnemo-daemon`` -> 416 nodes / 574 edges
+  scoped to that project.
+- Tree renders 33 files across 4 nested directories.
+- Click ``flask.py`` -> selects on canvas + populates detail
+  panel with name + type badge + source_path + body + 17
+  connections.
+- Toggling type chips to ``code_route + code_endpoint`` only
+  -> exactly 80 nodes (40 routes + 40 endpoints) and 40
+  ``at_endpoint`` edges.
+
 ## [2.0.0] - 2026-05-13
 
 **Code Intelligence.** The headline v2.0 release: every registered
