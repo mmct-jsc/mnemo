@@ -15,6 +15,10 @@
       <span><strong>{{ stats.components }}</strong> components</span>
     </div>
     <p>
+      <a href="/graph?project={{ project_key | urlencode }}" class="sitemap-link">
+        Open in graph &rarr;
+      </a>
+      &nbsp;
       <a href="/code/{{ project_key | urlencode }}/sitemap" class="sitemap-link">
         Cross-stack sitemap &rarr;
       </a>

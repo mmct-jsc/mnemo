@@ -13,7 +13,7 @@
   {% if projects %}
   <div class="code-grid">
     {% for p in projects %}
-    <a class="code-card" href="/code/{{ p.project_key | urlencode }}">
+    <a class="code-card" href="/graph?project={{ p.project_key | urlencode }}">
       <div class="code-card-head">
         <h3>{{ p.project_key }}</h3>
         <span class="badge">{{ p.total }} node{% if p.total != 1 %}s{% endif %}</span>
@@ -29,6 +29,11 @@
       {% if p.source_path %}
       <p class="code-card-path"><code>{{ p.source_path }}</code></p>
       {% endif %}
+      <p class="code-card-foot">
+        <span class="hint">Open in graph &rarr;</span>
+        <a class="code-card-summary" href="/code/{{ p.project_key | urlencode }}"
+           onclick="event.stopPropagation()">summary</a>
+      </p>
     </a>
     {% endfor %}
   </div>

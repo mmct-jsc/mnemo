@@ -8,140 +8,178 @@
 {% endblock %}
 {% block layout %}
 <main class="full">
-  <section class="graph-pane" x-data="graphPane()">
-    <div id="cy"></div>
+  <section class="nebula-shell" x-data="nebula()" x-init="init()">
 
-    <div class="graph-controls" x-data="{
-      types: {
-        memory_feedback: true, memory_user: true, memory_project: true,
-        memory_reference: true, project_doc: true, plan_doc: true
-      },
-      apply() {
-        const cy = window.__cy;
-        if (!cy) return;
-        cy.nodes().forEach(n => {
-          const t = n.data('type');
-          const visible = this.types[t] !== false;
-          n.style('display', visible ? 'element' : 'none');
-        });
-        cy.edges().forEach(e => {
-          e.style('display',
-            (e.source().visible() && e.target().visible()) ? 'element' : 'none');
-        });
-      }
-    }">
-      <h3>Filter by type</h3>
-      <label class="filter">
-        <input type="checkbox" x-model="types.memory_feedback" @change="apply()">
-        <span class="swatch" style="background:#f0a47c"></span> feedback
-      </label>
-      <label class="filter">
-        <input type="checkbox" x-model="types.memory_project" @change="apply()">
-        <span class="swatch" style="background:#8db6f0"></span> project
-      </label>
-      <label class="filter">
-        <input type="checkbox" x-model="types.memory_user" @change="apply()">
-        <span class="swatch" style="background:#b6e88c"></span> user
-      </label>
-      <label class="filter">
-        <input type="checkbox" x-model="types.memory_reference" @change="apply()">
-        <span class="swatch" style="background:#d790f0"></span> reference
-      </label>
-      <label class="filter">
-        <input type="checkbox" x-model="types.project_doc" @change="apply()">
-        <span class="swatch" style="background:#f0d990"></span> project doc
-      </label>
-      <label class="filter">
-        <input type="checkbox" x-model="types.plan_doc" @change="apply()">
-        <span class="swatch" style="background:#9396f0"></span> plan doc
-      </label>
-      <div class="layout-row">
-        <button @click="window.__relayout && window.__relayout('fcose')">force</button>
-        <button @click="window.__relayout && window.__relayout('concentric')">concentric</button>
-        <button @click="window.__relayout && window.__relayout('circle')">circle</button>
-      </div>
-    </div>
-
-    <div class="graph-help">
-      <strong>How to read this</strong><br>
-      Each <em>dot</em> is a memory entry. Lines mean two entries surface
-      together when you ask related questions. Click a dot for details.
-      Drag to pan, <kbd>scroll</kbd> to zoom.
-    </div>
-
-    <div class="graph-legend">
-      <strong>Edge meaning</strong>
-      <div>thicker = stronger relationship</div>
-      <div>color matches the source node</div>
-    </div>
-
-    <aside class="side detail-panel" x-show="selected" x-cloak @click.outside="selected = null">
-      <button @click="selected = null" class="close">×</button>
-      <template x-if="selected">
-        <div>
-          <div class="badges">
-            <span class="badge" :class="'type-' + selected.type"
-                  x-text="(selected.type || '').replace('memory_','').replace('_',' ')"></span>
-            <span x-show="selected.project_key" class="badge" x-text="selected.project_key"></span>
-          </div>
-          <h3 class="detail-name" x-text="selected.name"></h3>
-
-          <p x-show="selected.description" class="detail-desc" x-text="selected.description"></p>
-
-          <details x-show="selected.body" class="detail-body" @toggle="renderBody()">
-            <summary>Body preview</summary>
-            <div class="md-body" x-ref="mdPreview"></div>
-          </details>
-
-          <dl class="detail-meta" x-show="selected.source_path">
-            <dt>source</dt><dd><code x-text="(selected.source_path || '').split(/[\\/]/).slice(-2).join('/')"></code></dd>
-            <dt>updated</dt>
-            <dd>
-              <span class="md-updated" x-text="formatRelative(selected.updated_at)"></span>
-              <span class="md-updated-abs" x-text="formatAbs(selected.updated_at)"></span>
-            </dd>
-            <dt>chunks</dt><dd x-text="selected.deg + ' connections'"></dd>
-          </dl>
-
-          <div x-show="neighbors.length" class="detail-neighbors">
-            <h4 x-text="'Connected to (' + neighbors.length + ')'"></h4>
-            <ul>
-              <template x-for="n in neighbors.slice(0, showAllNeighbors ? 100 : 6)" :key="n.id">
-                <li>
-                  <button class="neighbor-row" @click="window.__focusNode && window.__focusNode(n.id)">
-                    <span class="neighbor-dot" :style="`background:${typeColor(n.type)}`"></span>
-                    <span class="neighbor-name" x-text="n.label || n.name || n.id"></span>
-                    <span class="neighbor-type" x-text="(n.type || '').replace('memory_','').replace('_',' ')"></span>
-                  </button>
-                </li>
+    <!-- Left: file tree + project chips -->
+    <aside class="nebula-tree">
+      <h3>Files
+        <span x-show="contextProject" x-cloak class="hint" style="text-transform:none;font-family:var(--mono);">
+          / <span x-text="contextProject"></span>
+        </span>
+      </h3>
+      <template x-if="treeRoot && Object.keys(treeRoot.children).length === 0">
+        <p class="hint" style="padding:0.5rem;">
+          No code modules in this view.
+          <a href="/sources-page">Add a code_repo</a>?
+        </p>
+      </template>
+      <template x-if="treeRoot">
+        <div class="nebula-tree-root">
+          <template x-for="(child, name) in treeRoot.children" :key="name">
+            <div class="nebula-tree-node" x-data="{ child: child, name: name }">
+              <template x-if="child.isDir">
+                <details open>
+                  <summary x-text="name"></summary>
+                  <div :style="`padding-left: 0.6rem;`">
+                    <template x-for="(grand, gname) in child.children" :key="gname">
+                      <div>
+                        <template x-if="grand.isDir">
+                          <details>
+                            <summary x-text="gname"></summary>
+                            <div :style="`padding-left: 0.6rem;`">
+                              <template x-for="leaf in grand.leaves" :key="leaf.id">
+                                <a href="#" class="tree-file"
+                                   :class="{ active: selected && selected.id === leaf.id }"
+                                   @click.prevent="focusNode(leaf.id)">
+                                  <span x-text="leaf.label"></span>
+                                  <span class="tree-file-meta" x-text="leaf.childCount + ' decl'"></span>
+                                </a>
+                              </template>
+                            </div>
+                          </details>
+                        </template>
+                        <template x-if="!grand.isDir">
+                          <a href="#" class="tree-file"
+                             :class="{ active: selected && selected.id === grand.id }"
+                             @click.prevent="focusNode(grand.id)">
+                            <span x-text="gname"></span>
+                            <span class="tree-file-meta" x-text="grand.childCount + ' decl'"></span>
+                          </a>
+                        </template>
+                      </div>
+                    </template>
+                  </div>
+                </details>
               </template>
-            </ul>
-            <button x-show="neighbors.length > 6 && !showAllNeighbors"
-                    @click="showAllNeighbors = true"
-                    class="link-button"
-                    x-text="'Show ' + (neighbors.length - 6) + ' more'"></button>
-          </div>
-
-          <div class="btn-row detail-actions">
-            <a class="primary" :href="'/node/' + selected.id">Open node</a>
-            <button type="button" @click="copyCitation()">Copy citation</button>
-          </div>
-          <code class="citation" x-text="'[mnemo:' + selected.id + ']'"></code>
+              <template x-if="!child.isDir">
+                <a href="#" class="tree-file"
+                   :class="{ active: selected && selected.id === child.id }"
+                   @click.prevent="focusNode(child.id)">
+                  <span x-text="name"></span>
+                  <span class="tree-file-meta" x-text="child.childCount + ' decl'"></span>
+                </a>
+              </template>
+            </div>
+          </template>
         </div>
       </template>
     </aside>
+
+    <!-- Gutter (drag to resize left panel) -->
+    <div class="nebula-gutter nebula-gutter-left"
+         @mousedown="startResize($event, 'left')"
+         :class="{ dragging: dragging === 'left' }"></div>
+
+    <!-- Center: canvas -->
+    <div class="nebula-canvas">
+      <div id="cy-nebula"></div>
+
+      <div class="nebula-hint">
+        scroll to zoom · drag to pan · click a node
+      </div>
+
+      <div class="nebula-context" x-show="contextProject" x-cloak>
+        scope: <strong x-text="contextProject"></strong>
+        <a href="/graph">clear</a>
+      </div>
+    </div>
+
+    <!-- Gutter (drag to resize right panel) -->
+    <div class="nebula-gutter nebula-gutter-right"
+         @mousedown="startResize($event, 'right')"
+         :class="{ dragging: dragging === 'right' }"></div>
+
+    <!-- Right: detail panel -->
+    <aside class="nebula-detail">
+      <template x-if="!selected">
+        <div class="empty-detail">
+          Click a node on the canvas to see its details, neighbors, and
+          edge breakdown here.
+        </div>
+      </template>
+      <template x-if="selected">
+        <div>
+          <span class="ntype" :class="'ntype-' + selected.type"
+                x-text="selected.type"></span>
+          <h3 x-text="selected.name"></h3>
+          <p class="nsource" x-show="selected.source_path" x-cloak
+             x-text="selected.source_path"></p>
+          <p class="ndesc" x-show="selected.description" x-cloak
+             x-text="selected.description"></p>
+          <pre x-show="selected.body" x-cloak x-text="selected.body"></pre>
+
+          <h4 x-show="neighbors.length">Connections ({{ '{{' }} neighbors.length {{ '}}' }})</h4>
+          <ul class="nlist">
+            <template x-for="nb in neighbors.slice(0, 20)" :key="nb.id + ':' + nb.rel">
+              <li>
+                <button @click="focusNode(nb.id)">
+                  <span class="dot" :class="'swatch-' + nb.type"></span>
+                  <span class="label" x-text="nb.name"></span>
+                  <span class="rel" x-text="nb.rel + (nb.confidence < 1 ? ' (' + nb.confidence.toFixed(2) + ')' : '')"></span>
+                </button>
+              </li>
+            </template>
+          </ul>
+
+          <div class="nactions">
+            <a class="primary" :href="'/node/' + selected.id">Open detail</a>
+            <button @click="copyCitation()">Copy cite</button>
+          </div>
+        </div>
+      </template>
+    </aside>
+
+    <!-- Bottom: filter bar -->
+    <div class="nebula-filterbar">
+      <input type="search" placeholder="filter by name / type..."
+             x-model="filterText" @input.debounce.180ms="applyFilters()">
+      <div class="nebula-chips">
+        <template x-for="t in nodeTypes" :key="t">
+          <span class="nebula-chip"
+                :class="{ on: typeFilters[t], off: !typeFilters[t] }"
+                @click="typeFilters[t] = !typeFilters[t]; applyFilters()">
+            <span class="swatch" :class="'swatch-' + t"></span>
+            <span x-text="t.replace('memory_','').replace('code_','')"></span>
+          </span>
+        </template>
+      </div>
+      <label class="nebula-slider">
+        min conf
+        <input type="range" min="0" max="100" step="5"
+               x-model.number="minConfidence" @input.debounce.120ms="applyFilters()">
+        <span x-text="(minConfidence / 100).toFixed(2)"></span>
+      </label>
+      <label class="nebula-hops" x-show="contextNodeId" x-cloak>
+        hops
+        <select x-model.number="hops" @change="reload()">
+          <option :value="1">1</option>
+          <option :value="2">2</option>
+          <option :value="3">3</option>
+        </select>
+      </label>
+      <div class="nebula-layout-buttons">
+        <button @click="relayout('fcose')">force</button>
+        <button @click="relayout('concentric')">concentric</button>
+        <button @click="relayout('circle')">circle</button>
+      </div>
+      <span class="nebula-stats" x-text="stats"></span>
+    </div>
   </section>
 </main>
 
 <script>
-function formatRelative(ts) {
-  return window.mnemoFormatTs ? window.mnemoFormatTs(ts, 'relative') : '';
-}
-function formatAbs(ts) {
-  return window.mnemoFormatTs ? window.mnemoFormatTs(ts, 'datetime') : '';
-}
-
 const TYPE_COLORS = {
+  // memory
   memory_feedback:  '#f0a47c',
   memory_user:      '#b6e88c',
   memory_project:   '#8db6f0',
@@ -149,58 +187,358 @@ const TYPE_COLORS = {
   project_doc:      '#f0d990',
   plan_doc:         '#9396f0',
   session_summary:  '#7ee7e0',
+  // code
+  code_module:      '#4dd0e1',
+  code_function:    '#5eead4',
+  code_method:      '#67e8f9',
+  code_class:       '#f0abfc',
+  code_route:       '#fbbf24',
+  code_component:   '#a78bfa',
+  code_endpoint:    '#86efac',
+  commit:           '#9ca3af',
 };
 
-// Alpine component for the graph-pane <section>. State + methods live here
-// so x-data stays trivial and Alpine's expression parser doesn't choke.
-function graphPane() {
+const REL_COLORS = {
+  calls:                '#c084fc',
+  routes_to:            '#fbbf24',
+  at_endpoint:          '#86efac',
+  renders:              '#a78bfa',
+  imports:              '#4dd0e1',
+  defines:              '#8db6f0',
+  method_of:            '#8db6f0',
+  references_function:  '#fb7185',
+  motivated_by:         '#fb7185',
+  closed_by:            '#fb7185',
+  // v1 defaults
+  applies_to:           '#7ee7e0',
+  derived_from:         '#7ee7e0',
+  contradicts:          '#f0a47c',
+  supersedes:           '#9396f0',
+  mentions:             '#b6e88c',
+  co_occurs_with:       '#d790f0',
+};
+
+function nebula() {
   return {
+    cy: null,
     selected: null,
     neighbors: [],
-    showAllNeighbors: false,
-    typeColor(t) { return TYPE_COLORS[t] || '#7ee7e0'; },
+    treeRoot: null,
+    nodeTypes: [],
+    typeFilters: {},
+    filterText: '',
+    minConfidence: 0,
+    hops: 2,
+    dragging: null,
+    contextProject: null,
+    contextNodeId: null,
+    stats: '',
+    rawElements: [],
+
+    async init() {
+      // Read query string for ?project= and ?node= so /code cards
+      // can deep-link into this page with context.
+      const params = new URLSearchParams(window.location.search);
+      this.contextProject = params.get('project') || null;
+      this.contextNodeId = params.get('node') || null;
+      if (params.get('hops')) this.hops = parseInt(params.get('hops'), 10) || 2;
+
+      // Restore panel widths from localStorage.
+      const left = localStorage.getItem('nebula.left');
+      const right = localStorage.getItem('nebula.right');
+      const shell = document.querySelector('.nebula-shell');
+      if (left && shell)  shell.style.setProperty('--nebula-left', left);
+      if (right && shell) shell.style.setProperty('--nebula-right', right);
+
+      if (window.cytoscape && window.cytoscapeFcose) {
+        cytoscape.use(cytoscapeFcose);
+      }
+      await this.reload();
+    },
+
+    async reload() {
+      const qs = new URLSearchParams();
+      if (this.contextProject) qs.set('project', this.contextProject);
+      if (this.contextNodeId) {
+        qs.set('node', this.contextNodeId);
+        qs.set('hops', String(this.hops));
+      }
+      const r = await fetch('/ui/graph-data?' + qs.toString());
+      const data = await r.json();
+      this.rawElements = data.elements;
+      this.renderCanvas();
+      this.buildTree();
+      this.buildTypeFilters();
+
+      // If we came in with ?node=, pre-select it.
+      if (this.contextNodeId && this.cy) {
+        const target = this.cy.getElementById(this.contextNodeId);
+        if (target && target.length) {
+          this.selectFromCanvas(target);
+          this.cy.animate({ center: { eles: target }, zoom: 1.2 }, { duration: 300 });
+        }
+      }
+    },
+
+    renderCanvas() {
+      // Compute degree on the fly so node size scales with connectivity.
+      const degree = {};
+      for (const e of this.rawElements) {
+        if (e.data.source) {
+          degree[e.data.source] = (degree[e.data.source] || 0) + 1;
+          degree[e.data.target] = (degree[e.data.target] || 0) + 1;
+        }
+      }
+      const els = this.rawElements.map(e => {
+        if (e.data.id !== undefined) {
+          return { data: { ...e.data, deg: degree[e.data.id] || 0 } };
+        }
+        return e;
+      });
+
+      if (this.cy) this.cy.destroy();
+      this.cy = cytoscape({
+        container: document.getElementById('cy-nebula'),
+        elements: els,
+        minZoom: 0.15,
+        maxZoom: 4,
+        style: [
+          // Nodes -----------------------------------------------------
+          { selector: 'node', style: {
+              label: 'data(label)',
+              'background-color': (n) => TYPE_COLORS[n.data('type')] || '#7ee7e0',
+              'background-opacity': 0.94,
+              'border-width': 0,
+              'border-color': '#7ee7e0',
+              color: '#e6edf3',
+              'font-size': '10px',
+              'font-family': 'ui-monospace, Menlo, Consolas, monospace',
+              'text-valign': 'bottom',
+              'text-margin-y': 6,
+              'text-outline-color': '#0a0d14',
+              'text-outline-width': 2,
+              'text-max-width': '120px',
+              'overlay-padding': 6,
+              width:  (n) => 14 + Math.min(34, (n.data('deg') || 0) * 1.4),
+              height: (n) => 14 + Math.min(34, (n.data('deg') || 0) * 1.4),
+              'transition-property': 'opacity, border-width, border-color',
+              'transition-duration': '180ms',
+          }},
+          { selector: 'node[type="code_module"]', style: { shape: 'round-rectangle' }},
+          { selector: 'node[type="code_route"]',  style: { shape: 'diamond' }},
+          { selector: 'node[type="code_endpoint"]', style: { shape: 'hexagon', 'border-width': 2 }},
+          { selector: 'node[type="code_class"]',  style: { shape: 'round-rectangle' }},
+          { selector: 'node[type="commit"]',      style: { shape: 'tag' }},
+          { selector: 'node.hl', style: {
+              'border-width': 3,
+              'border-color': '#7ee7e0',
+              'overlay-color': '#7ee7e0',
+              'overlay-opacity': 0.18,
+          }},
+          { selector: 'node.dim',   style: { opacity: 0.15 }},
+          { selector: 'node.hide',  style: { display: 'none' }},
+
+          // Edges -----------------------------------------------------
+          { selector: 'edge', style: {
+              width: (e) => 0.6 + Math.min(2.4, (e.data('confidence') || 1.0) * 1.8),
+              'line-color': (e) => REL_COLORS[e.data('relation')] || '#888',
+              'line-opacity': (e) => {
+                const c = e.data('confidence') ?? 1.0;
+                return 0.25 + c * 0.55;
+              },
+              'curve-style': 'bezier',
+              'target-arrow-color': (e) => REL_COLORS[e.data('relation')] || '#888',
+              'target-arrow-shape': (e) =>
+                ['calls', 'routes_to', 'imports', 'method_of', 'references_function',
+                 'motivated_by', 'closed_by'].includes(e.data('relation')) ? 'triangle' : 'none',
+              'arrow-scale': 0.8,
+              'transition-property': 'opacity, width',
+              'transition-duration': '180ms',
+          }},
+          // Lower-confidence edges -> dashed / dotted.
+          { selector: 'edge[confidence < 0.9]', style: { 'line-style': 'dashed' }},
+          { selector: 'edge[confidence < 0.7]', style: { 'line-style': 'dotted', 'line-opacity': 0.4 }},
+          { selector: 'edge.dim',  style: { 'line-opacity': 0.04 }},
+          { selector: 'edge.hl',   style: { 'line-opacity': 0.95, width: 2.2 }},
+          { selector: 'edge.hide', style: { display: 'none' }},
+        ],
+        layout: {
+          name: 'fcose', animate: true, animationDuration: 400,
+          nodeRepulsion: 6500, idealEdgeLength: 90, padding: 40, randomize: true,
+        },
+      });
+
+      this.cy.on('tap', 'node', (evt) => this.selectFromCanvas(evt.target));
+      this.cy.on('tap', (evt) => {
+        if (evt.target === this.cy) {
+          this.cy.elements().removeClass('hl dim');
+          this.selected = null;
+        }
+      });
+
+      // Detect edges by ``source`` presence -- Cytoscape auto-assigns
+      // ``id`` to edges after init, so filtering by ``id !== undefined``
+      // double-counts.
+      const edgeCount = this.rawElements.filter(e => e.data.source !== undefined).length;
+      const nodeCount = this.rawElements.length - edgeCount;
+      this.stats = nodeCount + ' nodes / ' + edgeCount + ' edges';
+    },
+
+    buildTree() {
+      // Same source-presence trick as buildStats() -- detect nodes by
+      // the ABSENCE of ``source`` so Cytoscape's auto-assigned edge ids
+      // don't pollute the tree.
+      const nodes = this.rawElements.filter(e => e.data.source === undefined && e.data.source_path);
+      const root = { children: {}, isDir: true };
+      // Modules only -- declarations are folded under their module.
+      const modules = nodes.filter(n => n.data.type === 'code_module');
+      const declCounts = {};
+      for (const n of nodes) {
+        if (n.data.type !== 'code_module' && n.data.source_path) {
+          // Strip the line-range suffix to find the owning module path.
+          const filePath = n.data.source_path.replace(/:\d+-\d+(#.+)?$/, '');
+          declCounts[filePath] = (declCounts[filePath] || 0) + 1;
+        }
+      }
+      for (const m of modules) {
+        const path = (m.data.source_path || m.data.name).replace(/\\/g, '/');
+        const parts = path.split('/').filter(Boolean);
+        let cur = root;
+        for (let i = 0; i < parts.length - 1; i++) {
+          const seg = parts[i];
+          if (!cur.children[seg]) cur.children[seg] = { children: {}, isDir: true };
+          cur = cur.children[seg];
+        }
+        const leafName = parts[parts.length - 1];
+        cur.children[leafName] = {
+          isDir: false,
+          id: m.data.id,
+          label: leafName,
+          childCount: declCounts[path] || 0,
+        };
+      }
+      // Collapse single-child chains so deep paths render compactly:
+      // src -> mnemo -> ui -> templates becomes src/mnemo/ui/templates.
+      this._collapseTree(root);
+      // Also: build a `.leaves` accessor on each directory level so
+      // the template can iterate its files in one pass.
+      this._annotateLeaves(root);
+      this.treeRoot = root;
+    },
+
+    _collapseTree(node) {
+      if (!node.isDir) return;
+      for (const [name, child] of Object.entries(node.children)) {
+        this._collapseTree(child);
+        if (child.isDir) {
+          const sub = Object.entries(child.children);
+          if (sub.length === 1 && sub[0][1].isDir) {
+            const [innerName, innerChild] = sub[0];
+            delete node.children[name];
+            node.children[name + '/' + innerName] = innerChild;
+          }
+        }
+      }
+    },
+
+    _annotateLeaves(node) {
+      if (!node.isDir) return;
+      node.leaves = Object.entries(node.children)
+        .filter(([_, c]) => !c.isDir)
+        .map(([_, c]) => c);
+      for (const c of Object.values(node.children)) this._annotateLeaves(c);
+    },
+
+    buildTypeFilters() {
+      const types = new Set();
+      for (const e of this.rawElements) {
+        if (e.data.source === undefined && e.data.type) types.add(e.data.type);
+      }
+      this.nodeTypes = Array.from(types).sort();
+      // Default: all on.
+      for (const t of this.nodeTypes) {
+        if (this.typeFilters[t] === undefined) this.typeFilters[t] = true;
+      }
+    },
+
+    applyFilters() {
+      if (!this.cy) return;
+      const text = this.filterText.trim().toLowerCase();
+      const minConf = this.minConfidence / 100;
+      this.cy.batch(() => {
+        this.cy.nodes().forEach(n => {
+          const t = n.data('type');
+          const matchesType = this.typeFilters[t] !== false;
+          const matchesText = !text ||
+            (n.data('name') || '').toLowerCase().includes(text) ||
+            (t || '').toLowerCase().includes(text);
+          if (matchesType && matchesText) n.removeClass('hide');
+          else n.addClass('hide');
+        });
+        this.cy.edges().forEach(e => {
+          const conf = e.data('confidence') ?? 1.0;
+          const endpointsVisible =
+            !e.source().hasClass('hide') && !e.target().hasClass('hide');
+          if (conf >= minConf && endpointsVisible) e.removeClass('hide');
+          else e.addClass('hide');
+        });
+      });
+    },
+
     selectFromCanvas(node) {
       const d = { ...node.data() };
       this.selected = d;
       this.neighbors = [];
-      this.showAllNeighbors = false;
-      this._clearMd();
-
-      const cy = window.__cy;
-      cy.elements().removeClass('hl').addClass('dim');
+      this.cy.elements().removeClass('hl').addClass('dim');
       node.removeClass('dim').addClass('hl');
       node.connectedEdges().removeClass('dim').addClass('hl');
       node.neighborhood().nodes().removeClass('dim').addClass('hl');
 
-      // Hydrate body / source / updated_at from the JSON API.
+      // Hydrate body from /v1/nodes/<id>.
       fetch('/v1/nodes/' + d.id).then(r => r.ok ? r.json() : null).then(full => {
         if (full) {
           this.selected = { ...d, ...full };
-          // If the body preview <details> is already open, re-render it
-          // with the fresh body. Otherwise wait for the user to open it.
-          this.$nextTick(() => this.renderBody());
         }
       }).catch(() => {});
 
-      this.neighbors = node.neighborhood().nodes()
-        .map(n => n.data())
-        .filter(n => n.id !== d.id);
+      // Build neighbors list (deduped by node id, keep best relation).
+      const seen = {};
+      node.connectedEdges().forEach(e => {
+        const other = e.source().id() === d.id ? e.target() : e.source();
+        const od = other.data();
+        const rel = e.data('relation');
+        const conf = e.data('confidence') ?? 1.0;
+        if (!seen[od.id] || conf > seen[od.id].confidence) {
+          seen[od.id] = {
+            id: od.id, name: od.name, type: od.type, rel, confidence: conf,
+          };
+        }
+      });
+      this.neighbors = Object.values(seen);
     },
-    renderBody() {
-      const el = this.$refs.mdPreview;
-      if (!el) return;
-      const body = (this.selected && this.selected.body) || '';
-      // Clip very long bodies in the side panel; full body lives on
-      // the node detail page.
-      const clipped = body.length > 1800
-        ? body.slice(0, 1800) + '\n\n*…body truncated; open the node for full content.*'
-        : body;
-      el.innerHTML = window.mnemoMd ? window.mnemoMd(clipped) : '';
+
+    focusNode(id) {
+      if (!this.cy) return;
+      const target = this.cy.getElementById(id);
+      if (!target || target.length === 0) {
+        // Node isn't in the current view -- reload with that as focus.
+        this.contextNodeId = id;
+        this.reload();
+        return;
+      }
+      this.cy.animate({ center: { eles: target }, zoom: 1.4 }, { duration: 350 });
+      this.selectFromCanvas(target);
     },
-    _clearMd() {
-      const el = this.$refs.mdPreview;
-      if (el) el.innerHTML = '';
+
+    relayout(name) {
+      if (!this.cy) return;
+      this.cy.layout({
+        name, animate: true, animationDuration: 400, padding: 40,
+        ...(name === 'fcose' ? { nodeRepulsion: 6500, idealEdgeLength: 90, randomize: false } : {}),
+        ...(name === 'concentric' ? { concentric: (n) => n.degree(), levelWidth: () => 1 } : {}),
+      }).run();
     },
+
     copyCitation() {
       if (!this.selected) return;
       const cite = '[mnemo:' + this.selected.id + ']';
@@ -208,171 +546,38 @@ function graphPane() {
         window.toast('Citation copied: ' + cite, 'success');
       }).catch(e => window.toast('Copy failed: ' + e, 'error'));
     },
+
+    // --- Resizer logic -------------------------------------------------
+    startResize(evt, side) {
+      this.dragging = side;
+      evt.preventDefault();
+      const shell = document.querySelector('.nebula-shell');
+      const start = evt.clientX;
+      const startLeft = parseInt(getComputedStyle(shell).getPropertyValue('--nebula-left') || '240', 10);
+      const startRight = parseInt(getComputedStyle(shell).getPropertyValue('--nebula-right') || '320', 10);
+
+      const onMove = (e) => {
+        const dx = e.clientX - start;
+        if (side === 'left') {
+          const w = Math.max(160, Math.min(420, startLeft + dx));
+          shell.style.setProperty('--nebula-left', w + 'px');
+          localStorage.setItem('nebula.left', w + 'px');
+        } else {
+          const w = Math.max(220, Math.min(520, startRight - dx));
+          shell.style.setProperty('--nebula-right', w + 'px');
+          localStorage.setItem('nebula.right', w + 'px');
+        }
+      };
+      const onUp = () => {
+        this.dragging = null;
+        window.removeEventListener('mousemove', onMove);
+        window.removeEventListener('mouseup', onUp);
+        if (this.cy) this.cy.resize();
+      };
+      window.addEventListener('mousemove', onMove);
+      window.addEventListener('mouseup', onUp);
+    },
   };
 }
-
-document.addEventListener('alpine:initialized', async () => {
-  if (window.cytoscape && window.cytoscapeFcose) {
-    cytoscape.use(cytoscapeFcose);
-  }
-  const r = await fetch("/ui/graph-data");
-  const data = await r.json();
-
-  const degree = {};
-  for (const e of data.elements) {
-    if (e.data.source) {
-      degree[e.data.source] = (degree[e.data.source] || 0) + 1;
-      degree[e.data.target] = (degree[e.data.target] || 0) + 1;
-    }
-  }
-  for (const e of data.elements) {
-    if (e.data.id !== undefined) {
-      e.data.deg = degree[e.data.id] || 0;
-    }
-  }
-
-  const cy = cytoscape({
-    container: document.getElementById("cy"),
-    elements: data.elements,
-    minZoom: 0.2, maxZoom: 3,
-    style: [
-      { selector: 'node', style: {
-          label: 'data(label)',
-          'background-color': (n) => TYPE_COLORS[n.data('type')] || '#7ee7e0',
-          'background-opacity': 0.92,
-          color: '#e6edf3',
-          'font-size': '11px',
-          'font-family': 'ui-monospace, Menlo, Consolas, monospace',
-          'text-valign': 'bottom',
-          'text-margin-y': 6,
-          'text-outline-color': '#0b0d10',
-          'text-outline-width': 2,
-          width: (n) => 18 + Math.min(36, (n.data('deg') || 0) * 1.5),
-          height: (n) => 18 + Math.min(36, (n.data('deg') || 0) * 1.5),
-          'border-width': 0,
-          'transition-property': 'background-color, border-color, border-width, opacity',
-          'transition-duration': '180ms',
-      }},
-      { selector: 'node:selected', style: { 'border-color': '#7ee7e0', 'border-width': 3 }},
-      { selector: 'node.dim', style: { opacity: 0.18 }},
-      { selector: 'node.hl',  style: { 'border-color': '#7ee7e0', 'border-width': 3 }},
-      { selector: 'edge', style: {
-          width: (e) => 0.6 + Math.min(2.8, (e.data('weight') || 0.1) * 0.8),
-          'line-color': (e) => TYPE_COLORS[e.source().data('type')] || '#444',
-          'line-opacity': 0.55,
-          'curve-style': 'bezier',
-          'target-arrow-shape': 'none',
-          'transition-property': 'line-opacity, line-color, width',
-          'transition-duration': '180ms',
-      }},
-      { selector: 'edge.dim', style: { 'line-opacity': 0.05 }},
-      { selector: 'edge.hl',  style: { 'line-opacity': 0.95, width: 2.5 }},
-    ],
-    layout: { name: 'fcose', animate: true, animationDuration: 500,
-              nodeRepulsion: 8000, idealEdgeLength: 100, padding: 40 },
-  });
-
-  window.__cy = cy;
-  window.__relayout = (name) => {
-    cy.layout({
-      name, animate: true, animationDuration: 500, padding: 40,
-      ...(name === 'fcose' ? { nodeRepulsion: 8000, idealEdgeLength: 100 } : {}),
-      ...(name === 'concentric' ? { concentric: (n) => n.degree(), levelWidth: () => 1 } : {}),
-    }).run();
-  };
-
-  // alpine:initialized has fired by the time we get here, so the
-  // graph-pane component is hydrated and Alpine.$data resolves cleanly.
-  const graphRoot = document.querySelector('.graph-pane');
-  const ax = () => Alpine.$data(graphRoot);
-
-  cy.on('tap', 'node', (e) => ax().selectFromCanvas(e.target));
-  cy.on('tap', (e) => {
-    if (e.target === cy) {
-      cy.elements().removeClass('hl dim');
-    }
-  });
-
-  // Side-panel "Connected to" entries call this to focus a node on the
-  // canvas instead of navigating away.
-  window.__focusNode = (id) => {
-    const target = cy.getElementById(id);
-    if (!target || target.length === 0) return;
-    cy.animate({ center: { eles: target }, zoom: 1.3 }, { duration: 350 });
-    ax().selectFromCanvas(target);
-  };
-});
 </script>
-
-<style>
-  .detail-panel { width: 380px; max-height: calc(100vh - 90px); overflow-y: auto; }
-  .detail-name { margin: 0.5rem 0 0.4rem; font-size: 1.05rem; }
-  .detail-desc { color: var(--fg-muted); font-size: 0.92rem; margin: 0.4rem 0; }
-  .detail-body { margin: 0.6rem 0; }
-  .detail-body summary { cursor: pointer; color: var(--fg-dim); font-size: 0.82rem; }
-  .detail-body summary:hover { color: var(--accent); }
-  .detail-body .md-body {
-    margin-top: 0.5rem;
-    max-height: 280px; overflow-y: auto;
-    padding: 0.6rem 0.85rem;
-    background: var(--bg);
-    border: 1px solid var(--border-soft);
-    border-radius: var(--radius);
-    font-size: 0.82rem;
-  }
-  .detail-meta {
-    display: grid; grid-template-columns: 75px 1fr; gap: 0.25rem 0.85rem;
-    margin: 0.85rem 0; padding: 0.65rem 0.85rem;
-    background: var(--bg); border-radius: var(--radius);
-    font-size: 0.78rem;
-  }
-  .detail-meta dt { color: var(--fg-dim); }
-  .detail-meta dd { margin: 0; color: var(--fg); }
-  .detail-meta code { font-size: 0.78rem; word-break: break-all; }
-  .md-updated { display: block; }
-  .md-updated-abs { display: block; font-size: 0.7rem; color: var(--fg-dim); }
-  .detail-neighbors { margin: 0.85rem 0; }
-  .detail-neighbors h4 {
-    color: var(--fg-dim); font-size: 0.78rem;
-    text-transform: uppercase; letter-spacing: 0.5px; margin: 0 0 0.5rem;
-  }
-  .detail-neighbors ul {
-    list-style: none; padding: 0; margin: 0;
-    display: flex; flex-direction: column; gap: 0.25rem;
-  }
-  .neighbor-row {
-    display: flex; align-items: center; gap: 0.55rem; width: 100%;
-    padding: 0.4rem 0.6rem; background: var(--bg);
-    border: 1px solid var(--border-soft); border-radius: var(--radius);
-    text-align: left; cursor: pointer;
-    transition: var(--transition);
-  }
-  .neighbor-row:hover {
-    border-color: var(--accent);
-    background: var(--panel-2);
-  }
-  .neighbor-dot {
-    width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
-  }
-  .neighbor-name {
-    flex: 1;
-    font-size: 0.82rem; color: var(--fg);
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-    min-width: 0;
-  }
-  .neighbor-type {
-    color: var(--fg-dim); font-size: 0.7rem;
-    font-family: var(--mono); text-transform: lowercase;
-    flex-shrink: 0;
-  }
-  .link-button {
-    background: transparent; border: 0; padding: 0.4rem 0;
-    color: var(--accent); cursor: pointer; font-size: 0.8rem;
-  }
-  .link-button:hover { color: var(--accent-hover); text-decoration: underline; }
-  .detail-actions { margin-top: 0.85rem; }
-  .citation { display: block; margin-top: 0.85rem; padding: 0.4rem 0.65rem;
-              background: var(--bg); border-radius: 4px; color: var(--fg-dim);
-              font-size: 0.75rem; word-break: break-all; }
-</style>
 {% endblock %}
