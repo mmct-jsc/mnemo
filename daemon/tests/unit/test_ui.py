@@ -62,7 +62,10 @@ def test_graph_page_renders(client: TestClient) -> None:
     r = client.get("/graph")
     assert r.status_code == 200
     assert "cytoscape" in r.text.lower()
-    assert 'id="cy"' in r.text
+    # v2.1 Nebula: canvas id changed from "cy" -> "cy-nebula" alongside
+    # the three-panel layout. Smoke for the new shell + canvas id.
+    assert 'id="cy-nebula"' in r.text
+    assert "nebula-shell" in r.text
 
 
 def test_sources_page_renders(client: TestClient) -> None:

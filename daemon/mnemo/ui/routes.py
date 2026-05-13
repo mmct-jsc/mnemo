@@ -492,8 +492,58 @@ def mount_ui(
         )
 
     @app.get("/ui/graph-data")
-    def graph_data(s: Store = Depends(get_store)) -> JSONResponse:
-        nodes = s.list_nodes(limit=1000)
+    def graph_data(
+        project: str | None = None,
+        node: str | None = None,
+        hops: int = 2,
+        s: Store = Depends(get_store),
+    ) -> JSONResponse:
+        """v2.1 Nebula graph data feed.
+
+        Backwards-compatible: no query string returns the full graph
+        (same shape the v1 page consumed). Optional scoping:
+
+        - ``?project=<key>``: only return nodes with that
+          ``project_key`` plus any cross-cutting BASE / NULL nodes
+          they connect to.
+        - ``?node=<id>&hops=<n>``: return the ego-network of
+          ``<id>`` out to ``n`` hops (default 2). Combine with
+          ``?project=`` to constrain the expansion to one project.
+
+        Each node carries ``type`` / ``project`` / ``source_path``
+        / ``description`` so the file-tree panel can group and the
+        detail panel can render without a second round-trip.
+
+        Each edge carries ``relation`` + ``weight`` + ``confidence``
+        so the canvas can encode uncertainty in line style.
+        """
+        # Step 1: collect the seed node set.
+        if node:
+            seed = s.get_node(node)
+            if seed is None:
+                return JSONResponse({"elements": []})
+            seed_ids: set[str] = {seed.id}
+            # BFS along edges (any relation) up to ``hops`` hops.
+            frontier: set[str] = {seed.id}
+            for _ in range(max(1, min(hops, 4))):
+                if not frontier:
+                    break
+                edges = s.get_edges_for_nodes(list(frontier))
+                next_frontier: set[str] = set()
+                for e in edges:
+                    for nid in (e.src_id, e.dst_id):
+                        if nid not in seed_ids:
+                            seed_ids.add(nid)
+                            next_frontier.add(nid)
+                frontier = next_frontier
+            nodes = list(s.get_nodes_by_ids(list(seed_ids)).values())
+        else:
+            nodes = s.list_nodes(limit=2000)
+            if project:
+                nodes = [
+                    n for n in nodes if n.project_key == project or n.project_key is None or n.base
+                ]
+
         elements: list[dict[str, Any]] = []
         node_ids: set[str] = set()
         for n in nodes:
@@ -505,11 +555,14 @@ def mount_ui(
                         "name": n.name,
                         "type": n.type,
                         "project": n.project_key,
+                        "source_path": n.source_path,
+                        "description": n.description,
                     }
                 }
             )
             node_ids.add(n.id)
-        # Pull edges only between nodes we surfaced.
+
+        # Step 2: edges. Only between nodes we surfaced.
         if node_ids:
             edges = s.get_edges_for_nodes(list(node_ids))
             for edge in edges:
@@ -521,6 +574,7 @@ def mount_ui(
                                 "target": edge.dst_id,
                                 "relation": edge.relation,
                                 "weight": edge.weight,
+                                "confidence": getattr(edge, "confidence", 1.0),
                             }
                         }
                     )
