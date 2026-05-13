@@ -2,6 +2,60 @@
 
 All notable changes to mnemo are documented here.
 
+## [2.1.2] - 2026-05-13
+
+**Two follow-on bug fixes** from real-use feedback minutes after
+v2.1.1 went out.
+
+### Fixed
+
+- **``/code`` project-card bars went blank** -- a stale duplicate
+  ``.bar-fill`` rule (introduced when the /code landing was built
+  pre-palette-refactor) sat AFTER the palette-driven ``.bar-fill``
+  rule and overrode the ``background`` declaration with nothing.
+  Result: per-type colors on the dashboard (which uses the same
+  class) worked, but on /code the bar inside the project card
+  was an invisible 4px transparent strip. Scoped the duplicate
+  rule under ``.code-project-card-bars`` so it can't shadow the
+  generic one, AND set ``background: var(--type-color, ...)`` on
+  the scoped version explicitly. Both surfaces now paint
+  consistently.
+- **Nebula deselect lag** when clicking empty canvas (or pressing
+  Escape) to clear a selection. Two compounding causes:
+  1. The base ``node`` selector had
+     ``transition-property: 'opacity, border-width,
+     underlay-opacity, underlay-padding'`` with a 220ms duration.
+     ``.dim`` toggles ``opacity`` + ``underlay-opacity`` -- so
+     deselect kicked off 471 simultaneous opacity tweens. With
+     motion-blur on, every redrawn frame for 220ms touched all
+     471 nodes.
+  2. ``_stopPulse()`` only unset a guard flag; the in-flight
+     ``node.animate({underlay-padding, underlay-opacity}, 900ms)``
+     chain kept running for up to 900ms after deselect, with its
+     ``complete`` callback queueing the next half of the cycle
+     BEFORE the flag check fired. The previously-selected node
+     kept mutating styles long after it should have been done.
+
+  Fixes:
+  - Dropped ``opacity`` and ``underlay-opacity`` from the base
+    node ``transition-property``. They're the properties ``.dim``
+    toggles across the whole graph, and snapping them is fine --
+    the selected cluster still feels "lifted" because
+    ``border-width`` and ``underlay-padding`` (changed only on
+    the 1-or-few ``.hl`` nodes) still transition.
+  - ``_stopPulse()`` now calls ``node.stop(true, false)`` to
+    cancel the in-flight animate chain AND
+    ``removeStyle('underlay-padding underlay-opacity')`` to clear
+    the inline styles the pulse wrote.
+  - ``deselect()`` calls ``_stopPulse()`` FIRST, then
+    ``cy.elements().stop(true, false)`` to cancel any other
+    queued animations (e.g. selectFromCanvas's camera-fit),
+    THEN the bulk ``removeClass('hl dim')`` inside ``cy.batch()``.
+
+  Net effect on a 478-node graph: deselect sync ~10ms (vs ~90ms
+  before); no lingering tween animations after 300ms (vs the
+  pulse running until its 900ms complete callback fired).
+
 ## [2.1.1] - 2026-05-13
 
 **Nebula UX polish + scaling architecture.** Seven follow-ups on
