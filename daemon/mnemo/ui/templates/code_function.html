@@ -1,0 +1,151 @@
+{% extends "base.html" %}
+{% block title %} - {{ node.name }}{% endblock %}
+
+{% block content %}
+<section class="code-function">
+  <header class="page-header">
+    <p class="breadcrumb">
+      <a href="/code">Code</a> /
+      <a href="/code/{{ project_key | urlencode }}">{{ project_key }}</a> /
+      <strong>{{ node.name }}</strong>
+    </p>
+    <h2>
+      <span class="badge type-{{ node.type }}">{{ node.type | replace('code_', '') }}</span>
+      <code>{{ node.name }}</code>
+    </h2>
+    <p class="hint"><code>{{ node.source_path | replace('\\', '/') }}</code></p>
+    {% if node.description %}
+    <p class="lead">{{ node.description }}</p>
+    {% endif %}
+  </header>
+
+  <div class="code-function-body">
+    {% if node.body %}
+    <details open>
+      <summary>Body</summary>
+      <pre class="code-snippet"><code>{{ node.body }}</code></pre>
+    </details>
+    {% endif %}
+
+    <div class="ego-network">
+      {% if callers %}
+      <section class="code-section">
+        <h3>Callers <span class="hint">({{ callers | length }})</span></h3>
+        <ul class="code-list">
+          {% for e in callers %}
+          {% set caller = neighbors.get(e.src_id) %}
+          {% if caller %}
+          <li>
+            <a href="/code/{{ project_key | urlencode }}/function/{{ caller.id }}">
+              <span class="badge type-{{ caller.type }}">{{ caller.type | replace('code_', '') }}</span>
+              <code>{{ caller.name }}</code>
+            </a>
+            <span class="hint">conf {{ '%.2f' | format(e.confidence) }}</span>
+          </li>
+          {% endif %}
+          {% endfor %}
+        </ul>
+      </section>
+      {% endif %}
+
+      {% if callees %}
+      <section class="code-section">
+        <h3>Callees <span class="hint">({{ callees | length }})</span></h3>
+        <ul class="code-list">
+          {% for e in callees %}
+          {% set callee = neighbors.get(e.dst_id) %}
+          {% if callee %}
+          <li>
+            <a href="/code/{{ project_key | urlencode }}/function/{{ callee.id }}">
+              <span class="badge type-{{ callee.type }}">{{ callee.type | replace('code_', '') }}</span>
+              <code>{{ callee.name }}</code>
+            </a>
+            <span class="hint">conf {{ '%.2f' | format(e.confidence) }}</span>
+          </li>
+          {% endif %}
+          {% endfor %}
+        </ul>
+      </section>
+      {% endif %}
+
+      {% if defines_in %}
+      <section class="code-section">
+        <h3>Defined in</h3>
+        <ul class="code-list">
+          {% for e in defines_in %}
+          {% set parent = neighbors.get(e.src_id) %}
+          {% if parent %}
+          <li>
+            <a href="/node/{{ parent.id }}">
+              <span class="badge type-{{ parent.type }}">{{ parent.type | replace('code_', '') }}</span>
+              <code>{{ parent.name }}</code>
+            </a>
+          </li>
+          {% endif %}
+          {% endfor %}
+        </ul>
+      </section>
+      {% endif %}
+
+      {% if method_of %}
+      <section class="code-section">
+        <h3>Method of</h3>
+        <ul class="code-list">
+          {% for e in method_of %}
+          {% set cls = neighbors.get(e.dst_id) %}
+          {% if cls %}
+          <li>
+            <a href="/node/{{ cls.id }}">
+              <span class="badge type-code_class">class</span>
+              <code>{{ cls.name }}</code>
+            </a>
+          </li>
+          {% endif %}
+          {% endfor %}
+        </ul>
+      </section>
+      {% endif %}
+
+      {% if served_by %}
+      <section class="code-section">
+        <h3>Served by route(s)</h3>
+        <ul class="code-list">
+          {% for e in served_by %}
+          {% set route = neighbors.get(e.src_id) %}
+          {% if route %}
+          <li>
+            <a href="/node/{{ route.id }}">
+              <span class="badge type-code_route">route</span>
+              <code>{{ route.name }}</code>
+            </a>
+          </li>
+          {% endif %}
+          {% endfor %}
+        </ul>
+      </section>
+      {% endif %}
+
+      {% if commits %}
+      <section class="code-section">
+        <h3>Decision provenance
+          <span class="hint">commits that touched this function</span>
+        </h3>
+        <ul class="code-list">
+          {% for e in commits %}
+          {% set commit = neighbors.get(e.src_id) %}
+          {% if commit %}
+          <li>
+            <a href="/node/{{ commit.id }}">
+              <span class="badge">commit</span>
+              <code>{{ commit.name }}</code>
+            </a>
+          </li>
+          {% endif %}
+          {% endfor %}
+        </ul>
+      </section>
+      {% endif %}
+    </div>
+  </div>
+</section>
+{% endblock %}

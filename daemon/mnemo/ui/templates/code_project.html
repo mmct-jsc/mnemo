@@ -1,0 +1,224 @@
+{% extends "base.html" %}
+{% block title %} - code/{{ project_key }}{% endblock %}
+
+{% block content %}
+<section class="code-project" x-data="{
+  filter: '',
+  shouldShow(text) { return !this.filter || (text || '').toLowerCase().includes(this.filter.toLowerCase()); },
+}">
+  <header class="page-header">
+    <p class="breadcrumb"><a href="/code">Code</a> / <strong>{{ project_key }}</strong></p>
+    <div class="project-header-row">
+      <h2>{{ project_key }}</h2>
+      <div class="project-actions">
+        <a class="primary-action" href="/graph?project={{ project_key | urlencode }}">
+          <span>Explore in Nebula</span>
+          <span class="action-arrow">&rarr;</span>
+        </a>
+        <a class="ghost-action" href="/code/{{ project_key | urlencode }}/sitemap">
+          Sitemap
+        </a>
+      </div>
+    </div>
+
+    <div class="project-stats">
+      <div class="stat-cell">
+        <strong>{{ stats.modules }}</strong><span>modules</span>
+      </div>
+      <div class="stat-cell">
+        <strong>{{ stats.functions }}</strong><span>functions</span>
+      </div>
+      <div class="stat-cell">
+        <strong>{{ stats.classes }}</strong><span>classes</span>
+      </div>
+      <div class="stat-cell">
+        <strong>{{ stats.methods }}</strong><span>methods</span>
+      </div>
+      <div class="stat-cell">
+        <strong>{{ stats.routes }}</strong><span>routes</span>
+      </div>
+      <div class="stat-cell">
+        <strong>{{ stats.components }}</strong><span>components</span>
+      </div>
+      <div class="stat-cell">
+        <strong>{{ stats.endpoints }}</strong><span>endpoints</span>
+      </div>
+    </div>
+
+    {% if common_prefix %}
+    <p class="project-prefix">
+      Source root <code>{{ common_prefix }}</code>
+    </p>
+    {% endif %}
+  </header>
+
+  <div class="project-toolbar">
+    <input type="search"
+           placeholder="filter modules / declarations..."
+           x-model="filter">
+    <span class="hint" x-show="filter" x-cloak>showing matches only</span>
+  </div>
+
+  <div class="project-columns">
+
+    <!-- Module breakdown: one card per file, declarations grouped inside -->
+    <section class="project-modules">
+      <h3 class="section-title">
+        <span>Modules</span>
+        <span class="section-count">{{ module_rows | length }}</span>
+      </h3>
+      <div class="module-grid">
+        {% for row in module_rows %}
+        <article class="module-card"
+                 x-show="shouldShow('{{ row.display_path | replace("'", "") }}') ||
+                         {{ row.decls.function | length }} +
+                         {{ row.decls.class | length }} +
+                         {{ row.decls.method | length }} +
+                         {{ row.decls.route | length }} > 0">
+          <header class="module-card-head">
+            <a class="module-card-title"
+               href="/graph?project={{ project_key | urlencode }}&node={{ row.node.id }}">
+              <code>{{ row.display_path }}</code>
+            </a>
+            <span class="module-card-count" title="declarations in this module">
+              {{ row.decl_count }}
+            </span>
+          </header>
+          {% if row.decls.route %}
+          <div class="decl-group">
+            <span class="decl-group-label"><span class="dot swatch-code_route"></span> routes</span>
+            <ul class="decl-list">
+              {% for r in row.decls.route %}
+              <li x-show="shouldShow('{{ r.name | replace("'", "") }}')">
+                <a href="/node/{{ r.id }}">
+                  <code>{{ r.name }}</code>
+                </a>
+              </li>
+              {% endfor %}
+            </ul>
+          </div>
+          {% endif %}
+          {% if row.decls.class %}
+          <div class="decl-group">
+            <span class="decl-group-label"><span class="dot swatch-code_class"></span> classes</span>
+            <ul class="decl-list">
+              {% for c in row.decls.class %}
+              <li x-show="shouldShow('{{ c.name | replace("'", "") }}')">
+                <a href="/graph?project={{ project_key | urlencode }}&node={{ c.id }}"
+                   title="{{ c.name }}">
+                  <code>{{ c.name }}</code>
+                </a>
+              </li>
+              {% endfor %}
+            </ul>
+          </div>
+          {% endif %}
+          {% if row.decls.function %}
+          <div class="decl-group">
+            <span class="decl-group-label"><span class="dot swatch-code_function"></span> fns</span>
+            <ul class="decl-list">
+              {% for f in row.decls.function %}
+              <li x-show="shouldShow('{{ f.name | replace("'", "") }}')">
+                <a href="/code/{{ project_key | urlencode }}/function/{{ f.id }}"
+                   title="{{ f.name }}">
+                  <code>{{ f.name }}</code>
+                </a>
+              </li>
+              {% endfor %}
+            </ul>
+          </div>
+          {% endif %}
+          {% if row.decls.method %}
+          <div class="decl-group">
+            <span class="decl-group-label"><span class="dot swatch-code_method"></span> methods</span>
+            <ul class="decl-list">
+              {% for m in row.decls.method %}
+              <li x-show="shouldShow('{{ m.name | replace("'", "") }}')">
+                <a href="/code/{{ project_key | urlencode }}/function/{{ m.id }}"
+                   title="{{ m.name }}">
+                  <code>{{ m.name }}</code>
+                </a>
+              </li>
+              {% endfor %}
+            </ul>
+          </div>
+          {% endif %}
+        </article>
+        {% endfor %}
+      </div>
+    </section>
+
+    <!-- Side rail: hot list + lessons -->
+    <aside class="project-rail">
+      {% if ranked_functions %}
+      <section class="rail-card" x-data="{ expanded: false }">
+        <h3 class="section-title">
+          <span>Most-connected</span>
+          <span class="section-count">{{ ranked_functions | length }}</span>
+        </h3>
+        <ol class="hot-list">
+          {% for fn in ranked_functions %}
+          <li x-show="(expanded || {{ loop.index0 }} < 10) && shouldShow('{{ fn.name | replace("'", "") }}')">
+            <a href="/code/{{ project_key | urlencode }}/function/{{ fn.id }}"
+               title="{{ fn.name }}">
+              <span class="dot swatch-{{ fn.type }}"></span>
+              <code>{{ fn.name }}</code>
+            </a>
+          </li>
+          {% endfor %}
+        </ol>
+        {% if ranked_functions | length > 10 %}
+        <button class="expand-toggle" type="button"
+                @click="expanded = !expanded">
+          <span x-show="!expanded" x-cloak>show {{ ranked_functions | length - 10 }} more &darr;</span>
+          <span x-show="expanded" x-cloak>show less &uarr;</span>
+        </button>
+        {% endif %}
+      </section>
+      {% endif %}
+
+      {% if components %}
+      <section class="rail-card">
+        <h3 class="section-title">
+          <span>Components</span>
+          <span class="section-count">{{ components | length }}</span>
+        </h3>
+        <ol class="hot-list">
+          {% for c in components %}
+          <li x-show="shouldShow('{{ c.name | replace("'", "") }}')">
+            <a href="/graph?project={{ project_key | urlencode }}&node={{ c.id }}"
+               title="{{ c.name }}">
+              <span class="dot swatch-code_component"></span>
+              <code>{{ c.name }}</code>
+            </a>
+          </li>
+          {% endfor %}
+        </ol>
+      </section>
+      {% endif %}
+
+      {% if feedback_nodes %}
+      <section class="rail-card">
+        <h3 class="section-title">
+          <span>Lessons learned</span>
+          <span class="section-count">{{ feedback_nodes | length }}</span>
+        </h3>
+        <ul class="lessons-list">
+          {% for fb in feedback_nodes %}
+          <li>
+            <a href="/node/{{ fb.id }}">
+              <code>{{ fb.name }}</code>
+            </a>
+            {% if fb.description %}
+            <p class="hint">{{ fb.description | truncate(120) }}</p>
+            {% endif %}
+          </li>
+          {% endfor %}
+        </ul>
+      </section>
+      {% endif %}
+    </aside>
+
+  </div>
+</section>
+{% endblock %}
