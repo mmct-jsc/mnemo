@@ -12,7 +12,7 @@
       <h2>{{ project_key }}</h2>
       <div class="project-actions">
         <a class="primary-action" href="/graph?project={{ project_key | urlencode }}">
-          <span>Explore graph</span>
+          <span>Explore in Nebula</span>
           <span class="action-arrow">&rarr;</span>
         </a>
         <a class="ghost-action" href="/code/{{ project_key | urlencode }}/sitemap">
@@ -104,7 +104,8 @@
             <ul class="decl-list">
               {% for c in row.decls.class %}
               <li x-show="shouldShow('{{ c.name | replace("'", "") }}')">
-                <a href="/graph?project={{ project_key | urlencode }}&node={{ c.id }}">
+                <a href="/graph?project={{ project_key | urlencode }}&node={{ c.id }}"
+                   title="{{ c.name }}">
                   <code>{{ c.name }}</code>
                 </a>
               </li>
@@ -118,7 +119,8 @@
             <ul class="decl-list">
               {% for f in row.decls.function %}
               <li x-show="shouldShow('{{ f.name | replace("'", "") }}')">
-                <a href="/code/{{ project_key | urlencode }}/function/{{ f.id }}">
+                <a href="/code/{{ project_key | urlencode }}/function/{{ f.id }}"
+                   title="{{ f.name }}">
                   <code>{{ f.name }}</code>
                 </a>
               </li>
@@ -132,7 +134,8 @@
             <ul class="decl-list">
               {% for m in row.decls.method %}
               <li x-show="shouldShow('{{ m.name | replace("'", "") }}')">
-                <a href="/code/{{ project_key | urlencode }}/function/{{ m.id }}">
+                <a href="/code/{{ project_key | urlencode }}/function/{{ m.id }}"
+                   title="{{ m.name }}">
                   <code>{{ m.name }}</code>
                 </a>
               </li>
@@ -156,7 +159,8 @@
         <ol class="hot-list">
           {% for fn in ranked_functions %}
           <li x-show="(expanded || {{ loop.index0 }} < 10) && shouldShow('{{ fn.name | replace("'", "") }}')">
-            <a href="/code/{{ project_key | urlencode }}/function/{{ fn.id }}">
+            <a href="/code/{{ project_key | urlencode }}/function/{{ fn.id }}"
+               title="{{ fn.name }}">
               <span class="dot swatch-{{ fn.type }}"></span>
               <code>{{ fn.name }}</code>
             </a>
@@ -182,7 +186,8 @@
         <ol class="hot-list">
           {% for c in components %}
           <li x-show="shouldShow('{{ c.name | replace("'", "") }}')">
-            <a href="/graph?project={{ project_key | urlencode }}&node={{ c.id }}">
+            <a href="/graph?project={{ project_key | urlencode }}&node={{ c.id }}"
+               title="{{ c.name }}">
               <span class="dot swatch-code_component"></span>
               <code>{{ c.name }}</code>
             </a>
