@@ -16,7 +16,7 @@
   <header class="page-hero">
     <div class="hero-text">
       <div class="badges" style="margin-bottom: 0.55rem;">
-        <span class="badge type-{{ node.type }}">{{ node.type | replace('memory_','') | replace('_',' ') }}</span>
+        <span class="badge type-{{ node.type }}" style="--type-color: {{ type_colors.get(node.type, type_color_fallback) }};">{{ node.type | replace('memory_','') | replace('_',' ') }}</span>
         {% if node.project_key %}<span class="badge">{{ node.project_key }}</span>{% endif %}
         <span class="badge base-badge" x-show="isBase" x-cloak title="Surfaces in every project's queries">base</span>
       </div>
@@ -138,7 +138,7 @@
                 {% if e.dst_id in neighbors %}
                   {% set dst = neighbors[e.dst_id] %}
                   <a href="/node/{{ dst.id }}" class="edge-target">
-                    <span class="badge type-{{ dst.type }}">{{ dst.type | replace('memory_','') | replace('_',' ') }}</span>
+                    <span class="badge type-{{ dst.type }}" style="--type-color: {{ type_colors.get(dst.type, type_color_fallback) }};">{{ dst.type | replace('memory_','') | replace('_',' ') }}</span>
                     <span class="name">{{ dst.name }}</span>
                   </a>
                 {% else %}
@@ -166,7 +166,7 @@
                 {% if e.src_id in neighbors %}
                   {% set src = neighbors[e.src_id] %}
                   <a href="/node/{{ src.id }}" class="edge-target">
-                    <span class="badge type-{{ src.type }}">{{ src.type | replace('memory_','') | replace('_',' ') }}</span>
+                    <span class="badge type-{{ src.type }}" style="--type-color: {{ type_colors.get(src.type, type_color_fallback) }};">{{ src.type | replace('memory_','') | replace('_',' ') }}</span>
                     <span class="name">{{ src.name }}</span>
                   </a>
                 {% else %}

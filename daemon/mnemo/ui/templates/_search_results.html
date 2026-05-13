@@ -17,7 +17,7 @@
     <li class="hit" data-node-id="{{ h.node_id }}">
       <a href="/node/{{ h.node_id }}">
         <span class="score">{{ '%.3f' % h.score }}</span>
-        <span class="badge type-{{ h.type }}">{{ h.type | replace('memory_','') | replace('_',' ') }}</span>
+        <span class="badge type-{{ h.type }}" style="--type-color: {{ type_colors.get(h.type, type_color_fallback) }};">{{ h.type | replace('memory_','') | replace('_',' ') }}</span>
         <span class="name">{{ h.name }}</span>
       </a>
       {% if h.description %}<p class="desc">{{ h.description }}</p>{% endif %}

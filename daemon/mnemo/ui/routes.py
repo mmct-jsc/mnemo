@@ -46,6 +46,14 @@ def mount_ui(
     from mnemo import __version__ as _mnemo_version
 
     templates.env.globals["mnemo_version"] = _mnemo_version
+    # Share the single-source node-type palette with every template
+    # (and indirectly with JS via base.html). Adding a new node type
+    # means editing palette.py only -- badges, bar fills, graph nodes,
+    # and the audit chips all pick up the new color automatically.
+    from mnemo.ui import palette as _palette
+
+    templates.env.globals["type_colors"] = _palette.TYPE_COLORS
+    templates.env.globals["type_color_fallback"] = _palette.FALLBACK_COLOR
     if STATIC_DIR.is_dir():
         app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
