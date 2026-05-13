@@ -715,20 +715,37 @@ function nebula() {
         },
         breadthfirst: {
           directed: true,
-          spacingFactor: 1.4,
-          // Use the most-connected node as the root so the tree
-          // grows outward from the hub.
+          spacingFactor: 1.2,
+          // RADIAL fan around each component's root rather than the
+          // default row-by-row layout. With a typical code graph the
+          // row layout collapses to a straight horizontal line
+          // because most nodes have only one or two siblings per
+          // BFS level; circle: true turns each tree into a fan.
+          circle: true,
+          // One root per connected component, picked as the highest-
+          // degree node in that component. Without this, BFS only
+          // walks the seed's component and dumps everything else into
+          // a leftover row -- the "straight line" the user saw.
           roots: (() => {
-            let best = null, max = -1;
-            visible.nodes().forEach((n) => {
-              const d = n.degree();
-              if (d > max) {
-                max = d;
-                best = n;
-              }
+            const ids = [];
+            visible.components().forEach((comp) => {
+              let best = null;
+              let max = -1;
+              comp.nodes().forEach((n) => {
+                const d = n.degree();
+                if (d > max) {
+                  max = d;
+                  best = n;
+                }
+              });
+              if (best) ids.push(best.id());
             });
-            return best ? best.id() : undefined;
+            return ids;
           })(),
+          // Squeeze siblings closer to the root so each fan has
+          // visible structure rather than a single dense ring.
+          avoidOverlap: true,
+          avoidOverlapPadding: 12,
         },
         grid: {
           condense: true,
