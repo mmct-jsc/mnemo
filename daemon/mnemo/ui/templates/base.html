@@ -137,7 +137,7 @@
 
     <!-- Active-project switcher (v1.1). Compact pill shows the
          current active project; click opens a small popover. -->
-    <div class="active-proj" x-data="activeProjectWidget()" x-init="init()" @click.outside="popoverOpen = false">
+    <div class="active-proj" x-data="activeProjectWidget()" @click.outside="popoverOpen = false">
       <button class="active-proj-pill" @click="popoverOpen = !popoverOpen" :class="{ 'is-set': active }">
         <span class="active-proj-dot" aria-hidden="true"></span>
         <span class="active-proj-label" x-text="active ? active.project_key : 'no project'"></span>
