@@ -273,10 +273,63 @@ def mount_ui(
             deg[e.dst_id] = deg.get(e.dst_id, 0) + 1
         ranked_functions = sorted(functions + methods, key=lambda n: -deg.get(n.id, 0))[:25]
 
+        # v2.1: group declarations by their parent module so the page
+        # renders as a file-by-file breakdown instead of one giant
+        # flat list. Each module gets the functions / classes /
+        # methods whose source_path's bare-file-portion matches its
+        # source_path. Module display name strips the longest common
+        # repo prefix so deep Windows paths don't dominate.
+        def _file_of(sp: str) -> str:
+            # Strip ``:<start>-<end>`` and ``#METHOD`` suffixes.
+            from re import sub
+
+            return sub(r"(:\d+-\d+)(#.+)?$", "", sp.replace("\\", "/"))
+
+        # Longest common prefix across modules' source_paths -- used
+        # purely for display. The actual lookup uses full paths.
+        norm_paths = [_file_of(m.source_path) for m in modules]
+        common_prefix = ""
+        if norm_paths:
+            parts_lists = [p.split("/") for p in norm_paths]
+            min_len = min(len(p) for p in parts_lists)
+            for i in range(min_len):
+                first = parts_lists[0][i]
+                if all(pl[i] == first for pl in parts_lists):
+                    common_prefix += first + "/"
+                else:
+                    break
+
+        # Index declarations by their owning module path.
+        decls_by_module: dict[str, dict[str, list[Any]]] = {}
+        for d in functions + classes + methods + routes:
+            mp = _file_of(d.source_path)
+            bucket = decls_by_module.setdefault(
+                mp, {"function": [], "class": [], "method": [], "route": []}
+            )
+            kind = d.type.removeprefix("code_")
+            if kind in bucket:
+                bucket[kind].append(d)
+
+        # Build a sorted module breakdown with degree info.
+        module_rows = []
+        for m in sorted(modules, key=lambda n: n.source_path):
+            mp = _file_of(m.source_path)
+            decls = decls_by_module.get(mp, {})
+            decl_count = sum(len(v) for v in decls.values())
+            display_path = mp[len(common_prefix) :] if common_prefix else mp
+            module_rows.append(
+                {
+                    "node": m,
+                    "display_path": display_path or m.name,
+                    "decls": decls,
+                    "decl_count": decl_count,
+                    "deg": deg.get(m.id, 0),
+                }
+            )
+        module_rows.sort(key=lambda r: -r["decl_count"])
+
         # Lessons learned: pull memory_feedback nodes scoped to the
         # project so the page surfaces the "why is this here" digest.
-        # Keep this cheap for now -- the full k-means cluster from the
-        # design lands in a later iteration.
         feedback_nodes = []
         if pk is not None:
             feedback_nodes = s.list_nodes(type="memory_feedback", project_key=pk, limit=20)
@@ -289,6 +342,8 @@ def mount_ui(
                 project_key=project_key,
                 resolved_key=pk,
                 modules=modules,
+                module_rows=module_rows,
+                common_prefix=common_prefix,
                 ranked_functions=ranked_functions,
                 classes=classes,
                 routes=routes,
@@ -301,6 +356,7 @@ def mount_ui(
                     "methods": len(methods),
                     "routes": len(routes),
                     "components": len(components),
+                    "endpoints": len(s.list_nodes(type="code_endpoint", limit=10_000)),
                 },
             ),
         )
