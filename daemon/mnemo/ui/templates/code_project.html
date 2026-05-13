@@ -148,14 +148,14 @@
     <!-- Side rail: hot list + lessons -->
     <aside class="project-rail">
       {% if ranked_functions %}
-      <section class="rail-card">
+      <section class="rail-card" x-data="{ expanded: false }">
         <h3 class="section-title">
           <span>Most-connected</span>
           <span class="section-count">{{ ranked_functions | length }}</span>
         </h3>
         <ol class="hot-list">
-          {% for fn in ranked_functions[:10] %}
-          <li x-show="shouldShow('{{ fn.name | replace("'", "") }}')">
+          {% for fn in ranked_functions %}
+          <li x-show="(expanded || {{ loop.index0 }} < 10) && shouldShow('{{ fn.name | replace("'", "") }}')">
             <a href="/code/{{ project_key | urlencode }}/function/{{ fn.id }}">
               <span class="dot swatch-{{ fn.type }}"></span>
               <code>{{ fn.name }}</code>
@@ -163,6 +163,13 @@
           </li>
           {% endfor %}
         </ol>
+        {% if ranked_functions | length > 10 %}
+        <button class="expand-toggle" type="button"
+                @click="expanded = !expanded">
+          <span x-show="!expanded" x-cloak>show {{ ranked_functions | length - 10 }} more &darr;</span>
+          <span x-show="expanded" x-cloak>show less &uarr;</span>
+        </button>
+        {% endif %}
       </section>
       {% endif %}
 

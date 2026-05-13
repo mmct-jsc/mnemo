@@ -457,12 +457,9 @@ function nebula() {
       this.cy.on('tap', 'node', (evt) => this.selectFromCanvas(evt.target));
       this.cy.on('tap', (evt) => {
         if (evt.target === this.cy) {
-          this.cy.elements().removeClass('hl dim');
+          this.cy.batch(() => this.cy.elements().removeClass('hl dim'));
           this.selected = null;
-          if (this._pulseTimer) {
-            clearInterval(this._pulseTimer);
-            this._pulseTimer = null;
-          }
+          this._stopPulse();
         }
       });
 
@@ -599,60 +596,87 @@ function nebula() {
       const d = { ...node.data() };
       this.selected = d;
       this.neighbors = [];
-      this.cy.elements().removeClass('hl').addClass('dim');
-      node.removeClass('dim').addClass('hl');
-      node.connectedEdges().removeClass('dim').addClass('hl');
-      node.neighborhood().nodes().removeClass('dim').addClass('hl');
 
-      // Silky pulse on the selected node: animate the underlay
-      // padding in a heartbeat rhythm. Cancel any prior loop so we
-      // never accumulate.
-      if (this._pulseTimer) {
-        clearInterval(this._pulseTimer);
-        this._pulseTimer = null;
-      }
-      let phase = 0;
-      this._pulseTimer = setInterval(() => {
-        if (!this.selected || this.selected.id !== d.id) {
-          clearInterval(this._pulseTimer);
-          this._pulseTimer = null;
-          return;
-        }
-        phase = (phase + 1) % 60;
-        // sine wave -> padding cycles 12..22 px every ~1.8s
-        const pad = 14 + 6 * Math.sin(phase / 60 * Math.PI * 2);
-        node.style('underlay-padding', pad);
-        // also nudge the marching-ants dash offset on connected edges
-        // so the call/route directionality is visually flowing.
-        node.connectedEdges('.hl').forEach(e => {
-          const prev = e.data('dashOffset') || 0;
-          const next = (prev + 1) % 10;
-          e.data('dashOffset', next);
-          e.style('line-dash-offset', -next);
-        });
-      }, 60);
+      // Stop any prior pulse loop before we touch the canvas.
+      this._stopPulse();
 
-      // Hydrate body from /v1/nodes/<id>.
-      fetch('/v1/nodes/' + d.id).then(r => r.ok ? r.json() : null).then(full => {
-        if (full) {
-          this.selected = { ...d, ...full };
-        }
-      }).catch(() => {});
+      // PERFORMANCE: batch class mutations so Cytoscape only
+      // re-styles once. Without ``batch``, each ``.addClass`` on a
+      // 1200-element graph forces a separate render pass.
+      const neighborhood = node.closedNeighborhood();
+      this.cy.batch(() => {
+        this.cy.elements().removeClass('hl dim');
+        // Dim only what's NOT in the neighborhood.
+        this.cy.elements().not(neighborhood).addClass('dim');
+        neighborhood.addClass('hl');
+      });
+
+      // Hydrate body from /v1/nodes/<id> -- defer the fetch a frame
+      // so the click feels instant. The DOM updates from this.selected
+      // happen on the next Alpine tick regardless.
+      requestAnimationFrame(() => {
+        fetch('/v1/nodes/' + d.id)
+          .then((r) => (r.ok ? r.json() : null))
+          .then((full) => {
+            if (full && this.selected && this.selected.id === d.id) {
+              this.selected = { ...this.selected, ...full };
+            }
+          })
+          .catch(() => {});
+      });
 
       // Build neighbors list (deduped by node id, keep best relation).
       const seen = {};
-      node.connectedEdges().forEach(e => {
+      node.connectedEdges().forEach((e) => {
         const other = e.source().id() === d.id ? e.target() : e.source();
         const od = other.data();
         const rel = e.data('relation');
         const conf = e.data('confidence') ?? 1.0;
         if (!seen[od.id] || conf > seen[od.id].confidence) {
-          seen[od.id] = {
-            id: od.id, name: od.name, type: od.type, rel, confidence: conf,
-          };
+          seen[od.id] = { id: od.id, name: od.name, type: od.type, rel, confidence: conf };
         }
       });
       this.neighbors = Object.values(seen);
+
+      // PERFORMANCE: replace the old 60ms-tick setInterval pulse
+      // (which re-styled the selected node + every highlighted edge
+      // on every tick) with Cytoscape's own animation scheduler.
+      // It uses requestAnimationFrame and only animates the ONE
+      // selected node, not its edges.
+      this._startPulse(node);
+    },
+
+    _startPulse(node) {
+      this._pulseNode = node;
+      const cycle = () => {
+        if (
+          !this._pulseNode ||
+          this._pulseNode !== node ||
+          !this.selected ||
+          this.selected.id !== node.id()
+        ) {
+          return;
+        }
+        node.animate(
+          { style: { 'underlay-padding': 20, 'underlay-opacity': 0.7 } },
+          {
+            duration: 900,
+            easing: 'ease-in-out',
+            complete: () => {
+              if (this._pulseNode !== node) return;
+              node.animate(
+                { style: { 'underlay-padding': 14, 'underlay-opacity': 0.6 } },
+                { duration: 900, easing: 'ease-in-out', complete: cycle },
+              );
+            },
+          },
+        );
+      };
+      cycle();
+    },
+
+    _stopPulse() {
+      this._pulseNode = null;
     },
 
     focusNode(id) {
