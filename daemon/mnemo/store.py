@@ -11,6 +11,7 @@ database is safe.
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import struct
 import threading
@@ -34,6 +35,32 @@ def _deserialize_float32(blob: bytes) -> list[float]:
     """
     n = len(blob) // 4
     return list(struct.unpack(f"<{n}f", blob))
+
+
+_TRUNCATION_MARKER_RE = re.compile(r"\n\.\.\. \(\d+ more lines\)\s*$")
+
+
+def _strip_truncation_marker(body: str | None) -> str:
+    """Strip the legacy ``\\n... (N more lines)`` suffix from a code node
+    body.
+
+    v2.0 phase 4 wrote this marker into the stored body so the UI
+    could show "this is truncated". v2.1 polish: the marker leaks
+    into embeddings, query hits, and (when chat lands in v3) into
+    user-visible LLM output. Keeping it only as a UI affordance
+    via separate metadata leaves the body as clean source code.
+
+    This stripper runs on every node read so:
+    - Old data with markers (pre-v2.1) gets cleaned at read time --
+      no schema migration needed; a reindex will rewrite cleanly.
+    - New ingest no longer adds the marker
+      (see ``parsers.code._truncate_lines``).
+    - Embeddings already computed include the marker, but a
+      reindex re-embeds clean text.
+    """
+    if not body:
+        return body or ""
+    return _TRUNCATION_MARKER_RE.sub("", body)
 
 
 def _edge_confidence(row: object) -> float:
@@ -758,7 +785,7 @@ class Store:
             type=row["type"],
             name=row["name"],
             description=row["description"],
-            body=row["body"],
+            body=_strip_truncation_marker(row["body"]),
             source_path=row["source_path"],
             source_kind=row["source_kind"],
             project_key=row["project_key"],

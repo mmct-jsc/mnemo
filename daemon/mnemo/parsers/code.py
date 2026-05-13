@@ -460,12 +460,21 @@ def _slice_text(node: tree_sitter.Node) -> str:
 
 
 def _truncate_lines(text: str, head_lines: int) -> str:
+    """Return the first ``head_lines`` lines of ``text``.
+
+    v2.0 originally appended a ``... (N more lines)`` marker to signal
+    truncation. v2.1 drops that marker so the stored body is clean
+    source code -- embeddings, query hits, and any future chat layer
+    see only the actual lines, not a human-readable note that could
+    leak into LLM output. The UI surfaces "X of Y lines stored" via
+    separate metadata if it needs the affordance; the canonical
+    "full content" path is the ``GET /v1/nodes/<id>/full_source``
+    endpoint which re-reads the file from disk.
+    """
     lines = text.splitlines()
     if len(lines) <= head_lines:
         return text
-    head = lines[:head_lines]
-    remaining = len(lines) - head_lines
-    return "\n".join(head) + f"\n... ({remaining} more lines)"
+    return "\n".join(lines[:head_lines])
 
 
 def _hash_bytes(b: bytes) -> str:

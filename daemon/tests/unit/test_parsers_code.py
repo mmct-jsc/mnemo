@@ -122,21 +122,27 @@ def test_extract_python_module_defines_pointers() -> None:
     assert method.source_path not in module.children_source_paths
 
 
-def test_extract_python_body_truncation_marker_on_long_function() -> None:
-    """Function bodies > 60 lines get the truncated representation with
-    a one-line trailing marker so the LLM hits don't blow the token
-    budget on a long function."""
+def test_extract_python_body_truncates_long_function_without_marker() -> None:
+    """Function bodies > 60 lines are truncated to the head.
+
+    v2.1 dropped the legacy ``... (N more lines)`` marker the v2.0
+    design originally appended: the marker leaked into embeddings
+    and (when chat lands in v3) would have surfaced inside LLM
+    output. The stored body is now clean source code only; full
+    content is reachable via ``GET /v1/nodes/<id>/full_source``.
+    """
     from mnemo.parsers import code
 
     lines = ["def big():"] + [f"    x_{i} = {i}" for i in range(120)]
     src = ("\n".join(lines) + "\n").encode("utf-8")
     units = code.extract(Path("/repo/big.py"), src, language="python")
     fn = next(u for u in units if u.type == "code_function")
-    # Body should not be the whole source -- the marker tells the LLM
-    # that there's more.
-    assert "more lines" in fn.body
-    # Body should retain the head -- at least the def line + first few.
+    # Body retains the head but does NOT carry the truncation marker.
     assert fn.body.startswith("def big():")
+    assert "more lines" not in fn.body
+    assert "..." not in fn.body
+    # Truncation actually happened: body is < the full source length.
+    assert fn.body.count("\n") < 121
 
 
 def test_extract_python_short_function_body_is_verbatim() -> None:

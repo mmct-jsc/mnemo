@@ -446,6 +446,34 @@ def test_add_edge_accepts_method_of_relation(store: Store) -> None:
     assert edges[0].relation == "method_of"
 
 
+def test_legacy_truncation_marker_stripped_on_read(store: Store) -> None:
+    """v2.1: bodies stored before the marker was removed get cleaned
+    when read back. Ensures embeddings ingested with the marker and
+    any future chat output never surface ``... (955 more lines)``.
+
+    Simulates the legacy case by writing a body containing the
+    marker directly via raw SQL (bypassing the extractor) and
+    confirming ``store.get_node`` returns clean body."""
+    legacy_body = "def big():\n    return 1\n... (955 more lines)"
+    n = Node.new(
+        type="code_function",
+        name="big",
+        body=legacy_body,
+        source_path="/repo/big.py:1-2",
+        source_kind="code_repo",
+    )
+    store.upsert_node(n)
+
+    got = store.get_node(n.id)
+    assert got is not None
+    # The marker is removed from the returned body.
+    assert "more lines" not in got.body
+    assert "..." not in got.body
+    # The real code lines are preserved.
+    assert got.body.startswith("def big():")
+    assert "return 1" in got.body
+
+
 def test_add_edge_accepts_imports_relation(store: Store) -> None:
     a = Node.new(
         type="code_module",
