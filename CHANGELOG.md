@@ -2,6 +2,89 @@
 
 All notable changes to mnemo are documented here.
 
+## [2.1.1] - 2026-05-13
+
+**Nebula UX polish + scaling architecture.** Seven follow-ups on
+top of v2.1.0. The common thread: previously-implicit per-type
+behavior was made explicit and palette-driven so the UI can absorb
+new node types without per-file edits.
+
+### Added
+
+- **Single-source node-type palette.** ``daemon/mnemo/ui/palette.py``
+  owns the ``TYPE_COLORS`` dict. Exposed to every Jinja template as
+  a global (``type_colors``) and to every JS surface as
+  ``window.MNEMO_TYPE_COLORS``. Generic CSS selectors
+  (``.badge[class*="type-"]``, ``.bar-fill``, ``[class*="swatch-"]``,
+  ``[class*="ntype-"]``) read a ``--type-color`` custom property
+  stamped inline by the templating layer. Adding a new node type
+  is one line in palette.py; badges, bar fills, filter swatches,
+  detail-panel pills, neighbor dots, and canvas nodes all pick up
+  the new color automatically.
+- **Type-aware body preview** (``window.mnemoRenderBody``). One
+  helper used by the node detail Preview tab, the search-result
+  popover's "Show body" toggle, and the Nebula side panel. Branches
+  on three paths: ``code_*`` types -> Prism-highlighted
+  ``<pre><code>``; ``commit`` -> escaped plain ``<pre>``;
+  everything else -> marked + DOMPurify markdown. Returns the path
+  taken so callers can decorate the UI.
+- **``source_path`` carried end-to-end on hits.** ``CompressedHit``
+  and ``HitOut`` now expose ``source_path``, so the search popover
+  can pick a Prism language hint per hit.
+- **Site-wide Prism.** Moved Prism + autoloader from a per-page
+  ``head_extra`` block into ``base.html``; every preview surface
+  gets the same Tomorrow-Night palette + lazy language grammars.
+
+### Fixed
+
+- **Filter chips + dashboard "Memory by type" bars color every node
+  type now.** v2.0 added 7 code_* types but the per-type CSS rules
+  + JS dict were only partially updated; result was all-blue filter
+  chips and invisible progress bars on the dashboard. The palette
+  refactor closes this gap.
+- **Nebula empty-canvas tap now deselects.** The guard was
+  ``evt.target === this.cy``, which fails in minified Cytoscape
+  builds because the core is wrapped in an obfuscated class.
+  Switched to a capability test (``typeof t.isNode !== 'function'``).
+  Edges still don't trigger deselect.
+- **Force-layout snapshot restore was dead code.** The guard
+  checked ``name === 'force'`` but the button passes ``'fcose'``.
+  Fixed; switching to rings/tree/grid and back to force now
+  restores the original positions (max drift 0 px across 422
+  nodes).
+- **Two-arrow bug in Nebula file tree.** A redundant
+  ``::before { content: "▸" }`` rule was painting a second chevron;
+  Chrome 128+ also reserves a phantom flex slot for ``<details>``
+  disclosure widgets inside any ``<summary>`` with
+  ``display: flex``. Cure: removed the duplicate rule + restructured
+  summary children into an inner ``display:flex`` wrapper.
+- **Connections count rendered as literal text in Nebula detail
+  panel.** Template had ``{{ '{{' }} neighbors.length {{ '}}' }}``
+  attempting to escape Alpine mustache through Jinja2 -- but Alpine
+  doesn't use mustache for text interpolation. Replaced with
+  ``<span x-text="neighbors.length">``.
+- **Force-layout ran twice on first load.** Alpine.js auto-invokes
+  any method named ``init()`` on the ``x-data`` object; pairing
+  ``x-data="nebula()"`` with ``x-init="init()"`` ran init() twice.
+  Dropped the redundant ``x-init`` from graph.html, base.html,
+  settings.html, sources.html, node.html.
+- **Native ``<details>`` marker still painted in the Nebula file
+  tree.** Per CSS spec, ``::marker`` only accepts color / content /
+  font-* / white-space / text-* properties; ``display: none`` is
+  ignored. Switched to the allowed levers
+  (``content: ""; font-size: 0; color: transparent``); added a
+  CSS cache-bust via ``?v={{ mnemo_version }}`` on the
+  ``/static/app.css`` link.
+
+### Changed
+
+- ``base.html`` now provides three site-wide helpers:
+  ``window.mnemoIsCodeType(t)``, ``window.mnemoLanguageOf(path)``,
+  and ``window.mnemoRenderBody(el, body, opts)``. Pages that
+  rendered bodies inline have migrated to the shared helper.
+- ``graph.html`` JS ``TYPE_COLORS`` is now an alias of
+  ``window.MNEMO_TYPE_COLORS`` -- no per-page palette dict.
+
 ## [2.1.0] - 2026-05-13
 
 **Nebula — three-panel graph UX.** A focused UI refinement on top
