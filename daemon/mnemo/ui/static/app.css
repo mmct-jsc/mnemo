@@ -3207,6 +3207,25 @@ dl.meta dd { margin: 0; color: var(--fg); }
   background: rgba(255, 255, 255, 0.05);
 }
 
+/* Hide EVERY browser's default details-disclosure marker. Chrome
+   128+ moved from ::-webkit-details-marker to the unprefixed
+   ::marker pseudo-element; without all three rules a native arrow
+   shows alongside our custom chevron. */
+.vscode-tree details > summary {
+  list-style: none;
+  display: list-item;
+  display: revert-layer;
+}
+
+.vscode-tree details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.vscode-tree details > summary::marker {
+  content: "";
+  display: none;
+}
+
 .vscode-tree details summary.vscode-dir {
   display: flex;
   align-items: center;
@@ -3223,16 +3242,31 @@ dl.meta dd { margin: 0; color: var(--fg); }
   transition: background 200ms ease;
 }
 
-.vscode-tree details summary.vscode-dir::-webkit-details-marker { display: none; }
-
 .vscode-tree details summary.vscode-dir:hover {
   background: rgba(126, 231, 224, 0.07);
 }
 
+/* Pseudo-element chevron -- sharper than a 10px SVG. Right-pointing
+   when collapsed; rotates 90deg to point down when open. */
 .vscode-chev {
-  transition: transform 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  width: 10px;
+  height: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   flex-shrink: 0;
   color: var(--fg-muted);
+  transition: transform 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.vscode-chev::before {
+  content: "";
+  display: block;
+  width: 0;
+  height: 0;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  border-left: 5px solid currentColor;
 }
 
 .vscode-tree details[open] > summary > .vscode-chev {
