@@ -1812,7 +1812,10 @@ dl.meta dd { margin: 0; color: var(--fg); }
 
 .code-project-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  /* auto-fit so a single project card expands to fill the row.
+     auto-fill leaves phantom tracks at 360px and pins the card to
+     that width; auto-fit collapses empty tracks. */
+  grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
   gap: 1rem;
   margin-bottom: 2rem;
 }
@@ -2168,7 +2171,15 @@ dl.meta dd { margin: 0; color: var(--fg); }
 
 /* --- v2.0 phases 11-13: /code UI family ------------------------- */
 
-.code-landing,
+.code-landing {
+  /* v2.1: full-page width for the Code landing -- no constrained
+     reading column. The project grid expands to fill available
+     space so a single project doesn't look isolated. */
+  width: 100%;
+  margin: 0;
+  padding: 1.25rem 1.5rem 3rem;
+}
+
 .code-project,
 .code-function {
   max-width: 1100px;
@@ -2806,6 +2817,10 @@ dl.meta dd { margin: 0; color: var(--fg); }
   gap: 0.05rem;
 }
 
+.decl-list li {
+  overflow: hidden;
+}
+
 .decl-list li a {
   display: block;
   color: var(--fg-muted);
@@ -2817,6 +2832,7 @@ dl.meta dd { margin: 0; color: var(--fg); }
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  max-width: 100%;
 }
 
 .decl-list li a:hover {
@@ -2855,6 +2871,7 @@ dl.meta dd { margin: 0; color: var(--fg); }
 .hot-list li {
   font-size: 0.78rem;
   color: var(--fg-muted);
+  overflow: hidden;
 }
 
 .hot-list li::marker {
@@ -2864,13 +2881,15 @@ dl.meta dd { margin: 0; color: var(--fg); }
 }
 
 .hot-list li a {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   gap: 0.4rem;
   text-decoration: none;
   color: var(--fg);
-  padding: 0.05rem 0.25rem;
+  padding: 0.1rem 0.35rem;
   border-radius: var(--radius);
+  max-width: 100%;
+  overflow: hidden;
 }
 
 .hot-list li a:hover {
@@ -2883,6 +2902,7 @@ dl.meta dd { margin: 0; color: var(--fg); }
   height: 7px;
   border-radius: 50%;
   display: inline-block;
+  flex-shrink: 0;
 }
 
 .hot-list code {
@@ -2890,6 +2910,13 @@ dl.meta dd { margin: 0; color: var(--fg); }
   padding: 0;
   color: inherit;
   font-size: 0.76rem;
+  /* Truncate long names with ellipsis. Full name appears on hover
+     via the title attribute the template now sets. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1;
 }
 
 .lessons-list {
@@ -3115,12 +3142,161 @@ dl.meta dd { margin: 0; color: var(--fg); }
 
 /* --- Tree --- */
 
+.nebula-tree h3.tree-title {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--fg-muted);
+  margin: 0 0 0.65rem;
+  padding-bottom: 0.45rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
 .nebula-tree h3 {
   font-size: 0.7rem;
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--fg-muted);
   margin: 0 0 0.5rem;
+}
+
+.tree-title-icon {
+  width: 14px;
+  height: 14px;
+  color: var(--accent);
+  opacity: 0.7;
+}
+
+.tree-title-scope {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 0.65rem;
+  color: var(--accent);
+  text-transform: none;
+  letter-spacing: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 60%;
+  white-space: nowrap;
+}
+
+/* VSCode-style tree -- compact rows, colored corner-fold per ext */
+.vscode-tree {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.vscode-tree ul {
+  list-style: none;
+  padding-left: 0.85rem;
+  margin: 0;
+  position: relative;
+}
+
+.vscode-tree ul::before {
+  content: "";
+  position: absolute;
+  left: 0.5rem;
+  top: 0.15rem;
+  bottom: 0.15rem;
+  width: 1px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.vscode-tree details summary.vscode-dir {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  list-style: none;
+  cursor: pointer;
+  padding: 0.18rem 0.35rem;
+  border-radius: var(--radius);
+  font-family: var(--mono);
+  font-size: 0.74rem;
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  transition: background 200ms ease;
+}
+
+.vscode-tree details summary.vscode-dir::-webkit-details-marker { display: none; }
+
+.vscode-tree details summary.vscode-dir:hover {
+  background: rgba(126, 231, 224, 0.07);
+}
+
+.vscode-chev {
+  transition: transform 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  flex-shrink: 0;
+  color: var(--fg-muted);
+}
+
+.vscode-tree details[open] > summary > .vscode-chev {
+  transform: rotate(90deg);
+}
+
+.vscode-icon {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+.vscode-dir-label {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.vscode-file {
+  display: flex !important;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.18rem 0.35rem 0.18rem 0.85rem;
+  text-decoration: none;
+  color: var(--fg-dim);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  border-radius: var(--radius);
+  white-space: nowrap;
+  overflow: hidden;
+  transition:
+    background 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    color 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.vscode-file:hover {
+  background: rgba(126, 231, 224, 0.08);
+  color: var(--fg);
+}
+
+.vscode-file.active {
+  background: linear-gradient(90deg, rgba(126, 231, 224, 0.18), rgba(126, 231, 224, 0.04));
+  color: var(--accent);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.vscode-file-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.vscode-file-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
+}
+
+.vscode-file-meta {
+  font-size: 0.6rem;
+  color: var(--fg-muted);
+  font-family: var(--mono);
+  flex-shrink: 0;
+  margin-left: auto;
 }
 
 .nebula-tree details {
@@ -3196,6 +3372,39 @@ dl.meta dd { margin: 0; color: var(--fg); }
 
 /* --- Detail panel --- */
 
+.detail-close {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.7rem;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border);
+  color: var(--fg-muted);
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition:
+    background 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    color 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    border-color 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  z-index: 5;
+}
+
+.detail-close:hover {
+  background: rgba(244, 63, 94, 0.15);
+  border-color: rgba(244, 63, 94, 0.4);
+  color: #f43f5e;
+}
+
+.nebula-detail {
+  position: relative;
+}
+
 .nebula-detail .empty-detail {
   color: var(--fg-muted);
   font-size: 0.85rem;
@@ -3234,19 +3443,60 @@ dl.meta dd { margin: 0; color: var(--fg); }
   margin: 0.4rem 0;
 }
 
-.nebula-detail pre {
-  background: rgba(255, 255, 255, 0.03);
+.nebula-detail pre,
+.nebula-detail pre[class*="language-"] {
+  background: #0a0d14 !important;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 0.5rem 0.7rem;
+  padding: 0.6rem 0.8rem;
   margin: 0.5rem 0;
   font-family: var(--mono);
-  font-size: 0.72rem;
-  line-height: 1.45;
-  max-height: 240px;
+  font-size: 0.74rem;
+  line-height: 1.55;
+  max-height: 320px;
   overflow: auto;
-  color: var(--fg);
+  color: #e6edf3;
+  /* Silky scrollbar inside the code block */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(126, 231, 224, 0.3) transparent;
 }
+
+.nebula-detail pre code {
+  font-family: var(--mono);
+  font-size: inherit;
+  line-height: inherit;
+  background: none !important;
+  padding: 0;
+}
+
+.nebula-detail pre::-webkit-scrollbar { height: 6px; width: 6px; }
+.nebula-detail pre::-webkit-scrollbar-thumb {
+  background: rgba(126, 231, 224, 0.25);
+  border-radius: 3px;
+}
+
+/* Prism token color overrides to harmonize with the Nebula palette */
+.nebula-detail .token.comment,
+.nebula-detail .token.prolog,
+.nebula-detail .token.doctype,
+.nebula-detail .token.cdata { color: #6b7280; font-style: italic; }
+.nebula-detail .token.punctuation { color: #94a3b8; }
+.nebula-detail .token.keyword,
+.nebula-detail .token.tag,
+.nebula-detail .token.operator { color: #c084fc; }
+.nebula-detail .token.string,
+.nebula-detail .token.attr-value { color: #4ade80; }
+.nebula-detail .token.number,
+.nebula-detail .token.boolean,
+.nebula-detail .token.constant { color: #fb923c; }
+.nebula-detail .token.function,
+.nebula-detail .token.method { color: #22d3ee; }
+.nebula-detail .token.class-name,
+.nebula-detail .token.maybe-class-name { color: #e879f9; }
+.nebula-detail .token.builtin { color: #38bdf8; }
+.nebula-detail .token.decorator,
+.nebula-detail .token.atrule,
+.nebula-detail .token.attr-name { color: #fbbf24; }
 
 .nebula-detail h4 {
   font-size: 0.7rem;

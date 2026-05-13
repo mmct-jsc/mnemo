@@ -1,21 +1,37 @@
 {% extends "base.html" %}
-{% block title %} - graph{% endblock %}
+{% block title %} - Nebula{% endblock %}
 {% block head_extra %}
 <script src="https://unpkg.com/cytoscape@3.30.4/dist/cytoscape.min.js"></script>
 <script src="https://unpkg.com/layout-base/layout-base.js"></script>
 <script src="https://unpkg.com/cose-base/cose-base.js"></script>
 <script src="https://unpkg.com/cytoscape-fcose/cytoscape-fcose.js"></script>
+<!-- Prism for syntax highlighting in the detail-panel body. The
+     "tomorrow night" theme matches our dark backdrop; the
+     ``autoloader`` plugin lazy-fetches per-language definitions so
+     we don't ship every grammar upfront. -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/autoloader/prism-autoloader.min.js"></script>
+<script>
+  // Prism autoloader needs to know where to fetch the per-language
+  // grammars. Point it at the same CDN as the core.
+  if (window.Prism && window.Prism.plugins && window.Prism.plugins.autoloader) {
+    window.Prism.plugins.autoloader.languages_path =
+      'https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/';
+  }
+</script>
 {% endblock %}
 {% block layout %}
 <main class="full">
   <section class="nebula-shell" x-data="nebula()" x-init="init()">
 
-    <!-- Left: file tree + project chips -->
+    <!-- Left: file tree (VSCode-style) -->
     <aside class="nebula-tree">
-      <h3>Files
-        <span x-show="contextProject" x-cloak class="hint" style="text-transform:none;font-family:var(--mono);">
-          / <span x-text="contextProject"></span>
-        </span>
+      <h3 class="tree-title">
+        <svg viewBox="0 0 16 16" class="tree-title-icon"><path fill="currentColor" d="M2 3.5A1.5 1.5 0 0 1 3.5 2h3.379a1.5 1.5 0 0 1 1.06.44l.622.62A1.5 1.5 0 0 0 9.622 3.5H12.5A1.5 1.5 0 0 1 14 5v6.5A1.5 1.5 0 0 1 12.5 13h-9A1.5 1.5 0 0 1 2 11.5v-8Z"/></svg>
+        <span>Files</span>
+        <span x-show="contextProject" x-cloak class="tree-title-scope"
+              x-text="contextProject"></span>
       </h3>
       <template x-if="treeRoot && Object.keys(treeRoot.children).length === 0">
         <p class="hint" style="padding:0.5rem;">
@@ -23,55 +39,92 @@
           <a href="/sources-page">Add a code_repo</a>?
         </p>
       </template>
+      <!-- Recursive renderer: emits a directory branch or a file row
+           based on the node shape. Indentation depth is passed in. -->
       <template x-if="treeRoot">
-        <div class="nebula-tree-root">
+        <ul class="vscode-tree">
           <template x-for="(child, name) in treeRoot.children" :key="name">
-            <div class="nebula-tree-node" x-data="{ child: child, name: name }">
+            <li x-data="{ child: child, name: name }">
+              <!-- Directory -->
               <template x-if="child.isDir">
                 <details open>
-                  <summary x-text="name"></summary>
-                  <div :style="`padding-left: 0.6rem;`">
+                  <summary class="vscode-dir">
+                    <svg class="vscode-chev" viewBox="0 0 16 16" width="10" height="10">
+                      <path d="M5 4l5 4-5 4V4z" fill="currentColor"/>
+                    </svg>
+                    <svg class="vscode-icon dir-icon" viewBox="0 0 16 16">
+                      <path fill="#7eb6d6" d="M1.5 3.5A1.5 1.5 0 0 1 3 2h3l1.5 1.5H13A1.5 1.5 0 0 1 14.5 5v7A1.5 1.5 0 0 1 13 13.5H3A1.5 1.5 0 0 1 1.5 12V3.5Z"/>
+                    </svg>
+                    <span class="vscode-dir-label" x-text="name"></span>
+                  </summary>
+                  <ul>
                     <template x-for="(grand, gname) in child.children" :key="gname">
-                      <div>
+                      <li>
                         <template x-if="grand.isDir">
                           <details>
-                            <summary x-text="gname"></summary>
-                            <div :style="`padding-left: 0.6rem;`">
+                            <summary class="vscode-dir">
+                              <svg class="vscode-chev" viewBox="0 0 16 16" width="10" height="10">
+                                <path d="M5 4l5 4-5 4V4z" fill="currentColor"/>
+                              </svg>
+                              <svg class="vscode-icon dir-icon" viewBox="0 0 16 16">
+                                <path fill="#7eb6d6" d="M1.5 3.5A1.5 1.5 0 0 1 3 2h3l1.5 1.5H13A1.5 1.5 0 0 1 14.5 5v7A1.5 1.5 0 0 1 13 13.5H3A1.5 1.5 0 0 1 1.5 12V3.5Z"/>
+                              </svg>
+                              <span class="vscode-dir-label" x-text="gname"></span>
+                            </summary>
+                            <ul>
                               <template x-for="leaf in grand.leaves" :key="leaf.id">
-                                <a href="#" class="tree-file"
-                                   :class="{ active: selected && selected.id === leaf.id }"
-                                   @click.prevent="focusNode(leaf.id)">
-                                  <span x-text="leaf.label"></span>
-                                  <span class="tree-file-meta" x-text="leaf.childCount + ' decl'"></span>
-                                </a>
+                                <li>
+                                  <a href="#" class="tree-file vscode-file"
+                                     :class="[
+                                       { active: selected && selected.id === leaf.id },
+                                       'ext-' + fileExt(leaf.label),
+                                     ]"
+                                     :title="leaf.label"
+                                     @click.prevent="focusNode(leaf.id)">
+                                    <span class="vscode-file-icon" x-html="fileIcon(leaf.label)"></span>
+                                    <span class="vscode-file-name" x-text="leaf.label"></span>
+                                    <span class="vscode-file-meta" x-text="leaf.childCount"></span>
+                                  </a>
+                                </li>
                               </template>
-                            </div>
+                            </ul>
                           </details>
                         </template>
                         <template x-if="!grand.isDir">
-                          <a href="#" class="tree-file"
-                             :class="{ active: selected && selected.id === grand.id }"
+                          <a href="#" class="tree-file vscode-file"
+                             :class="[
+                               { active: selected && selected.id === grand.id },
+                               'ext-' + fileExt(gname),
+                             ]"
+                             :title="gname"
                              @click.prevent="focusNode(grand.id)">
-                            <span x-text="gname"></span>
-                            <span class="tree-file-meta" x-text="grand.childCount + ' decl'"></span>
+                            <span class="vscode-file-icon" x-html="fileIcon(gname)"></span>
+                            <span class="vscode-file-name" x-text="gname"></span>
+                            <span class="vscode-file-meta" x-text="grand.childCount"></span>
                           </a>
                         </template>
-                      </div>
+                      </li>
                     </template>
-                  </div>
+                  </ul>
                 </details>
               </template>
+              <!-- File at the top level (no directory wrapping) -->
               <template x-if="!child.isDir">
-                <a href="#" class="tree-file"
-                   :class="{ active: selected && selected.id === child.id }"
+                <a href="#" class="tree-file vscode-file"
+                   :class="[
+                     { active: selected && selected.id === child.id },
+                     'ext-' + fileExt(name),
+                   ]"
+                   :title="name"
                    @click.prevent="focusNode(child.id)">
-                  <span x-text="name"></span>
-                  <span class="tree-file-meta" x-text="child.childCount + ' decl'"></span>
+                  <span class="vscode-file-icon" x-html="fileIcon(name)"></span>
+                  <span class="vscode-file-name" x-text="name"></span>
+                  <span class="vscode-file-meta" x-text="child.childCount"></span>
                 </a>
               </template>
-            </div>
+            </li>
           </template>
-        </div>
+        </ul>
       </template>
     </aside>
 
@@ -109,6 +162,9 @@
       </template>
       <template x-if="selected">
         <div>
+          <button class="detail-close" type="button"
+                  @click="deselect()"
+                  title="Close (Esc)">&times;</button>
           <span class="ntype" :class="'ntype-' + selected.type"
                 x-text="selected.type"></span>
           <h3 x-text="selected.name"></h3>
@@ -116,7 +172,16 @@
              x-text="selected.source_path"></p>
           <p class="ndesc" x-show="selected.description" x-cloak
              x-text="selected.description"></p>
-          <pre x-show="selected.body" x-cloak x-text="selected.body"></pre>
+          <!-- Code body with Prism syntax highlighting. The language
+               class is derived from the node's source_path suffix
+               at the time we populate the body. -->
+          <pre x-show="selected.body" x-cloak
+               class="line-numbers"
+               :class="'language-' + bodyLanguage(selected.source_path)"><code
+               x-ref="bodyCode"
+               :class="'language-' + bodyLanguage(selected.source_path)"
+               x-text="selected.body"
+               x-effect="if (selected.body && window.Prism) requestAnimationFrame(() => Prism.highlightElement($refs.bodyCode))"></code></pre>
 
           <h4 x-show="neighbors.length">Connections ({{ '{{' }} neighbors.length {{ '}}' }})</h4>
           <ul class="nlist">
@@ -454,12 +519,22 @@ function nebula() {
         },
       });
 
-      this.cy.on('tap', 'node', (evt) => this.selectFromCanvas(evt.target));
+      this.cy.on('tap', 'node', (evt) => {
+        // Suppress the canvas-tap that fires alongside a node-tap on
+        // some platforms (which would deselect immediately).
+        evt.stopPropagation && evt.stopPropagation();
+        this.selectFromCanvas(evt.target);
+      });
       this.cy.on('tap', (evt) => {
-        if (evt.target === this.cy) {
-          this.cy.batch(() => this.cy.elements().removeClass('hl dim'));
-          this.selected = null;
-          this._stopPulse();
+        if (evt.target === this.cy) this.deselect();
+      });
+      // Escape key + body click outside the canvas also deselect.
+      // The canvas-only tap handler can't see clicks outside its
+      // container, so a global keydown is the reliable second path.
+      window.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && this.selected) {
+          e.preventDefault();
+          this.deselect();
         }
       });
 
@@ -489,6 +564,18 @@ function nebula() {
       const edgeCount = this.rawElements.filter(e => e.data.source !== undefined).length;
       const nodeCount = this.rawElements.length - edgeCount;
       this.stats = nodeCount + ' nodes / ' + edgeCount + ' edges';
+
+      // SNAPSHOT the initial fcose positions so the "force" button
+      // always returns to the same arrangement the user first saw.
+      // Without this, subsequent "force" clicks after switching to
+      // rings/tree/grid produce a different layout because fcose
+      // (with randomize: false) relaxes from the current positions
+      // -- not the original random seed.
+      this._forceSnapshot = {};
+      this.cy.nodes().forEach((n) => {
+        const p = n.position();
+        this._forceSnapshot[n.id()] = { x: p.x, y: p.y };
+      });
     },
 
     buildTree() {
@@ -679,6 +766,75 @@ function nebula() {
       this._pulseNode = null;
     },
 
+    deselect() {
+      if (this.cy) {
+        this.cy.batch(() => this.cy.elements().removeClass('hl dim'));
+      }
+      this.selected = null;
+      this.neighbors = [];
+      this._stopPulse();
+    },
+
+    fileExt(name) {
+      const m = (name || '').toLowerCase().match(/\.([a-z0-9]+)$/);
+      return m ? m[1] : 'unknown';
+    },
+
+    fileIcon(name) {
+      // VSCode-style file icons via inline SVG. Each language gets a
+      // small "page" glyph with a colored corner accent. Returns
+      // raw SVG markup for x-html.
+      const ext = this.fileExt(name);
+      const color = ({
+        py: '#3776ab', pyi: '#3776ab',
+        js: '#f7df1e', mjs: '#f7df1e', cjs: '#f7df1e', jsx: '#f7df1e',
+        ts: '#3178c6', tsx: '#3178c6',
+        go: '#00add8',
+        rs: '#dea584', java: '#b07219', kt: '#a97bff',
+        rb: '#cc342d', php: '#777bb4',
+        cs: '#178600', swift: '#fa7343',
+        c: '#555555', h: '#888888', cpp: '#f34b7d', hpp: '#888888',
+        json: '#fbbf24', yaml: '#cb171e', yml: '#cb171e', toml: '#9c4221',
+        md: '#5fa8ff', sh: '#89e051', bash: '#89e051',
+        html: '#e34c26', css: '#264de4',
+      })[ext] || '#94a3b8';
+      // Page glyph + colored fold corner. Keeps a consistent silhouette
+      // across types while the corner color signals language at a glance.
+      return (
+        '<svg viewBox="0 0 16 16" class="vscode-icon">' +
+        '<path fill="#2a3340" d="M3 1.5h6.5L13 5v9.5H3z"/>' +
+        '<path fill="' + color + '" d="M9.5 1.5L13 5h-3.5z"/>' +
+        '</svg>'
+      );
+    },
+
+    bodyLanguage(sourcePath) {
+      // Map a source_path's file extension to a Prism language hint.
+      // Returns "none" for paths without a recognized extension --
+      // Prism just leaves those as plain text, no error.
+      if (!sourcePath) return 'none';
+      const clean = sourcePath.replace(/:\d+-\d+(#.+)?$/, '').toLowerCase();
+      const m = clean.match(/\.([a-z0-9]+)$/);
+      if (!m) return 'none';
+      const ext = m[1];
+      return ({
+        py: 'python', pyi: 'python',
+        js: 'javascript', mjs: 'javascript', cjs: 'javascript', jsx: 'jsx',
+        ts: 'typescript', tsx: 'tsx',
+        go: 'go',
+        rs: 'rust',
+        java: 'java', kt: 'kotlin',
+        rb: 'ruby', php: 'php',
+        cs: 'csharp',
+        swift: 'swift',
+        c: 'c', h: 'c', cpp: 'cpp', hpp: 'cpp', cc: 'cpp',
+        json: 'json', yaml: 'yaml', yml: 'yaml', toml: 'toml',
+        md: 'markdown', sh: 'bash', bash: 'bash',
+        html: 'html', css: 'css', scss: 'scss',
+        gd: 'gdscript',
+      })[ext] || 'none';
+    },
+
     focusNode(id) {
       if (!this.cy) return;
       const target = this.cy.getElementById(id);
@@ -699,11 +855,43 @@ function nebula() {
       // nodes wastes work and produces a sparse result when most of
       // the graph is filtered out.
       const visible = this.cy.elements().not('.hide');
+
+      // SMOOTHNESS without LAG: fade nodes to 0.3 opacity, snap to
+      // the new positions, fade back to 1.0 + animate the camera.
+      // The user perceives a soft cross-fade instead of jank or a
+      // hard cut.
+      const fadeIn = () => {
+        this.cy.elements().animate(
+          { style: { opacity: 1 } },
+          { duration: 220, easing: 'ease-out' },
+        );
+      };
+
+      // CONSISTENT FORCE LAYOUT: snapshot the initial fcose
+      // positions on first run and restore them when the user
+      // returns to "force". Without this, switching to rings/tree
+      // then back to force converges to a different layout because
+      // fcose with randomize: false relaxes from the current
+      // (non-force) positions.
+      if (name === 'force' && this._forceSnapshot) {
+        const snap = this._forceSnapshot;
+        this.cy.batch(() => {
+          visible.nodes().forEach((n) => {
+            const p = snap[n.id()];
+            if (p) n.position(p);
+          });
+        });
+        this.cy.animate(
+          { fit: { eles: visible, padding: 60 } },
+          { duration: 320, easing: 'ease-out' },
+        );
+        fadeIn();
+        return;
+      }
+
       // PERFORMANCE: interpolating positions over 400ms for 400+
-      // nodes is the lag source on layout switch (animation triggers
-      // a redraw every frame). Snap instantly + fade the result in.
-      // Camera animates to fit so the user still sees a smooth
-      // transition without per-node tweens.
+      // nodes is the lag source. Snap synchronously inside cy.batch
+      // and animate only the camera.
       const baseOpts = { animate: false, padding: 40, fit: false };
       const perLayout = {
         fcose: {
@@ -759,6 +947,13 @@ function nebula() {
         },
       };
       const opts = { name, ...baseOpts, ...(perLayout[name] || {}) };
+      // Fade out before snapping so the position change isn't a
+      // hard cut; the silky cross-fade hides the absence of
+      // per-node tweening.
+      this.cy.elements().animate(
+        { style: { opacity: 0.3 } },
+        { duration: 140, easing: 'ease-in' },
+      );
       // Run the layout inside a Cytoscape batch -- the per-node
       // position updates fire a single render pass instead of one
       // per node.
@@ -772,6 +967,7 @@ function nebula() {
         { fit: { eles: visible, padding: 60 } },
         { duration: 320, easing: 'ease-out' },
       );
+      fadeIn();
     },
 
     copyCitation() {
