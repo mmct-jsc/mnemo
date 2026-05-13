@@ -192,6 +192,10 @@ class HitOut(BaseModel):
     score: float
     chunk_idx: int | None
     citation: str
+    # v2.1.x: surface the originating source_path so the search-result
+    # popover can pick a Prism language hint per hit (code nodes get
+    # syntax highlighting, markdown nodes get marked rendering).
+    source_path: str | None = None
 
     @classmethod
     def from_hit(cls, h: CompressedHit) -> HitOut:
@@ -204,6 +208,7 @@ class HitOut(BaseModel):
             score=h.score,
             chunk_idx=h.chunk_idx,
             citation=h.citation,
+            source_path=h.source_path,
         )
 
 

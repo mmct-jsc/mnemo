@@ -393,18 +393,18 @@ tr:hover td { background: var(--panel); }
   border-radius: 50%;
   background: var(--fg-dim);
 }
-.badge.type-memory_feedback  { color: var(--type-feedback); border-color: rgba(240,164,124,0.3); }
-.badge.type-memory_feedback::before  { background: var(--type-feedback); }
-.badge.type-memory_user      { color: var(--type-user); border-color: rgba(182,232,140,0.3); }
-.badge.type-memory_user::before      { background: var(--type-user); }
-.badge.type-memory_project   { color: var(--type-project); border-color: rgba(141,182,240,0.3); }
-.badge.type-memory_project::before   { background: var(--type-project); }
-.badge.type-memory_reference { color: var(--type-reference); border-color: rgba(215,144,240,0.3); }
-.badge.type-memory_reference::before { background: var(--type-reference); }
-.badge.type-project_doc      { color: var(--type-doc); border-color: rgba(240,217,144,0.3); }
-.badge.type-project_doc::before      { background: var(--type-doc); }
-.badge.type-plan_doc         { color: var(--type-plan); border-color: rgba(147,150,240,0.3); }
-.badge.type-plan_doc::before         { background: var(--type-plan); }
+/* Single rule, palette-driven. Templates emit
+   ``style="--type-color: <hex>"`` on every .badge.type-* element (see
+   daemon/mnemo/ui/palette.py for the source-of-truth dict). When a
+   node type is missing from the palette, the fallback keeps the chip
+   readable instead of dropping it to the muted-grey default. */
+.badge[class*="type-"] {
+  color: var(--type-color, var(--fg-muted));
+  border-color: color-mix(in srgb, var(--type-color, var(--border)) 30%, transparent);
+}
+.badge[class*="type-"]::before {
+  background: var(--type-color, var(--fg-dim));
+}
 /* BASE flag: knowledge that applies across all projects.
    Distinct visual from type badges -- gold for "universal". */
 .badge.base-badge {
@@ -1025,13 +1025,13 @@ dl.meta dd { margin: 0; color: var(--fg); }
   height: 100%;
   border-radius: 4px;
   transition: width 300ms ease-out;
+  /* Palette-driven: dashboard.html stamps each <div class="bar-fill ...">
+     with ``style="--type-color: <hex>"`` so this rule covers EVERY
+     type (including any new ones added to palette.py). Without the
+     inline custom property we fall back to a readable accent so a
+     new type at least shows a visible bar instead of vanishing. */
+  background: var(--type-color, var(--accent));
 }
-.bar-fill.type-fill-memory_feedback   { background: var(--type-feedback); }
-.bar-fill.type-fill-memory_user       { background: var(--type-user); }
-.bar-fill.type-fill-memory_project    { background: var(--type-project); }
-.bar-fill.type-fill-memory_reference  { background: var(--type-reference); }
-.bar-fill.type-fill-project_doc       { background: var(--type-doc); }
-.bar-fill.type-fill-plan_doc          { background: var(--type-plan); }
 
 .search-box.compact input[type="search"] { padding-left: 1.1rem; font-size: 0.9rem; }
 .search-box.compact::before { display: none; }
@@ -1471,6 +1471,103 @@ dl.meta dd { margin: 0; color: var(--fg); }
 .md-fallback {
   white-space: pre-wrap; word-break: break-word;
   font-size: 0.82rem; color: var(--fg-muted);
+}
+
+/* --- Code-typed body preview (Prism-highlighted) ----------------- */
+/* When a code_* node is rendered in the Preview tab or the search
+   popover, mnemoRenderBody writes <pre class="mnemo-code language-X">.
+   The Prism Tomorrow-Night theme paints token colors; we layer the
+   mnemo palette (panel + border) on top so the block matches the
+   rest of the UI. */
+.mnemo-code {
+  background: var(--bg);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  padding: 0.75rem 0.9rem;
+  margin: 0;
+  overflow-x: auto;
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+.mnemo-code code {
+  font-family: inherit;
+  font-size: inherit;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  color: inherit;
+  white-space: pre;
+}
+/* When the Preview tab is showing a code body, drop the markdown
+   typography (margins, headings) -- the <pre> stands on its own. */
+.node-md-preview.is-code {
+  background: transparent;
+  border: 0;
+  padding: 0;
+}
+.node-md-preview.is-code > .mnemo-code {
+  /* The wrapper already paints the panel; keep the inner pre flush. */
+  margin: 0;
+}
+/* Tiny status hint under the preview area ("rendered as code") so
+   the user knows which path was picked. */
+.preview-mode-hint {
+  margin-top: 0.35rem;
+  font-size: 0.7rem;
+  color: var(--fg-muted);
+}
+.preview-mode-hint code {
+  background: var(--panel-2);
+  border: 1px solid var(--border-soft);
+  border-radius: 3px;
+  padding: 0.05rem 0.3rem;
+  font-size: 0.95em;
+  color: var(--accent);
+}
+
+/* Search-results body details: the toggle on each hit opens a
+   live-rendered preview. Keep the slot tight so the body doesn't
+   dwarf the rest of the hit card. */
+.hit-body summary {
+  cursor: pointer;
+  color: var(--fg-muted);
+  font-size: 0.78rem;
+  padding: 0.15rem 0;
+}
+.hit-body summary:hover { color: var(--accent); }
+.hit-body-render {
+  margin-top: 0.4rem;
+  font-size: 0.82rem;
+  max-height: 26rem;
+  overflow-y: auto;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  padding: 0.6rem 0.75rem;
+  background: var(--panel);
+}
+.hit-body-render .mnemo-code {
+  /* The render slot already has its own border + padding -- inset
+     the code block so the two borders don't double up. */
+  border: 0;
+  background: transparent;
+  padding: 0;
+  font-size: 0.76rem;
+}
+
+/* --- Plain-text body preview (commit nodes etc.) ----------------- */
+.mnemo-plain {
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  line-height: 1.5;
+  background: var(--bg);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  padding: 0.6rem 0.75rem;
+  margin: 0;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  color: var(--fg);
 }
 
 /* --- Full-dive page hero (audit/settings/node) -------------------- */
@@ -3207,29 +3304,41 @@ dl.meta dd { margin: 0; color: var(--fg); }
   background: rgba(255, 255, 255, 0.05);
 }
 
-/* Hide EVERY browser's default details-disclosure marker. Chrome
-   128+ moved from ::-webkit-details-marker to the unprefixed
-   ::marker pseudo-element; without all three rules a native arrow
-   shows alongside our custom chevron. */
-.vscode-tree details > summary {
-  list-style: none;
-  display: list-item;
-  display: revert-layer;
+/* Hide EVERY browser's default details-disclosure marker.
+   The spec only allows ``color``, ``content``, ``font-*``,
+   ``white-space``, and ``text-*`` properties on ``::marker`` --
+   ``display: none`` is ignored. We use the allowed levers
+   (content + font-size + width + color) to make the marker
+   invisible regardless of which UA rendered it. */
+.vscode-tree summary,
+.vscode-tree details summary {
+  list-style: none !important;
+  list-style-type: none !important;
 }
 
+/* Safari + old Chrome legacy marker */
+.vscode-tree summary::-webkit-details-marker,
 .vscode-tree details > summary::-webkit-details-marker {
-  display: none;
+  display: none !important;
 }
 
+/* Modern Chrome 128+ + Firefox unprefixed marker. ``display: none``
+   is rejected here; ``content: ""`` + ``font-size: 0`` ARE allowed
+   and combined make the marker take up zero space. */
+.vscode-tree summary::marker,
 .vscode-tree details > summary::marker {
-  content: "";
-  display: none;
+  content: "" !important;
+  font-size: 0 !important;
+  color: transparent !important;
 }
 
+/* Chrome 128+ reserves a phantom slot for the disclosure widget
+   inside any flex/grid summary -- 12-18px wide, invisible (with our
+   marker hide) but still claiming flex slot 0. The cure is to leave
+   the summary itself as a plain block and put our children inside
+   an inner flex wrapper, which gets a clean flex context. */
 .vscode-tree details summary.vscode-dir {
-  display: flex;
-  align-items: center;
-  gap: 0.35rem;
+  display: block;
   list-style: none;
   cursor: pointer;
   padding: 0.18rem 0.35rem;
@@ -3244,6 +3353,23 @@ dl.meta dd { margin: 0; color: var(--fg); }
 
 .vscode-tree details summary.vscode-dir:hover {
   background: rgba(126, 231, 224, 0.07);
+}
+
+/* Inner flex row for summary contents. Lives INSIDE the summary so
+   the disclosure-widget phantom slot (Chrome 128+) doesn't claim
+   flex slot 0 -- we get a fresh flex context here. */
+.vscode-tree .vscode-dir-row {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+/* The chev rotation needs to follow the new selector path
+   (summary > .vscode-dir-row > .vscode-chev). The old rule that
+   targeted summary > .vscode-chev no longer matches after the
+   structural change. */
+.vscode-tree details[open] > summary > .vscode-dir-row > .vscode-chev {
+  transform: rotate(90deg);
 }
 
 /* Pseudo-element chevron -- sharper than a 10px SVG. Right-pointing
@@ -3267,10 +3393,6 @@ dl.meta dd { margin: 0; color: var(--fg); }
   border-top: 4px solid transparent;
   border-bottom: 4px solid transparent;
   border-left: 5px solid currentColor;
-}
-
-.vscode-tree details[open] > summary > .vscode-chev {
-  transform: rotate(90deg);
 }
 
 .vscode-icon {
@@ -3337,6 +3459,11 @@ dl.meta dd { margin: 0; color: var(--fg); }
   margin-left: 0;
 }
 
+/* Generic nebula-tree summary base (used by non-vscode trees, if any).
+   The Unicode-arrow ::before that used to live here drew a SECOND
+   chevron on top of the .vscode-chev one -- removed. Display is now
+   ``block`` so summary doesn't reserve a phantom flex slot for the
+   disclosure widget; inner content uses .vscode-dir-row for flex. */
 .nebula-tree details > summary {
   cursor: pointer;
   list-style: none;
@@ -3345,25 +3472,10 @@ dl.meta dd { margin: 0; color: var(--fg); }
   font-family: var(--mono);
   font-size: 0.78rem;
   color: var(--fg);
-  display: flex;
-  align-items: center;
-  gap: 0.3rem;
+  display: block;
 }
 
 .nebula-tree details > summary::-webkit-details-marker { display: none; }
-
-.nebula-tree details > summary::before {
-  content: "▸";
-  color: var(--fg-muted);
-  font-size: 0.65rem;
-  width: 0.8rem;
-  display: inline-block;
-  transition: transform 120ms ease;
-}
-
-.nebula-tree details[open] > summary::before {
-  transform: rotate(90deg);
-}
 
 .nebula-tree summary:hover {
   background: rgba(126, 231, 224, 0.08);
@@ -3893,40 +4005,25 @@ dl.meta dd { margin: 0; color: var(--fg); }
   margin-left: 0.4rem;
 }
 
-/* --- Node-type badge colors used by chips + detail badge --- */
+/* --- Node-type badge colors used by chips + detail badge ---
+   Palette-driven via ``--type-color``: templates stamp the color
+   inline from palette.py (single source). Generic ``[class*=...]``
+   selectors below cover every type (current + future). */
 
-/* Vibrant Nebula palette v2 -- mirrors graph.html TYPE_COLORS */
-.swatch-code_module       { background: #06b6d4; box-shadow: 0 0 6px rgba(6, 182, 212, 0.5); }
-.swatch-code_function     { background: #2dd4bf; box-shadow: 0 0 6px rgba(45, 212, 191, 0.5); }
-.swatch-code_method       { background: #38bdf8; box-shadow: 0 0 6px rgba(56, 189, 248, 0.5); }
-.swatch-code_class        { background: #e879f9; box-shadow: 0 0 6px rgba(232, 121, 249, 0.5); }
-.swatch-code_route        { background: #fb923c; box-shadow: 0 0 6px rgba(251, 146, 60, 0.5); }
-.swatch-code_component    { background: #c084fc; box-shadow: 0 0 6px rgba(192, 132, 252, 0.5); }
-.swatch-code_endpoint     { background: #4ade80; box-shadow: 0 0 6px rgba(74, 222, 128, 0.5); }
-.swatch-commit            { background: #94a3b8; box-shadow: 0 0 4px rgba(148, 163, 184, 0.4); }
-.swatch-memory_feedback   { background: #ff8a4c; box-shadow: 0 0 6px rgba(255, 138, 76, 0.5); }
-.swatch-memory_project    { background: #5fa8ff; box-shadow: 0 0 6px rgba(95, 168, 255, 0.5); }
-.swatch-memory_user       { background: #c4f37a; box-shadow: 0 0 6px rgba(196, 243, 122, 0.5); }
-.swatch-memory_reference  { background: #e879f9; box-shadow: 0 0 6px rgba(232, 121, 249, 0.5); }
-.swatch-project_doc       { background: #ffd54a; box-shadow: 0 0 6px rgba(255, 213, 74, 0.5); }
-.swatch-plan_doc          { background: #818cf8; box-shadow: 0 0 6px rgba(129, 140, 248, 0.5); }
-.swatch-session_summary   { background: #22d3ee; box-shadow: 0 0 6px rgba(34, 211, 238, 0.5); }
+/* Nebula filter / breakdown swatches. The 50%-alpha glow uses the
+   modern color-mix() function which Chrome 111+, Safari 16.4+, and
+   Firefox 113+ all support natively. */
+.swatch[class*="swatch-"] {
+  background: var(--type-color, var(--accent));
+  box-shadow: 0 0 6px color-mix(in srgb, var(--type-color, var(--accent)) 50%, transparent);
+}
 
-.ntype-code_module       { background: rgba(6, 182, 212, 0.18);   color: #06b6d4; }
-.ntype-code_function     { background: rgba(45, 212, 191, 0.18);  color: #2dd4bf; }
-.ntype-code_method       { background: rgba(56, 189, 248, 0.18);  color: #38bdf8; }
-.ntype-code_class        { background: rgba(232, 121, 249, 0.18); color: #e879f9; }
-.ntype-code_route        { background: rgba(251, 146, 60, 0.18);  color: #fb923c; }
-.ntype-code_component    { background: rgba(192, 132, 252, 0.18); color: #c084fc; }
-.ntype-code_endpoint     { background: rgba(74, 222, 128, 0.18);  color: #4ade80; }
-.ntype-commit            { background: rgba(148, 163, 184, 0.18); color: #94a3b8; }
-.ntype-memory_feedback   { background: rgba(255, 138, 76, 0.18);  color: #ff8a4c; }
-.ntype-memory_project    { background: rgba(95, 168, 255, 0.18);  color: #5fa8ff; }
-.ntype-memory_user       { background: rgba(196, 243, 122, 0.18); color: #c4f37a; }
-.ntype-memory_reference  { background: rgba(232, 121, 249, 0.18); color: #e879f9; }
-.ntype-project_doc       { background: rgba(255, 213, 74, 0.18);  color: #ffd54a; }
-.ntype-plan_doc          { background: rgba(129, 140, 248, 0.18); color: #818cf8; }
-.ntype-session_summary   { background: rgba(34, 211, 238, 0.18);  color: #22d3ee; }
+/* Pill chips that appear next to node titles inside the Nebula
+   detail panel. 18%-alpha background + full-saturation text. */
+[class*="ntype-"] {
+  background: color-mix(in srgb, var(--type-color, var(--accent)) 18%, transparent);
+  color: var(--type-color, var(--accent));
+}
 
 /* --- Mini-map overlay --- */
 .nebula-minimap {

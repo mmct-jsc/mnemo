@@ -5,25 +5,14 @@
 <script src="https://unpkg.com/layout-base/layout-base.js"></script>
 <script src="https://unpkg.com/cose-base/cose-base.js"></script>
 <script src="https://unpkg.com/cytoscape-fcose/cytoscape-fcose.js"></script>
-<!-- Prism for syntax highlighting in the detail-panel body. The
-     "tomorrow night" theme matches our dark backdrop; the
-     ``autoloader`` plugin lazy-fetches per-language definitions so
-     we don't ship every grammar upfront. -->
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/autoloader/prism-autoloader.min.js"></script>
-<script>
-  // Prism autoloader needs to know where to fetch the per-language
-  // grammars. Point it at the same CDN as the core.
-  if (window.Prism && window.Prism.plugins && window.Prism.plugins.autoloader) {
-    window.Prism.plugins.autoloader.languages_path =
-      'https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/';
-  }
-</script>
+<!-- Prism is loaded site-wide from base.html; no per-page setup. -->
 {% endblock %}
 {% block layout %}
 <main class="full">
-  <section class="nebula-shell" x-data="nebula()" x-init="init()">
+  <!-- Alpine auto-invokes init() when it lives on the x-data object,
+       so no explicit x-init="init()" -- adding it would run init()
+       twice and force-render the fcose layout twice on first load. -->
+  <section class="nebula-shell" x-data="nebula()">
 
     <!-- Left: file tree (VSCode-style) -->
     <aside class="nebula-tree">
@@ -48,27 +37,25 @@
               <!-- Directory -->
               <template x-if="child.isDir">
                 <details open>
-                  <summary class="vscode-dir">
+                  <summary class="vscode-dir"><span class="vscode-dir-row">
                     <span class="vscode-chev" aria-hidden="true"></span>
                     <svg class="vscode-icon dir-icon" viewBox="0 0 16 16">
                       <path fill="#7eb6d6" d="M1.5 3.5A1.5 1.5 0 0 1 3 2h3l1.5 1.5H13A1.5 1.5 0 0 1 14.5 5v7A1.5 1.5 0 0 1 13 13.5H3A1.5 1.5 0 0 1 1.5 12V3.5Z"/>
                     </svg>
                     <span class="vscode-dir-label" x-text="name"></span>
-                  </summary>
+                  </span></summary>
                   <ul>
                     <template x-for="(grand, gname) in child.children" :key="gname">
                       <li>
                         <template x-if="grand.isDir">
                           <details>
-                            <summary class="vscode-dir">
-                              <svg class="vscode-chev" viewBox="0 0 16 16" width="10" height="10">
-                                <path d="M5 4l5 4-5 4V4z" fill="currentColor"/>
-                              </svg>
+                            <summary class="vscode-dir"><span class="vscode-dir-row">
+                              <span class="vscode-chev" aria-hidden="true"></span>
                               <svg class="vscode-icon dir-icon" viewBox="0 0 16 16">
                                 <path fill="#7eb6d6" d="M1.5 3.5A1.5 1.5 0 0 1 3 2h3l1.5 1.5H13A1.5 1.5 0 0 1 14.5 5v7A1.5 1.5 0 0 1 13 13.5H3A1.5 1.5 0 0 1 1.5 12V3.5Z"/>
                               </svg>
                               <span class="vscode-dir-label" x-text="gname"></span>
-                            </summary>
+                            </span></summary>
                             <ul>
                               <template x-for="leaf in grand.leaves" :key="leaf.id">
                                 <li>
@@ -164,6 +151,7 @@
                   @click="deselect()"
                   title="Close (Esc)">&times;</button>
           <span class="ntype" :class="'ntype-' + selected.type"
+                :style="'--type-color: ' + typeColor(selected.type)"
                 x-text="selected.type"></span>
           <h3 x-text="selected.name"></h3>
           <p class="nsource" x-show="selected.source_path" x-cloak
@@ -181,12 +169,13 @@
                x-text="selected.body"
                x-effect="if (selected.body && window.Prism) requestAnimationFrame(() => Prism.highlightElement($refs.bodyCode))"></code></pre>
 
-          <h4 x-show="neighbors.length">Connections ({{ '{{' }} neighbors.length {{ '}}' }})</h4>
+          <h4 x-show="neighbors.length">Connections (<span x-text="neighbors.length"></span>)</h4>
           <ul class="nlist">
             <template x-for="nb in neighbors.slice(0, 20)" :key="nb.id + ':' + nb.rel">
               <li>
                 <button @click="focusNode(nb.id)">
-                  <span class="dot" :class="'swatch-' + nb.type"></span>
+                  <span class="dot" :class="'swatch-' + nb.type"
+                        :style="'--type-color: ' + typeColor(nb.type)"></span>
                   <span class="label" x-text="nb.name"></span>
                   <span class="rel" x-text="nb.rel + (nb.confidence < 1 ? ' (' + nb.confidence.toFixed(2) + ')' : '')"></span>
                 </button>
@@ -211,7 +200,8 @@
           <span class="nebula-chip"
                 :class="{ on: typeFilters[t], off: !typeFilters[t] }"
                 @click="typeFilters[t] = !typeFilters[t]; applyFilters()">
-            <span class="swatch" :class="'swatch-' + t"></span>
+            <span class="swatch" :class="'swatch-' + t"
+                  :style="'--type-color: ' + typeColor(t)"></span>
             <span x-text="t.replace('memory_','').replace('code_','')"></span>
           </span>
         </template>
@@ -269,28 +259,14 @@
 </main>
 
 <script>
-// Nebula palette v2: saturated, "neon on velvet" feel. Each color
-// is bright enough to glow against the dark background but distinct
-// from its neighbors at typical viewing distance.
-const TYPE_COLORS = {
-  // memory layer -- warm accents
-  memory_feedback:  '#ff8a4c',  // amber-orange (incidents, retros)
-  memory_user:      '#c4f37a',  // lime (user preferences)
-  memory_project:   '#5fa8ff',  // electric blue (project notes)
-  memory_reference: '#e879f9',  // hot pink (references)
-  project_doc:      '#ffd54a',  // gold (canonical docs)
-  plan_doc:         '#818cf8',  // indigo (plans)
-  session_summary:  '#22d3ee',  // sky (sessions)
-  // code layer -- cool spectrum
-  code_module:      '#06b6d4',  // deep cyan -- the file
-  code_function:    '#2dd4bf',  // teal -- the verb
-  code_method:      '#38bdf8',  // sky blue -- bound verb
-  code_class:       '#e879f9',  // magenta -- the noun
-  code_route:       '#fb923c',  // bright amber -- the doorway
-  code_component:   '#c084fc',  // violet -- the surface
-  code_endpoint:    '#4ade80',  // emerald -- the join
-  commit:           '#94a3b8',  // slate -- the past
-};
+// Nebula palette: pulled from the site-wide single source
+// (daemon/mnemo/ui/palette.py, exposed via base.html as
+// window.MNEMO_TYPE_COLORS). Keeping the alias TYPE_COLORS for the
+// rest of this file so the existing call sites don't have to change.
+// New node types now show up in the canvas the moment they land in
+// palette.py -- no per-file edits required.
+const TYPE_COLORS = window.MNEMO_TYPE_COLORS || {};
+const TYPE_COLOR_FALLBACK = window.MNEMO_TYPE_COLOR_FALLBACK || '#7ee7e0';
 
 // Edge palette: each relation gets a color that matches its
 // conceptual "weight" in the graph. Brighter = more semantic.
@@ -331,6 +307,15 @@ function nebula() {
     stats: '',
     rawElements: [],
     currentLayout: 'fcose',
+
+    // Single source of truth for ANY in-DOM type color (filter chips,
+    // neighbor dots, detail-panel ntype pill). Reads from the same
+    // window.MNEMO_TYPE_COLORS dict that the Cytoscape canvas uses,
+    // so chip color and node color stay in lockstep -- editing
+    // palette.py updates BOTH at once.
+    typeColor(t) {
+      return TYPE_COLORS[t] || TYPE_COLOR_FALLBACK;
+    },
 
     async init() {
       // Read query string for ?project= and ?node= so /code cards
@@ -423,12 +408,12 @@ function nebula() {
           { selector: 'node', style: {
               shape: 'ellipse',
               label: 'data(label)',
-              'background-color': (n) => TYPE_COLORS[n.data('type')] || '#7ee7e0',
+              'background-color': (n) => TYPE_COLORS[n.data('type')] || TYPE_COLOR_FALLBACK,
               'background-opacity': 1.0,
               // Inner glow / halo: ``underlay`` paints BEHIND the node
               // so the color bleeds outward like a star -- the
               // "nebula" feel the design asked for.
-              'underlay-color': (n) => TYPE_COLORS[n.data('type')] || '#7ee7e0',
+              'underlay-color': (n) => TYPE_COLORS[n.data('type')] || TYPE_COLOR_FALLBACK,
               'underlay-opacity': 0.32,
               'underlay-padding': 8,
               'underlay-shape': 'ellipse',
@@ -524,7 +509,18 @@ function nebula() {
         this.selectFromCanvas(evt.target);
       });
       this.cy.on('tap', (evt) => {
-        if (evt.target === this.cy) this.deselect();
+        // Empty-space tap means the target is the Cytoscape CORE, not
+        // a node/edge collection. The intuitive check ``evt.target ===
+        // this.cy`` fails in minified builds because the core is
+        // wrapped in an obfuscated class (e.g. ``Os``) that isn't
+        // referentially equal to ``cy``. Capability-test instead:
+        // only collections expose ``isNode``; the core does not. So
+        // ``typeof target.isNode !== 'function'`` reliably means
+        // "the tap landed on empty canvas, deselect".
+        const t = evt.target;
+        if (!t || typeof t.isNode !== 'function') {
+          this.deselect();
+        }
       });
       // Escape key + body click outside the canvas also deselect.
       // The canvas-only tap handler can't see clicks outside its
@@ -871,7 +867,14 @@ function nebula() {
       // then back to force converges to a different layout because
       // fcose with randomize: false relaxes from the current
       // (non-force) positions.
-      if (name === 'force' && this._forceSnapshot) {
+      //
+      // The layout name passed in here is the cytoscape plugin
+      // name (``fcose``) -- NOT the user-facing button label
+      // (``force``). Earlier versions checked ``name === 'force'``,
+      // which never matched, so the snapshot branch was dead code
+      // and every "force" click after a layout switch produced a
+      // fresh re-relax from the current positions.
+      if (name === 'fcose' && this._forceSnapshot) {
         const snap = this._forceSnapshot;
         this.cy.batch(() => {
           visible.nodes().forEach((n) => {

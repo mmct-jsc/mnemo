@@ -10,7 +10,7 @@
       <strong>{{ node.name }}</strong>
     </p>
     <h2>
-      <span class="badge type-{{ node.type }}">{{ node.type | replace('code_', '') }}</span>
+      <span class="badge type-{{ node.type }}" style="--type-color: {{ type_colors.get(node.type, type_color_fallback) }};">{{ node.type | replace('code_', '') }}</span>
       <code>{{ node.name }}</code>
     </h2>
     <p class="hint"><code>{{ node.source_path | replace('\\', '/') }}</code></p>
@@ -37,7 +37,7 @@
           {% if caller %}
           <li>
             <a href="/code/{{ project_key | urlencode }}/function/{{ caller.id }}">
-              <span class="badge type-{{ caller.type }}">{{ caller.type | replace('code_', '') }}</span>
+              <span class="badge type-{{ caller.type }}" style="--type-color: {{ type_colors.get(caller.type, type_color_fallback) }};">{{ caller.type | replace('code_', '') }}</span>
               <code>{{ caller.name }}</code>
             </a>
             <span class="hint">conf {{ '%.2f' | format(e.confidence) }}</span>
@@ -57,7 +57,7 @@
           {% if callee %}
           <li>
             <a href="/code/{{ project_key | urlencode }}/function/{{ callee.id }}">
-              <span class="badge type-{{ callee.type }}">{{ callee.type | replace('code_', '') }}</span>
+              <span class="badge type-{{ callee.type }}" style="--type-color: {{ type_colors.get(callee.type, type_color_fallback) }};">{{ callee.type | replace('code_', '') }}</span>
               <code>{{ callee.name }}</code>
             </a>
             <span class="hint">conf {{ '%.2f' | format(e.confidence) }}</span>
@@ -77,7 +77,7 @@
           {% if parent %}
           <li>
             <a href="/node/{{ parent.id }}">
-              <span class="badge type-{{ parent.type }}">{{ parent.type | replace('code_', '') }}</span>
+              <span class="badge type-{{ parent.type }}" style="--type-color: {{ type_colors.get(parent.type, type_color_fallback) }};">{{ parent.type | replace('code_', '') }}</span>
               <code>{{ parent.name }}</code>
             </a>
           </li>
@@ -96,7 +96,7 @@
           {% if cls %}
           <li>
             <a href="/node/{{ cls.id }}">
-              <span class="badge type-code_class">class</span>
+              <span class="badge type-code_class" style="--type-color: {{ type_colors.get('code_class', type_color_fallback) }};">class</span>
               <code>{{ cls.name }}</code>
             </a>
           </li>
@@ -115,7 +115,7 @@
           {% if route %}
           <li>
             <a href="/node/{{ route.id }}">
-              <span class="badge type-code_route">route</span>
+              <span class="badge type-code_route" style="--type-color: {{ type_colors.get('code_route', type_color_fallback) }};">route</span>
               <code>{{ route.name }}</code>
             </a>
           </li>
