@@ -5,21 +5,7 @@
 <script src="https://unpkg.com/layout-base/layout-base.js"></script>
 <script src="https://unpkg.com/cose-base/cose-base.js"></script>
 <script src="https://unpkg.com/cytoscape-fcose/cytoscape-fcose.js"></script>
-<!-- Prism for syntax highlighting in the detail-panel body. The
-     "tomorrow night" theme matches our dark backdrop; the
-     ``autoloader`` plugin lazy-fetches per-language definitions so
-     we don't ship every grammar upfront. -->
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/autoloader/prism-autoloader.min.js"></script>
-<script>
-  // Prism autoloader needs to know where to fetch the per-language
-  // grammars. Point it at the same CDN as the core.
-  if (window.Prism && window.Prism.plugins && window.Prism.plugins.autoloader) {
-    window.Prism.plugins.autoloader.languages_path =
-      'https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/';
-  }
-</script>
+<!-- Prism is loaded site-wide from base.html; no per-page setup. -->
 {% endblock %}
 {% block layout %}
 <main class="full">

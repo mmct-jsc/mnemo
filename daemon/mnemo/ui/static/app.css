@@ -1473,6 +1473,103 @@ dl.meta dd { margin: 0; color: var(--fg); }
   font-size: 0.82rem; color: var(--fg-muted);
 }
 
+/* --- Code-typed body preview (Prism-highlighted) ----------------- */
+/* When a code_* node is rendered in the Preview tab or the search
+   popover, mnemoRenderBody writes <pre class="mnemo-code language-X">.
+   The Prism Tomorrow-Night theme paints token colors; we layer the
+   mnemo palette (panel + border) on top so the block matches the
+   rest of the UI. */
+.mnemo-code {
+  background: var(--bg);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  padding: 0.75rem 0.9rem;
+  margin: 0;
+  overflow-x: auto;
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+.mnemo-code code {
+  font-family: inherit;
+  font-size: inherit;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  color: inherit;
+  white-space: pre;
+}
+/* When the Preview tab is showing a code body, drop the markdown
+   typography (margins, headings) -- the <pre> stands on its own. */
+.node-md-preview.is-code {
+  background: transparent;
+  border: 0;
+  padding: 0;
+}
+.node-md-preview.is-code > .mnemo-code {
+  /* The wrapper already paints the panel; keep the inner pre flush. */
+  margin: 0;
+}
+/* Tiny status hint under the preview area ("rendered as code") so
+   the user knows which path was picked. */
+.preview-mode-hint {
+  margin-top: 0.35rem;
+  font-size: 0.7rem;
+  color: var(--fg-muted);
+}
+.preview-mode-hint code {
+  background: var(--panel-2);
+  border: 1px solid var(--border-soft);
+  border-radius: 3px;
+  padding: 0.05rem 0.3rem;
+  font-size: 0.95em;
+  color: var(--accent);
+}
+
+/* Search-results body details: the toggle on each hit opens a
+   live-rendered preview. Keep the slot tight so the body doesn't
+   dwarf the rest of the hit card. */
+.hit-body summary {
+  cursor: pointer;
+  color: var(--fg-muted);
+  font-size: 0.78rem;
+  padding: 0.15rem 0;
+}
+.hit-body summary:hover { color: var(--accent); }
+.hit-body-render {
+  margin-top: 0.4rem;
+  font-size: 0.82rem;
+  max-height: 26rem;
+  overflow-y: auto;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  padding: 0.6rem 0.75rem;
+  background: var(--panel);
+}
+.hit-body-render .mnemo-code {
+  /* The render slot already has its own border + padding -- inset
+     the code block so the two borders don't double up. */
+  border: 0;
+  background: transparent;
+  padding: 0;
+  font-size: 0.76rem;
+}
+
+/* --- Plain-text body preview (commit nodes etc.) ----------------- */
+.mnemo-plain {
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  line-height: 1.5;
+  background: var(--bg);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  padding: 0.6rem 0.75rem;
+  margin: 0;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  color: var(--fg);
+}
+
 /* --- Full-dive page hero (audit/settings/node) -------------------- */
 .page-hero {
   display: flex;
