@@ -699,7 +699,12 @@ function nebula() {
       // nodes wastes work and produces a sparse result when most of
       // the graph is filtered out.
       const visible = this.cy.elements().not('.hide');
-      const baseOpts = { animate: true, animationDuration: 400, padding: 40 };
+      // PERFORMANCE: interpolating positions over 400ms for 400+
+      // nodes is the lag source on layout switch (animation triggers
+      // a redraw every frame). Snap instantly + fade the result in.
+      // Camera animates to fit so the user still sees a smooth
+      // transition without per-node tweens.
+      const baseOpts = { animate: false, padding: 40, fit: false };
       const perLayout = {
         fcose: {
           nodeRepulsion: 6500,
@@ -754,7 +759,19 @@ function nebula() {
         },
       };
       const opts = { name, ...baseOpts, ...(perLayout[name] || {}) };
-      visible.layout(opts).run();
+      // Run the layout inside a Cytoscape batch -- the per-node
+      // position updates fire a single render pass instead of one
+      // per node.
+      this.cy.batch(() => {
+        visible.layout(opts).run();
+      });
+      // Animate ONLY the camera to fit the new positions. That's
+      // one tween (the viewport) instead of N tweens (one per node)
+      // -- silky transition without the per-node redraw cost.
+      this.cy.animate(
+        { fit: { eles: visible, padding: 60 } },
+        { duration: 320, easing: 'ease-out' },
+      );
     },
 
     copyCitation() {
