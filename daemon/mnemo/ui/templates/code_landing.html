@@ -78,18 +78,33 @@
   {% endif %}
 
   {% if endpoints %}
-  <section class="endpoint-section">
+  <section class="endpoint-section" x-data="{
+    expanded: false,
+    filter: '',
+    shouldShow(method, path, i) {
+      const matchesText = !this.filter ||
+        path.toLowerCase().includes(this.filter.toLowerCase()) ||
+        method.toLowerCase().includes(this.filter.toLowerCase());
+      const withinFirst30 = i < 30;
+      return matchesText && (this.expanded || withinFirst30 || this.filter);
+    }
+  }">
     <header class="endpoint-section-head">
       <h3>Cross-stack endpoints</h3>
       <span class="endpoint-section-count">{{ endpoints | length }}</span>
+      <input type="search" class="endpoint-filter"
+             placeholder="filter path or method..."
+             x-model="filter">
     </header>
     <p class="endpoint-section-hint">
       URI anchors shared between backend routes and frontend components.
       A route and a component at the same path converge on a single endpoint.
     </p>
     <div class="endpoint-grid">
-      {% for ep in endpoints[:30] %}
-      <a class="endpoint-card endpoint-method-{{ ep.method | lower }}" href="/node/{{ ep.id }}">
+      {% for ep in endpoints %}
+      <a class="endpoint-card endpoint-method-{{ ep.method | lower }}"
+         href="/node/{{ ep.id }}"
+         x-show="shouldShow('{{ ep.method }}', '{{ ep.path | replace("'", "") }}', {{ loop.index0 }})">
         <span class="endpoint-method">{{ ep.method }}</span>
         <code class="endpoint-path">{{ ep.path }}</code>
         <span class="endpoint-fanout" title="{{ ep.fanout }} incoming at_endpoint edges">
@@ -99,7 +114,14 @@
       {% endfor %}
     </div>
     {% if endpoints | length > 30 %}
-    <p class="hint">+ {{ endpoints | length - 30 }} more</p>
+    <div class="endpoint-expand-row">
+      <button type="button" class="expand-toggle"
+              @click="expanded = !expanded"
+              x-show="!filter" x-cloak>
+        <span x-show="!expanded" x-cloak>show {{ endpoints | length - 30 }} more endpoints &darr;</span>
+        <span x-show="expanded" x-cloak>collapse &uarr;</span>
+      </button>
+    </div>
     {% endif %}
   </section>
   {% endif %}
