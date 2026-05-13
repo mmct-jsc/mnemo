@@ -181,7 +181,7 @@
                x-text="selected.body"
                x-effect="if (selected.body && window.Prism) requestAnimationFrame(() => Prism.highlightElement($refs.bodyCode))"></code></pre>
 
-          <h4 x-show="neighbors.length">Connections ({{ '{{' }} neighbors.length {{ '}}' }})</h4>
+          <h4 x-show="neighbors.length">Connections (<span x-text="neighbors.length"></span>)</h4>
           <ul class="nlist">
             <template x-for="nb in neighbors.slice(0, 20)" :key="nb.id + ':' + nb.rel">
               <li>
