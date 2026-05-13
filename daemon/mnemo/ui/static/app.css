@@ -3235,10 +3235,13 @@ dl.meta dd { margin: 0; color: var(--fg); }
   color: transparent !important;
 }
 
+/* Chrome 128+ reserves a phantom slot for the disclosure widget
+   inside any flex/grid summary -- 12-18px wide, invisible (with our
+   marker hide) but still claiming flex slot 0. The cure is to leave
+   the summary itself as a plain block and put our children inside
+   an inner flex wrapper, which gets a clean flex context. */
 .vscode-tree details summary.vscode-dir {
-  display: flex;
-  align-items: center;
-  gap: 0.35rem;
+  display: block;
   list-style: none;
   cursor: pointer;
   padding: 0.18rem 0.35rem;
@@ -3253,6 +3256,23 @@ dl.meta dd { margin: 0; color: var(--fg); }
 
 .vscode-tree details summary.vscode-dir:hover {
   background: rgba(126, 231, 224, 0.07);
+}
+
+/* Inner flex row for summary contents. Lives INSIDE the summary so
+   the disclosure-widget phantom slot (Chrome 128+) doesn't claim
+   flex slot 0 -- we get a fresh flex context here. */
+.vscode-tree .vscode-dir-row {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+/* The chev rotation needs to follow the new selector path
+   (summary > .vscode-dir-row > .vscode-chev). The old rule that
+   targeted summary > .vscode-chev no longer matches after the
+   structural change. */
+.vscode-tree details[open] > summary > .vscode-dir-row > .vscode-chev {
+  transform: rotate(90deg);
 }
 
 /* Pseudo-element chevron -- sharper than a 10px SVG. Right-pointing
@@ -3276,10 +3296,6 @@ dl.meta dd { margin: 0; color: var(--fg); }
   border-top: 4px solid transparent;
   border-bottom: 4px solid transparent;
   border-left: 5px solid currentColor;
-}
-
-.vscode-tree details[open] > summary > .vscode-chev {
-  transform: rotate(90deg);
 }
 
 .vscode-icon {
@@ -3346,6 +3362,11 @@ dl.meta dd { margin: 0; color: var(--fg); }
   margin-left: 0;
 }
 
+/* Generic nebula-tree summary base (used by non-vscode trees, if any).
+   The Unicode-arrow ::before that used to live here drew a SECOND
+   chevron on top of the .vscode-chev one -- removed. Display is now
+   ``block`` so summary doesn't reserve a phantom flex slot for the
+   disclosure widget; inner content uses .vscode-dir-row for flex. */
 .nebula-tree details > summary {
   cursor: pointer;
   list-style: none;
@@ -3354,25 +3375,10 @@ dl.meta dd { margin: 0; color: var(--fg); }
   font-family: var(--mono);
   font-size: 0.78rem;
   color: var(--fg);
-  display: flex;
-  align-items: center;
-  gap: 0.3rem;
+  display: block;
 }
 
 .nebula-tree details > summary::-webkit-details-marker { display: none; }
-
-.nebula-tree details > summary::before {
-  content: "▸";
-  color: var(--fg-muted);
-  font-size: 0.65rem;
-  width: 0.8rem;
-  display: inline-block;
-  transition: transform 120ms ease;
-}
-
-.nebula-tree details[open] > summary::before {
-  transform: rotate(90deg);
-}
 
 .nebula-tree summary:hover {
   background: rgba(126, 231, 224, 0.08);
