@@ -31,6 +31,18 @@
       setTimeout(tryConfigPrism, 50);
     })();
   </script>
+  <script>
+    // Node-type palette (single source: daemon/mnemo/ui/palette.py).
+    // Exposed early -- before any deferred Alpine / page scripts run --
+    // so graph.html's Cytoscape style callbacks pick it up on first
+    // render. Templates ALSO inject ``style="--type-color: ..."`` on
+    // badges + bar fills so the CSS-side picks the same color.
+    window.MNEMO_TYPE_COLORS = {{ type_colors | tojson }};
+    window.MNEMO_TYPE_COLOR_FALLBACK = {{ type_color_fallback | tojson }};
+    window.mnemoColorFor = (t) => (
+      (t && window.MNEMO_TYPE_COLORS[t]) || window.MNEMO_TYPE_COLOR_FALLBACK
+    );
+  </script>
   <script defer>
     // Toast bus + localStorage-backed notification history.
     const TOAST_HISTORY_KEY = 'mnemo.toast.history';
