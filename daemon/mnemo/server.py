@@ -71,6 +71,42 @@ log = logging.getLogger(__name__)
 # been telling adapters to migrate throughout the v1.1 cycle.
 
 
+def _language_for_path(path) -> str:  # noqa: ANN001 -- accepts Path-like
+    """Map a file extension to a syntax-hint string for the UI's code
+    viewer. Returns ``"text"`` for unknown extensions so the renderer
+    can fall back to a plain ``<pre>`` block."""
+    ext = str(path).lower().rsplit(".", 1)[-1] if "." in str(path) else ""
+    return {
+        "py": "python",
+        "pyi": "python",
+        "js": "javascript",
+        "mjs": "javascript",
+        "cjs": "javascript",
+        "jsx": "javascript",
+        "ts": "typescript",
+        "tsx": "tsx",
+        "go": "go",
+        "rs": "rust",
+        "java": "java",
+        "rb": "ruby",
+        "php": "php",
+        "cs": "csharp",
+        "kt": "kotlin",
+        "swift": "swift",
+        "c": "c",
+        "h": "c",
+        "cpp": "cpp",
+        "hpp": "cpp",
+        "json": "json",
+        "yaml": "yaml",
+        "yml": "yaml",
+        "toml": "toml",
+        "md": "markdown",
+        "sh": "bash",
+        "bash": "bash",
+    }.get(ext, "text")
+
+
 class _ApiVersionHeaderMiddleware(BaseHTTPMiddleware):
     """Stamp ``X-Mnemo-Api-Version`` on every response.
 
@@ -382,6 +418,78 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
     def delete_node(node_id: str, s: Store = Depends(get_store)) -> JSONResponse:
         s.delete_node(node_id)
         return JSONResponse({"ok": True})
+
+    @v1.get("/nodes/{node_id}/full_source")
+    def get_node_full_source(node_id: str, s: Store = Depends(get_store)) -> JSONResponse:
+        """v2.1: re-read the file from disk for code-typed nodes.
+
+        Stored bodies are truncated to a 60-line head (per v2.0 design,
+        for LLM token budget). When the user opens a /node detail page
+        and asks for the full content, this endpoint returns the
+        on-disk source for that exact line range.
+
+        Returns 404 if:
+        - The node doesn't exist.
+        - The node isn't a code_* type (memory bodies are already full).
+        - The file no longer exists at the stored path.
+        """
+        from pathlib import Path as _Path
+
+        n = s.get_node(node_id)
+        if n is None:
+            raise HTTPException(status_code=404, detail="node not found")
+        if not n.type.startswith("code_"):
+            raise HTTPException(
+                status_code=404,
+                detail="full_source only available for code_* nodes",
+            )
+
+        # Parse the ``<file>:<start>-<end>(#METHOD)?`` source_path. For
+        # modules the suffix is missing -- treat as the whole file.
+        sp = n.source_path
+        file_part = sp
+        line_range: tuple[int, int] | None = None
+        if ":" in sp:
+            head, _, tail = sp.rpartition(":")
+            if "-" in tail:
+                a, _, b_with_meta = tail.partition("-")
+                b = b_with_meta.split("#", 1)[0]
+                if a.isdigit() and b.isdigit():
+                    file_part = head
+                    line_range = (int(a), int(b))
+
+        path = _Path(file_part)
+        if not path.is_file():
+            raise HTTPException(
+                status_code=404,
+                detail=f"source file not found on disk: {file_part}",
+            )
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail=f"read failed: {exc}") from exc
+
+        if line_range is None:
+            return JSONResponse(
+                {
+                    "source_path": file_part,
+                    "language": _language_for_path(path),
+                    "lines": [1, len(text.splitlines())],
+                    "body": text,
+                }
+            )
+        # Slice to the recorded range. Line numbers are 1-indexed.
+        lines = text.splitlines()
+        a, b = line_range
+        body = "\n".join(lines[a - 1 : b])
+        return JSONResponse(
+            {
+                "source_path": file_part,
+                "language": _language_for_path(path),
+                "lines": [a, b],
+                "body": body,
+            }
+        )
 
     # --- Query ------------------------------------------------------------
 

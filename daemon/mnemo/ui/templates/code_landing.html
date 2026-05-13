@@ -2,39 +2,66 @@
 
 {% block content %}
 <section class="code-landing">
-  <header class="page-header">
-    <h2>Code</h2>
-    <p class="hint">
-      Registered <code>code_repo</code> sources. Click a project to drill
-      into its files, functions, classes, and routes.
+  <header class="code-hero">
+    <h2>Code intelligence</h2>
+    <p class="code-hero-sub">
+      Every registered <code>code_repo</code> source becomes a typed
+      graph of modules, functions, classes, routes, components, and
+      the relationships between them. Click a project to open it in
+      the Nebula graph view.
     </p>
   </header>
 
   {% if projects %}
-  <div class="code-grid">
+  <div class="code-project-grid">
     {% for p in projects %}
-    <a class="code-card" href="/graph?project={{ p.project_key | urlencode }}">
-      <div class="code-card-head">
-        <h3>{{ p.project_key }}</h3>
-        <span class="badge">{{ p.total }} node{% if p.total != 1 %}s{% endif %}</span>
-      </div>
-      <ul class="code-card-counts">
-        <li><span>Modules</span><strong>{{ p.by_type.get('code_module', 0) }}</strong></li>
-        <li><span>Functions</span><strong>{{ p.by_type.get('code_function', 0) }}</strong></li>
-        <li><span>Classes</span><strong>{{ p.by_type.get('code_class', 0) }}</strong></li>
-        <li><span>Methods</span><strong>{{ p.by_type.get('code_method', 0) }}</strong></li>
-        <li><span>Routes</span><strong>{{ p.by_type.get('code_route', 0) }}</strong></li>
-        <li><span>Components</span><strong>{{ p.by_type.get('code_component', 0) }}</strong></li>
-      </ul>
-      {% if p.source_path %}
-      <p class="code-card-path"><code>{{ p.source_path }}</code></p>
-      {% endif %}
-      <p class="code-card-foot">
-        <span class="hint">Open in graph &rarr;</span>
-        <a class="code-card-summary" href="/code/{{ p.project_key | urlencode }}"
-           onclick="event.stopPropagation()">summary</a>
-      </p>
-    </a>
+    <article class="code-project-card">
+      <a class="code-project-card-link" href="/graph?project={{ p.project_key | urlencode }}">
+        <header class="code-project-card-head">
+          <h3>{{ p.project_key }}</h3>
+          <span class="code-project-card-total">{{ p.total }}</span>
+        </header>
+
+        <div class="code-project-card-bars">
+          {% set total_bar = (p.total or 1) %}
+          {% for t, color in [
+              ('code_module', '#06b6d4'),
+              ('code_function', '#2dd4bf'),
+              ('code_method', '#38bdf8'),
+              ('code_class', '#e879f9'),
+              ('code_route', '#fb923c'),
+              ('code_component', '#c084fc'),
+          ] %}
+            {% set count = p.by_type.get(t, 0) %}
+            {% if count > 0 %}
+            <div class="bar-row" title="{{ count }} {{ t | replace('code_','') }}">
+              <span class="bar-dot" style="background: {{ color }}; box-shadow: 0 0 6px {{ color }}66;"></span>
+              <span class="bar-label">{{ t | replace('code_','') }}</span>
+              <span class="bar-track">
+                <span class="bar-fill" style="width: {{ (count * 100 / total_bar) | round(1) }}%; background: {{ color }};"></span>
+              </span>
+              <span class="bar-count">{{ count }}</span>
+            </div>
+            {% endif %}
+          {% endfor %}
+        </div>
+
+        {% if p.source_path %}
+        <p class="code-project-card-path"><code>{{ p.source_path }}</code></p>
+        {% endif %}
+
+        <footer class="code-project-card-foot">
+          <span class="code-card-cta">
+            <span>Open in Nebula</span>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 12h14M13 5l7 7-7 7"/></svg>
+          </span>
+        </footer>
+      </a>
+      <a class="code-project-card-summary" href="/code/{{ p.project_key | urlencode }}"
+         title="File-by-file summary view">
+        summary view &rarr;
+      </a>
+    </article>
     {% endfor %}
   </div>
   {% else %}
@@ -51,27 +78,28 @@
   {% endif %}
 
   {% if endpoints %}
-  <section class="code-section">
-    <h3>Cross-stack endpoints
-      <span class="hint">({{ endpoints | length }})</span>
-    </h3>
-    <p class="hint">
+  <section class="endpoint-section">
+    <header class="endpoint-section-head">
+      <h3>Cross-stack endpoints</h3>
+      <span class="endpoint-section-count">{{ endpoints | length }}</span>
+    </header>
+    <p class="endpoint-section-hint">
       URI anchors shared between backend routes and frontend components.
-      A route + component at the same path converge on a single endpoint.
+      A route and a component at the same path converge on a single endpoint.
     </p>
-    <ul class="endpoint-list">
-      {% for ep in endpoints[:20] %}
-      <li>
-        <a href="/node/{{ ep.id }}">
-          <span class="badge http-method http-{{ ep.method | lower }}">{{ ep.method }}</span>
-          <code>{{ ep.path }}</code>
-        </a>
-        <span class="hint">{{ ep.fanout }} link{% if ep.fanout != 1 %}s{% endif %}</span>
-      </li>
+    <div class="endpoint-grid">
+      {% for ep in endpoints[:30] %}
+      <a class="endpoint-card endpoint-method-{{ ep.method | lower }}" href="/node/{{ ep.id }}">
+        <span class="endpoint-method">{{ ep.method }}</span>
+        <code class="endpoint-path">{{ ep.path }}</code>
+        <span class="endpoint-fanout" title="{{ ep.fanout }} incoming at_endpoint edges">
+          {{ ep.fanout }}<span>{% if ep.fanout != 1 %}link{% endif %}</span>
+        </span>
+      </a>
       {% endfor %}
-    </ul>
-    {% if endpoints | length > 20 %}
-    <p class="hint">+ {{ endpoints | length - 20 }} more</p>
+    </div>
+    {% if endpoints | length > 30 %}
+    <p class="hint">+ {{ endpoints | length - 30 }} more</p>
     {% endif %}
   </section>
   {% endif %}

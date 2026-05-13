@@ -154,10 +154,33 @@
         </template>
       </div>
       <label class="nebula-slider">
-        min conf
-        <input type="range" min="0" max="100" step="5"
-               x-model.number="minConfidence" @input.debounce.120ms="applyFilters()">
-        <span x-text="(minConfidence / 100).toFixed(2)"></span>
+        <span class="slider-label">min conf</span>
+        <span class="slider-wrap">
+          <input type="range" min="0" max="100" step="1"
+                 list="conf-ticks"
+                 x-model.number="minConfidence" @input.debounce.80ms="applyFilters()">
+          <datalist id="conf-ticks">
+            <option value="0"></option>
+            <option value="50"></option>
+            <option value="70"></option>
+            <option value="80"></option>
+            <option value="90"></option>
+            <option value="95"></option>
+            <option value="100"></option>
+          </datalist>
+          <span class="slider-marks">
+            <span data-pct="0">0</span>
+            <span data-pct="50">.5</span>
+            <span data-pct="70">.7</span>
+            <span data-pct="90">.9</span>
+            <span data-pct="100">1</span>
+          </span>
+        </span>
+        <span class="slider-value" x-text="(minConfidence / 100).toFixed(2)"></span>
+        <button type="button" class="slider-reset"
+                @click="minConfidence = 0; applyFilters()"
+                x-show="minConfidence > 0" x-cloak
+                title="reset to 0">×</button>
       </label>
       <label class="nebula-hops" x-show="contextNodeId" x-cloak>
         hops
@@ -168,9 +191,14 @@
         </select>
       </label>
       <div class="nebula-layout-buttons">
-        <button @click="relayout('fcose')">force</button>
-        <button @click="relayout('concentric')">concentric</button>
-        <button @click="relayout('circle')">circle</button>
+        <button @click="relayout('fcose')"
+                :class="{ active: currentLayout === 'fcose' }">force</button>
+        <button @click="relayout('concentric')"
+                :class="{ active: currentLayout === 'concentric' }">rings</button>
+        <button @click="relayout('breadthfirst')"
+                :class="{ active: currentLayout === 'breadthfirst' }">tree</button>
+        <button @click="relayout('grid')"
+                :class="{ active: currentLayout === 'grid' }">grid</button>
       </div>
       <span class="nebula-stats" x-text="stats"></span>
     </div>
@@ -178,44 +206,49 @@
 </main>
 
 <script>
+// Nebula palette v2: saturated, "neon on velvet" feel. Each color
+// is bright enough to glow against the dark background but distinct
+// from its neighbors at typical viewing distance.
 const TYPE_COLORS = {
-  // memory
-  memory_feedback:  '#f0a47c',
-  memory_user:      '#b6e88c',
-  memory_project:   '#8db6f0',
-  memory_reference: '#d790f0',
-  project_doc:      '#f0d990',
-  plan_doc:         '#9396f0',
-  session_summary:  '#7ee7e0',
-  // code
-  code_module:      '#4dd0e1',
-  code_function:    '#5eead4',
-  code_method:      '#67e8f9',
-  code_class:       '#f0abfc',
-  code_route:       '#fbbf24',
-  code_component:   '#a78bfa',
-  code_endpoint:    '#86efac',
-  commit:           '#9ca3af',
+  // memory layer -- warm accents
+  memory_feedback:  '#ff8a4c',  // amber-orange (incidents, retros)
+  memory_user:      '#c4f37a',  // lime (user preferences)
+  memory_project:   '#5fa8ff',  // electric blue (project notes)
+  memory_reference: '#e879f9',  // hot pink (references)
+  project_doc:      '#ffd54a',  // gold (canonical docs)
+  plan_doc:         '#818cf8',  // indigo (plans)
+  session_summary:  '#22d3ee',  // sky (sessions)
+  // code layer -- cool spectrum
+  code_module:      '#06b6d4',  // deep cyan -- the file
+  code_function:    '#2dd4bf',  // teal -- the verb
+  code_method:      '#38bdf8',  // sky blue -- bound verb
+  code_class:       '#e879f9',  // magenta -- the noun
+  code_route:       '#fb923c',  // bright amber -- the doorway
+  code_component:   '#c084fc',  // violet -- the surface
+  code_endpoint:    '#4ade80',  // emerald -- the join
+  commit:           '#94a3b8',  // slate -- the past
 };
 
+// Edge palette: each relation gets a color that matches its
+// conceptual "weight" in the graph. Brighter = more semantic.
 const REL_COLORS = {
-  calls:                '#c084fc',
-  routes_to:            '#fbbf24',
-  at_endpoint:          '#86efac',
-  renders:              '#a78bfa',
-  imports:              '#4dd0e1',
-  defines:              '#8db6f0',
-  method_of:            '#8db6f0',
-  references_function:  '#fb7185',
-  motivated_by:         '#fb7185',
-  closed_by:            '#fb7185',
-  // v1 defaults
-  applies_to:           '#7ee7e0',
-  derived_from:         '#7ee7e0',
-  contradicts:          '#f0a47c',
-  supersedes:           '#9396f0',
-  mentions:             '#b6e88c',
-  co_occurs_with:       '#d790f0',
+  calls:                '#c084fc',  // purple -- the runtime flow
+  routes_to:            '#fb923c',  // amber -- request routing
+  at_endpoint:          '#4ade80',  // emerald -- cross-stack join
+  renders:              '#c084fc',  // violet -- UI composition
+  imports:              '#06b6d4',  // cyan -- module dep
+  defines:              '#5fa8ff',  // blue -- structural
+  method_of:            '#5fa8ff',  // blue -- structural
+  references_function:  '#f43f5e',  // crimson -- provenance touch
+  motivated_by:         '#f43f5e',
+  closed_by:            '#f43f5e',
+  // v1 memory relations
+  applies_to:           '#22d3ee',
+  derived_from:         '#22d3ee',
+  contradicts:          '#ff8a4c',
+  supersedes:           '#818cf8',
+  mentions:             '#c4f37a',
+  co_occurs_with:       '#e879f9',
 };
 
 function nebula() {
@@ -234,6 +267,7 @@ function nebula() {
     contextNodeId: null,
     stats: '',
     rawElements: [],
+    currentLayout: 'fcose',
 
     async init() {
       // Read query string for ?project= and ?node= so /code cards
@@ -300,71 +334,123 @@ function nebula() {
       this.cy = cytoscape({
         container: document.getElementById('cy-nebula'),
         elements: els,
-        minZoom: 0.15,
+        minZoom: 0.12,
         maxZoom: 4,
+        // Cheap-render hints for big graphs: cache the rendered scene
+        // as a texture during pan/zoom so we don't redraw every edge
+        // every frame. Render labels only at moderate zoom.
+        textureOnViewport: true,
+        hideEdgesOnViewport: true,
+        hideLabelsOnViewport: true,
+        pixelRatio: 1.0,
+        wheelSensitivity: 0.18,  // slow, silky scroll-zoom
+        // Motion blur smooths fast pans -- the trail decays over a
+        // few frames so the canvas never looks jagged during drag.
+        motionBlur: true,
+        motionBlurOpacity: 0.18,
+        // Damped pan: cytoscape eases to a stop when the user
+        // releases the mouse rather than locking instantly.
+        userPanningEnabled: true,
+        autounselectify: false,
         style: [
           // Nodes -----------------------------------------------------
+          // Nebula: ALL nodes are circles. Color, glow + size carry
+          // the type info; the user gets a calmer, more readable
+          // canvas than a zoo of shapes.
           { selector: 'node', style: {
+              shape: 'ellipse',
               label: 'data(label)',
               'background-color': (n) => TYPE_COLORS[n.data('type')] || '#7ee7e0',
-              'background-opacity': 0.94,
-              'border-width': 0,
-              'border-color': '#7ee7e0',
+              'background-opacity': 1.0,
+              // Inner glow / halo: ``underlay`` paints BEHIND the node
+              // so the color bleeds outward like a star -- the
+              // "nebula" feel the design asked for.
+              'underlay-color': (n) => TYPE_COLORS[n.data('type')] || '#7ee7e0',
+              'underlay-opacity': 0.32,
+              'underlay-padding': 8,
+              'underlay-shape': 'ellipse',
+              'border-width': 1,
+              'border-color': '#0a0d14',
               color: '#e6edf3',
-              'font-size': '10px',
+              'font-size': '11px',
+              'font-weight': 500,
               'font-family': 'ui-monospace, Menlo, Consolas, monospace',
               'text-valign': 'bottom',
-              'text-margin-y': 6,
+              'text-margin-y': 7,
               'text-outline-color': '#0a0d14',
-              'text-outline-width': 2,
-              'text-max-width': '120px',
-              'overlay-padding': 6,
-              width:  (n) => 14 + Math.min(34, (n.data('deg') || 0) * 1.4),
-              height: (n) => 14 + Math.min(34, (n.data('deg') || 0) * 1.4),
-              'transition-property': 'opacity, border-width, border-color',
-              'transition-duration': '180ms',
+              'text-outline-width': 3,
+              'text-max-width': '140px',
+              'text-opacity': 0,  // hidden by default; revealed in higher-zoom selector below
+              'overlay-padding': 8,
+              width:  (n) => 14 + Math.min(40, (n.data('deg') || 0) * 1.6),
+              height: (n) => 14 + Math.min(40, (n.data('deg') || 0) * 1.6),
+              'transition-property': 'opacity, border-width, underlay-opacity, underlay-padding',
+              'transition-duration': '220ms',
           }},
-          { selector: 'node[type="code_module"]', style: { shape: 'round-rectangle' }},
-          { selector: 'node[type="code_route"]',  style: { shape: 'diamond' }},
-          { selector: 'node[type="code_endpoint"]', style: { shape: 'hexagon', 'border-width': 2 }},
-          { selector: 'node[type="code_class"]',  style: { shape: 'round-rectangle' }},
-          { selector: 'node[type="commit"]',      style: { shape: 'tag' }},
+          // Labels appear when the user zooms in -- keeps the
+          // overview clean.
+          { selector: 'node:visible', style: { 'text-opacity': 1 }},
           { selector: 'node.hl', style: {
-              'border-width': 3,
+              'border-width': 2,
               'border-color': '#7ee7e0',
-              'overlay-color': '#7ee7e0',
-              'overlay-opacity': 0.18,
+              'underlay-color': '#7ee7e0',
+              'underlay-opacity': 0.6,
+              'underlay-padding': 14,
+              'z-index': 10,
           }},
-          { selector: 'node.dim',   style: { opacity: 0.15 }},
+          { selector: 'node.dim',   style: { opacity: 0.12, 'underlay-opacity': 0.04 }},
           { selector: 'node.hide',  style: { display: 'none' }},
 
-          // Edges -----------------------------------------------------
+          // Edges. Brighter base, gradient-ready, with arrow caps on
+          // directional relations.
           { selector: 'edge', style: {
-              width: (e) => 0.6 + Math.min(2.4, (e.data('confidence') || 1.0) * 1.8),
-              'line-color': (e) => REL_COLORS[e.data('relation')] || '#888',
+              width: (e) => 1.0 + Math.min(2.8, (e.data('confidence') || 1.0) * 2.0),
+              'line-color': (e) => REL_COLORS[e.data('relation')] || '#88a',
               'line-opacity': (e) => {
                 const c = e.data('confidence') ?? 1.0;
-                return 0.25 + c * 0.55;
+                return 0.45 + c * 0.4;
               },
-              'curve-style': 'bezier',
-              'target-arrow-color': (e) => REL_COLORS[e.data('relation')] || '#888',
+              'curve-style': 'straight',
+              'target-arrow-color': (e) => REL_COLORS[e.data('relation')] || '#88a',
               'target-arrow-shape': (e) =>
                 ['calls', 'routes_to', 'imports', 'method_of', 'references_function',
-                 'motivated_by', 'closed_by'].includes(e.data('relation')) ? 'triangle' : 'none',
-              'arrow-scale': 0.8,
-              'transition-property': 'opacity, width',
-              'transition-duration': '180ms',
+                 'motivated_by', 'closed_by'].includes(e.data('relation')) ? 'triangle-backcurve' : 'none',
+              'arrow-scale': 0.9,
+              'transition-property': 'opacity, width, line-color',
+              'transition-duration': '200ms',
           }},
           // Lower-confidence edges -> dashed / dotted.
           { selector: 'edge[confidence < 0.9]', style: { 'line-style': 'dashed' }},
-          { selector: 'edge[confidence < 0.7]', style: { 'line-style': 'dotted', 'line-opacity': 0.4 }},
-          { selector: 'edge.dim',  style: { 'line-opacity': 0.04 }},
-          { selector: 'edge.hl',   style: { 'line-opacity': 0.95, width: 2.2 }},
+          { selector: 'edge[confidence < 0.7]', style: { 'line-style': 'dotted', 'line-opacity': 0.45 }},
+          { selector: 'edge.dim',  style: { 'line-opacity': 0.03 }},
+          { selector: 'edge.hl',   style: {
+              'line-opacity': 1.0,
+              width: 2.6,
+              // marching-ants effect on highlighted edges so the eye
+              // follows the direction of the call / route / import.
+              'line-style': 'dashed',
+              'line-dash-pattern': [6, 4],
+              'line-dash-offset': 0,
+          }},
           { selector: 'edge.hide', style: { display: 'none' }},
         ],
+        // Initial layout: NO animation, NO randomization. fcose
+        // converges in ~50-100 quick iterations and renders once.
+        // Subsequent user-triggered relayouts animate via relayout().
         layout: {
-          name: 'fcose', animate: true, animationDuration: 400,
-          nodeRepulsion: 6500, idealEdgeLength: 90, padding: 40, randomize: true,
+          name: 'fcose',
+          animate: false,
+          randomize: true,
+          quality: 'default',
+          nodeRepulsion: 8000,
+          idealEdgeLength: 80,
+          edgeElasticity: 0.45,
+          gravity: 0.25,
+          padding: 50,
+          fit: true,
+          // tile: false -- let fcose spread components organically;
+          // packing them with tile=true produces a linear / diagonal
+          // arrangement on graphs with many small clusters.
         },
       });
 
@@ -373,7 +459,31 @@ function nebula() {
         if (evt.target === this.cy) {
           this.cy.elements().removeClass('hl dim');
           this.selected = null;
+          if (this._pulseTimer) {
+            clearInterval(this._pulseTimer);
+            this._pulseTimer = null;
+          }
         }
+      });
+
+      // Silky hover: lift the underlay padding briefly when the
+      // cursor enters a node so it "blooms" without committing the
+      // selection.
+      this.cy.on('mouseover', 'node', (evt) => {
+        const n = evt.target;
+        if (!n.hasClass('hl')) {
+          n.style('underlay-padding', 12);
+          n.style('underlay-opacity', 0.55);
+        }
+        document.body.style.cursor = 'pointer';
+      });
+      this.cy.on('mouseout', 'node', (evt) => {
+        const n = evt.target;
+        if (!n.hasClass('hl')) {
+          n.removeStyle('underlay-padding');
+          n.removeStyle('underlay-opacity');
+        }
+        document.body.style.cursor = '';
       });
 
       // Detect edges by ``source`` presence -- Cytoscape auto-assigns
@@ -494,6 +604,34 @@ function nebula() {
       node.connectedEdges().removeClass('dim').addClass('hl');
       node.neighborhood().nodes().removeClass('dim').addClass('hl');
 
+      // Silky pulse on the selected node: animate the underlay
+      // padding in a heartbeat rhythm. Cancel any prior loop so we
+      // never accumulate.
+      if (this._pulseTimer) {
+        clearInterval(this._pulseTimer);
+        this._pulseTimer = null;
+      }
+      let phase = 0;
+      this._pulseTimer = setInterval(() => {
+        if (!this.selected || this.selected.id !== d.id) {
+          clearInterval(this._pulseTimer);
+          this._pulseTimer = null;
+          return;
+        }
+        phase = (phase + 1) % 60;
+        // sine wave -> padding cycles 12..22 px every ~1.8s
+        const pad = 14 + 6 * Math.sin(phase / 60 * Math.PI * 2);
+        node.style('underlay-padding', pad);
+        // also nudge the marching-ants dash offset on connected edges
+        // so the call/route directionality is visually flowing.
+        node.connectedEdges('.hl').forEach(e => {
+          const prev = e.data('dashOffset') || 0;
+          const next = (prev + 1) % 10;
+          e.data('dashOffset', next);
+          e.style('line-dash-offset', -next);
+        });
+      }, 60);
+
       // Hydrate body from /v1/nodes/<id>.
       fetch('/v1/nodes/' + d.id).then(r => r.ok ? r.json() : null).then(full => {
         if (full) {
@@ -532,11 +670,50 @@ function nebula() {
 
     relayout(name) {
       if (!this.cy) return;
-      this.cy.layout({
-        name, animate: true, animationDuration: 400, padding: 40,
-        ...(name === 'fcose' ? { nodeRepulsion: 6500, idealEdgeLength: 90, randomize: false } : {}),
-        ...(name === 'concentric' ? { concentric: (n) => n.degree(), levelWidth: () => 1 } : {}),
-      }).run();
+      this.currentLayout = name;
+      // Operate on visible elements only -- a layout run on hidden
+      // nodes wastes work and produces a sparse result when most of
+      // the graph is filtered out.
+      const visible = this.cy.elements().not('.hide');
+      const baseOpts = { animate: true, animationDuration: 400, padding: 40 };
+      const perLayout = {
+        fcose: {
+          nodeRepulsion: 6500,
+          idealEdgeLength: 90,
+          randomize: false,
+        },
+        concentric: {
+          // Higher-degree nodes go in the inner ring -- "rings" puts
+          // hubs at the center, leaves at the edge.
+          concentric: (n) => n.degree(),
+          levelWidth: () => 1,
+          minNodeSpacing: 28,
+        },
+        breadthfirst: {
+          directed: true,
+          spacingFactor: 1.4,
+          // Use the most-connected node as the root so the tree
+          // grows outward from the hub.
+          roots: (() => {
+            let best = null, max = -1;
+            visible.nodes().forEach((n) => {
+              const d = n.degree();
+              if (d > max) {
+                max = d;
+                best = n;
+              }
+            });
+            return best ? best.id() : undefined;
+          })(),
+        },
+        grid: {
+          condense: true,
+          avoidOverlap: true,
+          avoidOverlapPadding: 16,
+        },
+      };
+      const opts = { name, ...baseOpts, ...(perLayout[name] || {}) };
+      visible.layout(opts).run();
     },
 
     copyCitation() {
