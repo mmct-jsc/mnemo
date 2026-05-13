@@ -872,7 +872,14 @@ function nebula() {
       // then back to force converges to a different layout because
       // fcose with randomize: false relaxes from the current
       // (non-force) positions.
-      if (name === 'force' && this._forceSnapshot) {
+      //
+      // The layout name passed in here is the cytoscape plugin
+      // name (``fcose``) -- NOT the user-facing button label
+      // (``force``). Earlier versions checked ``name === 'force'``,
+      // which never matched, so the snapshot branch was dead code
+      // and every "force" click after a layout switch produced a
+      // fresh re-relax from the current positions.
+      if (name === 'fcose' && this._forceSnapshot) {
         const snap = this._forceSnapshot;
         this.cy.batch(() => {
           visible.nodes().forEach((n) => {
