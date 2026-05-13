@@ -2,8 +2,12 @@
 {% block title %} - {{ node.name }}{% endblock %}
 {% block content %}
 <section class="node-edit"
-         x-data='nodePage({ raw: {{ node.body | tojson }}, isBase: {{ node.base | tojson }} })'
-         x-init="init()">
+         x-data='nodePage({
+           raw: {{ node.body | tojson }},
+           isBase: {{ node.base | tojson }},
+           nodeType: {{ node.type | tojson }},
+           sourcePath: {{ node.source_path | tojson }}
+         })'>
 
   <div class="back-row">
     <a class="link-button" href="/nodes-page">&larr; back to nodes</a>
@@ -96,9 +100,20 @@
 
         <textarea x-ref="body" x-show="tab === 'edit'" rows="20"
                   @input="raw = $event.target.value">{{ node.body }}</textarea>
-        <div x-show="tab === 'preview'" x-cloak class="node-md-preview md-body" x-ref="mdPreview">
+        <!-- ``.node-md-preview`` keeps the markdown typography for memory
+             nodes; ``.is-code`` swaps the chrome for a code-shaped block
+             when ``nodeType`` starts with ``code_`` (added by the Alpine
+             component after rendering). The body itself is filled by
+             window.mnemoRenderBody which picks Prism or marked. -->
+        <div x-show="tab === 'preview'" x-cloak
+             class="node-md-preview md-body"
+             :class="{ 'is-code': lastRenderedAs === 'code' }"
+             x-ref="mdPreview">
           <p class="hint" style="margin: 0;">Loading preview...</p>
         </div>
+        <p class="hint preview-mode-hint" x-show="tab === 'preview'" x-cloak>
+          rendered as <code x-text="lastRenderedAs || '…'"></code>
+        </p>
 
         <div class="actions">
           <button type="submit" class="primary">Save</button>
@@ -172,16 +187,21 @@
 </section>
 
 <script>
-function nodePage({ raw, isBase }) {
+function nodePage({ raw, isBase, nodeType, sourcePath }) {
   return {
     tab: 'edit',
     raw,
+    nodeType: nodeType || '',
+    sourcePath: sourcePath || '',
     isBase: !!isBase,
     saved: false,
     error: null,
+    // Set by renderPreview() so the markup can swap classes / show
+    // a "rendered as ..." hint without re-running the type check.
+    lastRenderedAs: null,
     init() {
-      // Pre-render so opening Preview is instant. If marked hasn't
-      // hydrated yet, retry on a short timer.
+      // Pre-render so opening Preview is instant. If marked / Prism
+      // haven't hydrated yet, the helper retries internally.
       this.$nextTick(() => this.renderPreview());
     },
     async toggleBase() {
@@ -211,14 +231,29 @@ function nodePage({ raw, isBase }) {
       const el = this.$refs.mdPreview;
       if (!el) return;
       const text = (this.$refs.body && this.$refs.body.value) || this.raw || '';
-      // marked + DOMPurify load via <script defer>. If they're not
-      // ready yet, retry in 80ms (typically only one retry needed).
-      if (!window.mnemoMd || !window.marked || !window.DOMPurify) {
+      // mnemoRenderBody handles three paths:
+      //   - code_* node with a recognized source-path extension ->
+      //     Prism-highlighted <pre><code>
+      //   - "commit" node -> escaped plain <pre>
+      //   - everything else -> markdown via marked + DOMPurify
+      // The marked / Prism scripts are deferred; if they haven't
+      // hydrated yet, mnemoRenderBody itself works (the markdown
+      // branch falls back to escaped <pre>, the code branch uses
+      // raw escaped HTML until Prism is ready) but the highlight
+      // won't fire. Retry briefly so the user sees colors.
+      if (!window.mnemoRenderBody) {
         setTimeout(() => this.renderPreview(), 80);
         return;
       }
-      const html = window.mnemoMd(text);
-      el.innerHTML = html || '<p class="hint" style="margin:0;">Body is empty.</p>';
+      this.lastRenderedAs = window.mnemoRenderBody(el, text, {
+        type: this.nodeType,
+        sourcePath: this.sourcePath,
+      });
+      // If we picked the code path but Prism isn't loaded yet,
+      // re-run once it is so the syntax colors appear.
+      if (this.lastRenderedAs === 'code' && !window.Prism) {
+        setTimeout(() => this.renderPreview(), 100);
+      }
     },
     copyCite() {
       const cite = '[mnemo:{{ node.id }}]';

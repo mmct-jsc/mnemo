@@ -11,6 +11,26 @@
   <!-- Markdown renderer for body previews (node detail + graph side panel). -->
   <script src="https://cdn.jsdelivr.net/npm/marked@11.1.1/marked.min.js" defer></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.8/dist/purify.min.js" defer></script>
+  <!-- Prism: site-wide syntax highlighting. Loaded here (not per page)
+       so code-typed nodes get the same Tomorrow-Night palette on the
+       Nebula side-panel, the node detail Preview tab, and the search
+       results popover. The autoloader plugin lazy-fetches per-language
+       grammars so we don't ship every grammar upfront. -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js" defer></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+  <script>
+    // Configure Prism's autoloader as soon as it's parsed; the script
+    // above is ``defer``-loaded so this poll waits for it.
+    (function tryConfigPrism() {
+      if (window.Prism && window.Prism.plugins && window.Prism.plugins.autoloader) {
+        window.Prism.plugins.autoloader.languages_path =
+          'https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/';
+        return;
+      }
+      setTimeout(tryConfigPrism, 50);
+    })();
+  </script>
   <script defer>
     // Toast bus + localStorage-backed notification history.
     const TOAST_HISTORY_KEY = 'mnemo.toast.history';
@@ -32,6 +52,95 @@
       const esc = String(text)
         .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
       return '<pre class="md-fallback">' + esc + '</pre>';
+    };
+
+    // ---- Shared body type / language helpers -----------------------
+    // The node taxonomy splits cleanly into "code-typed nodes" (every
+    // type that starts with ``code_``) and everything else (memory_*,
+    // project_doc, plan_doc, session_summary, commit, ...). The two
+    // groups render very differently: code wants a Prism-highlighted
+    // <pre> with a monospaced palette; everything else wants the
+    // GitHub-flavored markdown pipeline already wired in mnemoMd.
+    window.mnemoIsCodeType = (type) => {
+      return typeof type === 'string' && type.startsWith('code_');
+    };
+
+    // Map a source_path file extension to a Prism language hint.
+    // Returns "none" when no recognized extension is present; Prism
+    // leaves that as plain text rather than erroring.
+    window.mnemoLanguageOf = (sourcePath) => {
+      if (!sourcePath) return 'none';
+      // Strip the ":start-end" line-range suffix the code parser stamps
+      // onto code_function / code_class source_paths.
+      const clean = String(sourcePath).replace(/:\d+-\d+(#.+)?$/, '').toLowerCase();
+      const m = clean.match(/\.([a-z0-9]+)$/);
+      if (!m) return 'none';
+      return ({
+        py: 'python', pyi: 'python',
+        js: 'javascript', mjs: 'javascript', cjs: 'javascript', jsx: 'jsx',
+        ts: 'typescript', tsx: 'tsx',
+        go: 'go',
+        rs: 'rust',
+        java: 'java', kt: 'kotlin',
+        rb: 'ruby', php: 'php',
+        cs: 'csharp',
+        swift: 'swift',
+        c: 'c', h: 'c', cpp: 'cpp', hpp: 'cpp', cc: 'cpp',
+        json: 'json', yaml: 'yaml', yml: 'yaml', toml: 'toml',
+        md: 'markdown', sh: 'bash', bash: 'bash',
+        html: 'markup', xml: 'markup',
+        css: 'css', scss: 'scss',
+        sql: 'sql',
+        gd: 'gdscript',
+      })[m[1]] || 'none';
+    };
+
+    // Renders a node body into ``targetEl`` based on its ``type`` and
+    // ``sourcePath``. Three paths:
+    //   1. type starts with "code_" -> Prism-highlighted <pre><code>
+    //   2. source_path ends in .md OR no type info -> marked markdown
+    //   3. type === "commit" -> escaped plain <pre>
+    // Returns the rendering path taken ("code" / "markdown" / "plain").
+    window.mnemoRenderBody = (targetEl, body, opts) => {
+      if (!targetEl) return null;
+      const text = body == null ? '' : String(body);
+      const o = opts || {};
+      const isCode = window.mnemoIsCodeType(o.type);
+      const ext = window.mnemoLanguageOf(o.sourcePath);
+      // Markdown extension OR a non-code memory type both go through
+      // marked. A code_* node with .md source_path (e.g. README) stays
+      // on the markdown path -- the type itself isn't code-shaped.
+      const wantsCode = isCode && ext !== 'markdown' && ext !== 'none';
+      const wantsPlain = o.type === 'commit';
+
+      if (wantsCode) {
+        const lang = ext;
+        const escaped = text
+          .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        targetEl.innerHTML =
+          '<pre class="mnemo-code language-' + lang + '">' +
+          '<code class="language-' + lang + '">' + escaped + '</code></pre>';
+        if (window.Prism) {
+          const codeEl = targetEl.querySelector('code');
+          if (codeEl) {
+            requestAnimationFrame(() => window.Prism.highlightElement(codeEl));
+          }
+        }
+        return 'code';
+      }
+
+      if (wantsPlain) {
+        const escaped = text
+          .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        targetEl.innerHTML = '<pre class="mnemo-plain">' + escaped + '</pre>';
+        return 'plain';
+      }
+
+      // Markdown path (default). Falls back to escaped <pre> via mnemoMd
+      // if marked / DOMPurify haven't loaded yet.
+      targetEl.innerHTML = window.mnemoMd(text)
+        || '<p class="hint" style="margin:0;">Body is empty.</p>';
+      return 'markdown';
     };
 
     // ---- Shared timestamp formatter --------------------------------
