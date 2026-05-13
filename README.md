@@ -127,6 +127,7 @@ Restart Claude Code after install; the next session sees mnemo's hooks fire auto
 - [docs/plans/2026-05-09-mnemo-design.md](docs/plans/2026-05-09-mnemo-design.md) — full v1 design.
 - [docs/plans/2026-05-11-mnemo-v2.0-design.md](docs/plans/2026-05-11-mnemo-v2.0-design.md) — full v2.0 (Code Intelligence) design.
 - [docs/workflows/index.md](docs/workflows/index.md) — guided summaries of the workflow skills.
+- [docs/examples/sample-queries.md](docs/examples/sample-queries.md) — real queries against a real `~/.claude/` memory, with the actual scored hits.
 - [CHANGELOG.md](CHANGELOG.md) — version-by-version diff.
 
 ## Contributing
