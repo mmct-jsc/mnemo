@@ -3207,23 +3207,32 @@ dl.meta dd { margin: 0; color: var(--fg); }
   background: rgba(255, 255, 255, 0.05);
 }
 
-/* Hide EVERY browser's default details-disclosure marker. Chrome
-   128+ moved from ::-webkit-details-marker to the unprefixed
-   ::marker pseudo-element; without all three rules a native arrow
-   shows alongside our custom chevron. */
-.vscode-tree details > summary {
-  list-style: none;
-  display: list-item;
-  display: revert-layer;
+/* Hide EVERY browser's default details-disclosure marker.
+   The spec only allows ``color``, ``content``, ``font-*``,
+   ``white-space``, and ``text-*`` properties on ``::marker`` --
+   ``display: none`` is ignored. We use the allowed levers
+   (content + font-size + width + color) to make the marker
+   invisible regardless of which UA rendered it. */
+.vscode-tree summary,
+.vscode-tree details summary {
+  list-style: none !important;
+  list-style-type: none !important;
 }
 
+/* Safari + old Chrome legacy marker */
+.vscode-tree summary::-webkit-details-marker,
 .vscode-tree details > summary::-webkit-details-marker {
-  display: none;
+  display: none !important;
 }
 
+/* Modern Chrome 128+ + Firefox unprefixed marker. ``display: none``
+   is rejected here; ``content: ""`` + ``font-size: 0`` ARE allowed
+   and combined make the marker take up zero space. */
+.vscode-tree summary::marker,
 .vscode-tree details > summary::marker {
-  content: "";
-  display: none;
+  content: "" !important;
+  font-size: 0 !important;
+  color: transparent !important;
 }
 
 .vscode-tree details summary.vscode-dir {
