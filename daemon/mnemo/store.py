@@ -11,6 +11,7 @@ database is safe.
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import struct
 import threading
@@ -36,6 +37,50 @@ def _deserialize_float32(blob: bytes) -> list[float]:
     return list(struct.unpack(f"<{n}f", blob))
 
 
+_TRUNCATION_MARKER_RE = re.compile(r"\n\.\.\. \(\d+ more lines\)\s*$")
+
+
+def _strip_truncation_marker(body: str | None) -> str:
+    """Strip the legacy ``\\n... (N more lines)`` suffix from a code node
+    body.
+
+    v2.0 phase 4 wrote this marker into the stored body so the UI
+    could show "this is truncated". v2.1 polish: the marker leaks
+    into embeddings, query hits, and (when chat lands in v3) into
+    user-visible LLM output. Keeping it only as a UI affordance
+    via separate metadata leaves the body as clean source code.
+
+    This stripper runs on every node read so:
+    - Old data with markers (pre-v2.1) gets cleaned at read time --
+      no schema migration needed; a reindex will rewrite cleanly.
+    - New ingest no longer adds the marker
+      (see ``parsers.code._truncate_lines``).
+    - Embeddings already computed include the marker, but a
+      reindex re-embeds clean text.
+    """
+    if not body:
+        return body or ""
+    return _TRUNCATION_MARKER_RE.sub("", body)
+
+
+def _edge_confidence(row: object) -> float:
+    """Read the ``confidence`` column from an edges row, defaulting to 1.0.
+
+    v2.0 phase 1 added the column via ``_ensure_columns`` so pre-v2.0
+    stores back-fill on first open. ``sqlite3.Row`` doesn't accept ``.get``,
+    so guard membership before indexing. Defensive against any future
+    SELECT that doesn't include the column.
+    """
+    try:
+        keys = row.keys()  # type: ignore[attr-defined]
+    except AttributeError:
+        return 1.0
+    if "confidence" not in keys:
+        return 1.0
+    val = row["confidence"]  # type: ignore[index]
+    return 1.0 if val is None else float(val)
+
+
 SCHEMA_VERSION = 1
 EMBEDDING_DIM = 384  # all-MiniLM-L6-v2 dim. Bump + reindex to switch models.
 
@@ -52,6 +97,32 @@ NODE_TYPES = frozenset(
         "project_doc",
         "plan_doc",
         "session_summary",
+        # v2.0 phase 1: decision provenance. One node per git commit
+        # ingested from a code_repo source (phase 9 wires the parser).
+        "commit",
+        # v2.0 phase 4: Tier 1 universal code graph. One node per
+        # source file (``code_module``) plus one per top-level
+        # declaration (``code_function`` / ``code_class``) and one per
+        # class method (``code_method``). Tier 1 is language-structure
+        # only -- call resolution lands in phase 5 (Tier 2), framework
+        # extractors in phases 6-8 (Tier 3).
+        "code_module",
+        "code_function",
+        "code_class",
+        "code_method",
+        # v2.0 phase 6: Tier 3 backend framework routes. One ``code_route``
+        # per detected route declaration (FastAPI ``@router.get(...)``,
+        # Flask ``@app.route(...)``, Express ``app.get(path, handler)``,
+        # ...). The ``routes_to`` edge wires each route to its handler
+        # function.
+        "code_route",
+        # v2.0 phase 7: Tier 3 frontend + cross-stack. ``code_component``
+        # is a React / Vue / Svelte component; ``code_endpoint`` is the
+        # cross-stack URI anchor that both backend routes and frontend
+        # fetches converge on, so a single graph traversal can walk
+        # Component -> Endpoint <- Route -> Handler.
+        "code_component",
+        "code_endpoint",
     }
 )
 
@@ -61,6 +132,12 @@ SOURCE_KINDS = frozenset(
         "claude_md",
         "plan_dir",
         "transcripts",
+        # v2.0 phase 1: new source kinds. ``code_repo`` is the
+        # tree-sitter-indexed shape (phase 4 wires the parser);
+        # ``docs_dir`` is a markdown harvest without the frontmatter
+        # requirement that memory_dir enforces.
+        "code_repo",
+        "docs_dir",
     }
 )
 
@@ -72,6 +149,41 @@ EDGE_RELATIONS = frozenset(
         "supersedes",
         "mentions",
         "co_occurs_with",
+        # v2.0 phase 1: decision provenance family. Producers land in
+        # phase 9 (commit auto-linker). Carrying them in the schema now
+        # so the column / index plumbing is in place before parsers run.
+        "references_function",  # commit -> code_function it touched
+        "motivated_by",  # commit -> memory_feedback / plan_doc / memory_project
+        "closed_by",  # memory_feedback / plan_doc -> commit that resolved it
+        # v2.0 phase 4: Tier 1 structural edges. ``defines`` links a
+        # ``code_module`` to its top-level declarations; ``method_of``
+        # links a ``code_method`` to its containing ``code_class``;
+        # ``imports`` links a module to another (best-effort cross-file
+        # resolution -- unresolved targets simply don't get an edge).
+        "defines",
+        "method_of",
+        "imports",
+        # v2.0 phase 5: Tier 2 semantic call graph. ``calls`` links a
+        # caller function/method to a callee. Stack-Graphs-style scope
+        # resolution emits edges with high confidence (0.95) for
+        # within-file resolution and lower (0.8) for cross-file via
+        # imports. Unresolved call sites do NOT emit an edge -- the
+        # graph stays clean and the LLM can lexical-match if it cares.
+        "calls",
+        # v2.0 phase 6: Tier 3 backend framework wiring. ``routes_to``
+        # links a ``code_route`` node to its handler function so
+        # cross-stack sitemap queries can walk Component -> Route ->
+        # Handler -> Service in phase 7+.
+        "routes_to",
+        # v2.0 phase 7: ``renders`` links a parent component to a child
+        # component (React composition). ``at_endpoint`` is the
+        # cross-stack glue: both a ``code_route`` AND a
+        # ``code_component`` point at the same ``code_endpoint`` URI
+        # node when their HTTP-method + path match, which is what
+        # creates the Component <-> Route join via a single endpoint
+        # traversal.
+        "renders",
+        "at_endpoint",
     }
 )
 
@@ -163,6 +275,13 @@ class Edge:
     weight: float
     source: str
     created_at: int
+    # v2.0 phase 1: per-edge uncertainty. Defaults to 1.0 so all v1.x
+    # edges and any hand-built Edge() in tests keep their old semantics
+    # without a value override. Later phases populate this for inferred
+    # edges: Tier 2 unresolved ``calls`` = 0.5, Tier 3 framework matches
+    # = 0.9, auto-inferred ``motivated_by`` / ``closed_by`` = 0.6 (bumped
+    # to 0.9 when the commit body cites the doc explicitly).
+    confidence: float = 1.0
 
 
 @dataclass
@@ -294,6 +413,9 @@ CREATE TABLE IF NOT EXISTS edges (
   weight     REAL NOT NULL DEFAULT 1.0,
   created_at INTEGER NOT NULL,
   source     TEXT NOT NULL,
+  -- v2.0 phase 1: per-edge uncertainty. Pre-v2.0 rows back-fill to 1.0
+  -- via the ADD COLUMN ... DEFAULT path in _ensure_columns.
+  confidence REAL NOT NULL DEFAULT 1.0,
   PRIMARY KEY (src_id, dst_id, relation),
   FOREIGN KEY (src_id) REFERENCES nodes(id) ON DELETE CASCADE,
   FOREIGN KEY (dst_id) REFERENCES nodes(id) ON DELETE CASCADE
@@ -436,6 +558,16 @@ class Store:
                 "score_components": "TEXT",
             },
         )
+        # v2.0 phase 1: per-edge uncertainty. Existing v1.x edges back-fill
+        # to 1.0 (the column DEFAULT) so retrieval scoring stays
+        # bit-for-bit identical until later phases start emitting <1.0
+        # values for Tier 2/3 inferred edges and the provenance auto-linker.
+        self._ensure_columns(
+            "edges",
+            {
+                "confidence": "REAL NOT NULL DEFAULT 1.0",
+            },
+        )
         row = self.conn.execute("SELECT version FROM schema_version").fetchone()
         if row is None:
             self.conn.execute("INSERT INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,))
@@ -560,6 +692,7 @@ class Store:
                 weight=r["weight"],
                 source=r["source"],
                 created_at=r["created_at"],
+                confidence=_edge_confidence(r),
             )
             for r in rows
         ]
@@ -652,7 +785,7 @@ class Store:
             type=row["type"],
             name=row["name"],
             description=row["description"],
-            body=row["body"],
+            body=_strip_truncation_marker(row["body"]),
             source_path=row["source_path"],
             source_kind=row["source_kind"],
             project_key=row["project_key"],
@@ -673,6 +806,7 @@ class Store:
         *,
         weight: float = 1.0,
         source: str = "inferred",
+        confidence: float = 1.0,
     ) -> None:
         if relation not in EDGE_RELATIONS:
             raise ValueError(f"unknown edge relation: {relation!r}")
@@ -681,13 +815,14 @@ class Store:
         with self._lock:
             self.conn.execute(
                 """
-                INSERT INTO edges (src_id, dst_id, relation, weight, created_at, source)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO edges (src_id, dst_id, relation, weight, created_at, source, confidence)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(src_id, dst_id, relation) DO UPDATE SET
                   weight = excluded.weight,
-                  source = excluded.source
+                  source = excluded.source,
+                  confidence = excluded.confidence
                 """,
-                (src_id, dst_id, relation, weight, int(time.time()), source),
+                (src_id, dst_id, relation, weight, int(time.time()), source, confidence),
             )
             self.conn.commit()
 
@@ -722,6 +857,7 @@ class Store:
                 weight=r["weight"],
                 source=r["source"],
                 created_at=r["created_at"],
+                confidence=_edge_confidence(r),
             )
             for r in rows
         ]

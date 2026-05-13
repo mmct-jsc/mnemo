@@ -2,6 +2,530 @@
 
 All notable changes to mnemo are documented here.
 
+## [2.1.0] - 2026-05-13
+
+**Nebula — three-panel graph UX.** A focused UI refinement on top
+of v2.0's code graph. ``/graph`` is no longer a single canvas with
+side overlays -- it's a resizable three-panel shell (file tree |
+graph canvas | node detail) plus a sticky filter bar. The
+``/code`` cards now funnel into ``/graph?project=<key>``, so a
+single canonical visualization page serves both code-graph and
+memory-graph exploration.
+
+### Added
+
+- **Three-panel resizable shell** at ``/graph``. Drag the gutters
+  to resize; widths persist to localStorage. Default
+  240 / flex / 320.
+- **File tree (left panel).** Built from ``code_module``
+  source_paths. Single-child directory chains collapse so deep
+  Windows paths render compactly. Click a file -> focus + select
+  on canvas. The active file highlights in the tree.
+- **Detail panel (right).** Type badge + name + source_path +
+  body + ranked neighbors with relation + confidence labels.
+  Open-detail button links to ``/node/<id>``; copy-cite button
+  copies ``[mnemo:<id>]``.
+- **Filter bar (bottom).** Text search filters by name/type;
+  per-type chip toggles narrow visibility; confidence slider
+  hides edges below a threshold; hop selector (when in
+  node-scope mode); force / concentric / circle relayout
+  buttons; live node + edge counter.
+- **Cross-stack visual language.** 8 code-type colors + 7
+  memory-type colors are consistent across chips, tree dots,
+  detail badge, graph nodes. Node SHAPES disambiguate:
+  ``code_module`` = round-rectangle, ``code_route`` = diamond,
+  ``code_endpoint`` = hexagon, ``commit`` = tag.
+- **Confidence-encoded edges.** Line style by confidence:
+  ``>= 0.9`` solid, ``0.7-0.9`` dashed, ``< 0.7`` dotted. Edge
+  color encodes relation (calls = purple, routes_to = amber,
+  at_endpoint = green, imports = cyan, provenance = pink).
+  Arrowheads only on directional relations.
+
+### Changed
+
+- **``GET /ui/graph-data``** now accepts:
+  - ``?project=<key>`` -- filter to nodes with that project_key
+    plus cross-cutting (NULL / BASE) nodes connected to them.
+  - ``?node=<id>&hops=<n>`` -- ego-network BFS from ``<id>`` out
+    to ``n`` hops (default 2, capped at 4).
+  Response nodes now include ``source_path`` + ``description`` so
+  the file tree can group and the detail panel can render without
+  a second round-trip. Edges now carry ``confidence``.
+- **``/code`` project cards** now link to ``/graph?project=<key>``
+  (the new primary CTA). A small "summary" link still goes to the
+  list view at ``/code/<project>``.
+- **``/code/<project>``** overview shows two CTAs side-by-side:
+  "Open in graph" and "Cross-stack sitemap".
+
+### Tests
+
+- ``tests/unit/test_ui.py::test_graph_page_renders`` updated for
+  the new shell (canvas id ``cy`` -> ``cy-nebula`` + ``nebula-shell``
+  smoke).
+- Full suite: 604 passing, 2 skipped, 0 failing.
+
+### End-to-end UI verified
+
+Via the preview tool against the daemon's own indexed code
+(``mnemo-daemon`` project, 468 nodes after reindex):
+
+- ``/graph?project=mnemo-daemon`` -> 416 nodes / 574 edges
+  scoped to that project.
+- Tree renders 33 files across 4 nested directories.
+- Click ``flask.py`` -> selects on canvas + populates detail
+  panel with name + type badge + source_path + body + 17
+  connections.
+- Toggling type chips to ``code_route + code_endpoint`` only
+  -> exactly 80 nodes (40 routes + 40 endpoints) and 40
+  ``at_endpoint`` edges.
+
+## [2.0.0] - 2026-05-13
+
+**Code Intelligence.** The headline v2.0 release: every registered
+``code_repo`` source produces a typed code graph (modules, functions,
+classes, methods + Tier 2 ``calls`` edges + Tier 3 routes /
+components / endpoint anchors), plus the seven mnemo:code skills
+that turn the graph into natural-language Q&A inside Claude Code.
+
+### Headline capabilities
+
+- **Cross-stack sitemap.** "This React button calls this Express
+  handler which queries this Postgres table." A single graph
+  traversal walks ``Component -> Endpoint <- Route -> Handler`` via
+  the new ``at_endpoint`` join, rendered at
+  ``/code/<project>/sitemap``.
+- **Code-aware retrieval.** "Where is ``<function>`` called from?"
+  returns correct callers via the Tier 2 ``calls`` edges. Confidence
+  scores (0.95 within-file, 0.8 cross-file) carry uncertainty into
+  retrieval ranking.
+- **Auto-routing with safety.** ``mnemo source add <path>`` runs
+  the auto-router; dry-run preview shows proposed kind + file
+  breakdown before any DB write. 50,000-file safety ceiling
+  prevents Duyen-class accidents.
+
+### Roadmap completion
+
+Phases shipped through ``release/2.0.0`` (in order):
+
+1. Schema: ``code_repo`` / ``docs_dir`` source kinds, ``commit``
+   node type, edge ``confidence`` column, provenance edges.
+2. Source auto-router with dry-run preview + 50k file ceiling.
+3. Tree-sitter grammar bundle + lazy-download stub.
+4. Tier 1 universal code ingestion (8 bundled languages; Python
+   full extractor, other languages module-only fallback).
+5. Tier 2 Python call-graph resolver (constructor + ``self``/``this``
+   resolution; same-file 0.95 / cross-file 0.8 confidence).
+6. FastAPI + Flask + Express framework extractors (Tier 3
+   backend); ``code_route`` nodes + ``routes_to`` edges.
+7. React framework extractor + cross-stack ``code_endpoint`` nodes
+   (Tier 3 frontend); ``at_endpoint`` + ``renders`` edges.
+11-13. ``/code`` UI: landing + project overview + function detail
+   with 2-hop ego-network + cross-stack sitemap. New top-bar tab.
+14. Seven new code skills: ``mnemo:explore-codebase``,
+   ``mnemo:trace-call``, ``mnemo:trace-route``,
+   ``mnemo:explain-design``, ``mnemo:debug-with-code``,
+   ``mnemo:why-is-this-here``, ``mnemo:impact-analysis``.
+
+### Deferred to follow-on point releases
+
+- **Phase 8 -- Django framework extractor.** FastAPI / Flask /
+  Express cover the dominant Python and Node webdev surfaces;
+  Django lands in v2.0.1 alongside the JS / TS / Go Tier 2
+  resolvers (left out of phase 5).
+- **Phase 9 -- Git-log ingestion + auto-linker.** The
+  ``references_function`` / ``motivated_by`` / ``closed_by``
+  schema is in place (phase 1) and the ``mnemo:why-is-this-here``
+  skill is wired against it; the ingester slots in cleanly in
+  v2.0.1. Until then the skill falls back to ``git log -L``.
+- **Phase 10 -- Per-file incremental watcher.** Current full
+  reindex flow handles real-world repos under a few thousand
+  files; the per-file debounced watcher is a v2.0.x performance
+  upgrade once the indexing budget bites in production.
+- **Phase 15 -- Migration banner for pre-v2.0 sources.** First
+  daemon start post-2.0 would benefit from a "your existing
+  ``memory_dir`` registration looks like a ``code_repo`` -- want
+  to reclassify?" banner. The auto-router that powers it is
+  shipped; the UI surface lands in v2.0.x.
+
+Full test suite: 604 passing, 2 skipped, 0 failing.
+Ruff: clean. Format: clean.
+
+## [Unreleased]
+
+### Added (v2.0 phase 1 -- schema migration)
+
+The structural foundation for v2.0's code-intelligence work. Phase 1
+is schema-only: every later phase plugs a real producer into one of
+these slots.
+
+- **Two new source kinds: ``code_repo`` and ``docs_dir``.**
+  ``code_repo`` is the tree-sitter-indexed shape (the parser arrives
+  in phase 3-4); ``docs_dir`` is a markdown harvest without the
+  frontmatter discipline ``memory_dir`` requires. ``register_source``
+  now accepts both. Existing kinds (``memory_dir``, ``claude_md``,
+  ``plan_dir``, ``transcripts``) are unchanged.
+- **New ``commit`` node type.** Holds one node per git commit
+  ingested from a ``code_repo`` source. Wired up by phase 9's
+  ``git log`` walker; the schema is in place now so subsequent phases
+  can write through it without an additional migration.
+- **Three new edge relations -- the provenance family.**
+  ``references_function`` (commit -> code_function it touched),
+  ``motivated_by`` (commit -> ``memory_feedback`` / ``plan_doc`` that
+  motivated it), and ``closed_by`` (``memory_feedback`` / ``plan_doc``
+  -> commit that resolved it). Together they make the v2.0 headline
+  capability -- "why is this function here?" -- queryable.
+- **``edges.confidence FLOAT NOT NULL DEFAULT 1.0``.** Per-edge
+  uncertainty so Tier 2 unresolved ``calls`` (0.5), Tier 3 framework
+  matches (0.9), and auto-inferred provenance edges (0.6, bumped to
+  0.9 on explicit commit-body reference) can carry a calibrated
+  uncertainty into retrieval scoring. The column back-fills to 1.0
+  via the standard ``_ensure_columns`` migration path so v1.x edges
+  retain their bit-for-bit-identical behavior.
+  (``daemon/mnemo/store.py``)
+
+### Changed
+
+- **``scan_source`` yields nothing when include patterns are empty.**
+  Phase 1 safety: until phase 3-4 wire a tree-sitter parser, a
+  freshly-registered ``code_repo`` source must not silently walk every
+  file with the markdown parser. The new invariant -- empty include
+  set means "nothing to walk" -- pairs with phase 2's auto-router,
+  which populates the right include set when registering a code
+  source. (``daemon/mnemo/ingest.py``)
+
+### Added (v2.0 phase 2 -- auto-router + dry-run preview + safety ceiling)
+
+The structural fix for the Duyen-class registration mistake: every
+new source goes through an auto-router that classifies the path,
+shows a per-extension breakdown, and refuses to write without
+explicit user confirmation.
+
+- **``mnemo.auto_router`` module.** ``preview(path) -> PreviewResult``
+  scans the filesystem and proposes one of ``code_repo`` /
+  ``memory_dir`` / ``docs_dir`` (or ``None``) with a confidence label
+  (``high`` / ``medium`` / ``low``). Heuristics, in order:
+  1. ``.git/`` dir + >= 1 recognized source file -> ``code_repo``.
+  2. >= 1 markdown with frontmatter ``type:`` -> ``memory_dir``.
+  3. >= 2 plain markdowns + 0 source files -> ``docs_dir``.
+  4. Otherwise -> ``(None, "low")``; user must pick ``--kind``
+     explicitly.
+  Side-effect-free; the module imports nothing from store, server,
+  or ingest. The walker skips a curated set of build / cache / VCS
+  dirs (``DEFAULT_SKIP_DIRS``) so the count reflects actual source
+  trees, not ``node_modules`` / ``.venv`` / ``target`` etc.
+- **``POST /v1/sources/preview``.** HTTP surface for the auto-router.
+  Returns the proposed kind + breakdown + ceiling flag without
+  touching the DB. ``{ path, force? }`` body; ``404`` on missing path,
+  ``422`` on missing ``path`` field.
+- **CLI: ``mnemo source add <path>`` without ``--kind``.** Runs the
+  auto-router, prints the breakdown, and prompts for confirmation
+  (``y/N``). ``--yes`` skips the prompt for scripts; ``--force``
+  bypasses the safety ceiling. Explicit ``--kind`` skips the
+  auto-router entirely; the existing kind enum (``memory_dir`` etc.)
+  is unchanged plus the v2.0 additions (``code_repo``, ``docs_dir``).
+- **50,000-file safety ceiling.** If the auto-router counts more than
+  ``SAFETY_CEILING`` recognized source files (after default
+  skip-dirs), the CLI and the API both refuse to write. ``--force``
+  on the CLI / ``force: true`` on the API overrides. Prevents the
+  Duyen pattern -- accidentally registering a massive code repo as
+  ``memory_dir`` -- at v2.0 scale.
+- **UI: dry-run preview on the Add Source modal.** Typing a path
+  debounce-triggers a ``POST /v1/sources/preview`` and renders a
+  panel above the Kind dropdown showing the proposed kind +
+  per-extension breakdown + a "Use suggested" button. The ceiling
+  warning surfaces an inline ``I understand`` checkbox that maps to
+  ``--force`` on submission.
+
+### Tests (phase 2)
+
+- ``tests/unit/test_auto_router.py`` -- 25 tests covering
+  ``propose_kind`` heuristics, ``scan_path`` (skip-dirs, frontmatter
+  detection, file-counting, single-file handling), the full
+  ``preview`` entry point, and the safety ceiling.
+- ``tests/integration/test_v1_sources_preview.py`` -- 8 tests for the
+  HTTP surface including a side-effect-free regression guard.
+- ``tests/unit/test_cli.py`` -- 8 new ``test_cli_source_add_*`` tests
+  covering each kind auto-route, ``--yes`` / interactive prompt
+  paths, ``--force`` ceiling override, and the explicit ``--kind``
+  override.
+
+### Tests (phase 1)
+
+- ``tests/unit/test_v2_schema.py`` -- 20 tests covering the four
+  schema additions and the scan-safety guard rail. All v1.x suites
+  continue to pass unmodified.
+
+Combined: phase 1 + 2 -> 478 -> 520 passing tests, 0 failing.
+
+### Added (v2.0 phase 3 -- tree-sitter grammar bundle + lazy loader)
+
+The library layer that Tier 1 / 2 / 3 ingestion will sit on top of.
+Phase 3 is grammar infrastructure only -- no source code is actually
+parsed until phase 4 plugs in the ingester.
+
+- **``mnemo.parsers.tree_sitter`` module.** Single entry point
+  (``get_parser(language) -> tree_sitter.Parser``) hides three sources
+  of churn from callers: the capsule-to-``Language`` conversion that
+  changed across the 0.21 / 0.22 / 0.23 binding releases; the
+  per-package quirks (``tree-sitter-typescript`` exposes
+  ``language_typescript()`` and ``language_tsx()`` instead of
+  ``language()``; ``tree-sitter-markdown`` exposes both block and
+  inline grammars); and the bundled-vs-lazy split.
+- **Bundled launch set:** ``python``, ``javascript``, ``typescript``,
+  ``tsx``, ``go``, ``json``, ``yaml``, ``markdown``. These wheels are
+  direct dependencies so first run works offline. The set covers
+  every language Tier 2 (semantic call graph, phase 5) needs plus
+  config / docs surfaces for the ``/code`` UI.
+- **Lazy set:** ``rust``, ``java``, ``c``, ``cpp``, ``ruby``, ``php``,
+  ``c_sharp``, ``kotlin``, ``swift``, ``bash``. Not bundled; the
+  loader names the right pip package in the
+  ``GrammarNotAvailableError`` so users can copy-paste the install
+  command. Rounds out the 16-grammar Tier 1 set the design promises.
+- **Extension dispatch (``language_for_extension``).** Maps
+  ``.py`` -> ``python``, ``.tsx`` -> ``tsx``, ``.jsx`` ->
+  ``javascript``, etc. Case-insensitive so ``Path.suffix`` on Windows
+  resolves correctly. Phase 4's ingester walks files and routes via
+  this helper.
+- **Parser cache.** ``get_parser`` caches by language; repeated calls
+  return the same ``Parser`` so downstream code can compare ``is`` for
+  identity.
+- **``paths.grammars_dir()``.** Reserved under ``mnemo_home() /
+  "grammars"`` for future lazy-downloaded wheels (a v2.0.x feature).
+  ``ensure_runtime_dirs()`` creates it on first launch.
+
+### Dependencies added
+
+```
+tree-sitter>=0.23
+tree-sitter-python>=0.23
+tree-sitter-javascript>=0.23
+tree-sitter-typescript>=0.23
+tree-sitter-go>=0.23
+tree-sitter-json>=0.23
+tree-sitter-yaml>=0.7
+tree-sitter-markdown>=0.4
+```
+
+### Tests (phase 3)
+
+- ``tests/unit/test_tree_sitter.py`` -- 17 tests covering the
+  bundled / lazy registries, extension dispatch (case sensitivity,
+  TSX disambiguation), end-to-end parse sanity for Python /
+  TypeScript / TSX / Markdown, the unknown-language path, the
+  lazy-grammar install-hint path, and the parser cache.
+- ``tests/unit/test_paths.py`` -- 2 new tests for ``grammars_dir()``
+  and the ``ensure_runtime_dirs()`` extension.
+
+Combined: phase 1 + 2 + 3 -> 478 -> 539 passing tests, 0 failing.
+
+### Added (v2.0 phase 4 -- Tier 1 universal code_repo ingestion)
+
+The first phase that produces real code-graph nodes. Tier 1 covers
+language-structure extraction: one node per file, one per top-level
+declaration, one per class method, plus three structural edge types
+(``defines`` / ``method_of`` / ``imports``).
+
+Tier 2 (cross-file call resolution) and Tier 3 (framework extractors)
+land in phases 5-8.
+
+- **Four new node types.** ``code_module`` (one per source file),
+  ``code_function`` (top-level function), ``code_class`` (top-level
+  class), ``code_method`` (method on a class). All four go through
+  ``Node.new()`` and the standard ingest path -- they're indexed,
+  retrievable, and BASE-aware just like memory_* types.
+- **Three new edge relations.** ``defines`` (module -> top-level
+  declaration), ``method_of`` (method -> containing class),
+  ``imports`` (module -> module, best-effort cross-file). Inferred
+  edges carry ``confidence`` so retrieval can downweight uncertain
+  links: ``imports`` lands at 0.9 (high confidence inside the file's
+  AST, lower than 1.0 because the cross-file resolution is
+  shallow / single-segment match).
+- **``mnemo.parsers.code`` module.** Walks a tree-sitter AST and
+  emits :class:`CodeUnit` records. Languages with a structural
+  extractor at launch: Python (top-level defs, classes, methods
+  including decorated ones, docstring -> description, imports).
+  Other bundled languages (JS / TS / TSX / Go / JSON / YAML /
+  Markdown) get a module-only fallback so the file's existence
+  stays queryable; per-language extractors for those land in
+  follow-on phases.
+- **``mnemo.ingest.parse_code_file``.** New dispatch path: a
+  ``code_repo`` source maps each file through the tree-sitter
+  extractor and yields multiple :class:`ParsedFile` records (one
+  per :class:`CodeUnit`). Edge intent (children / parent / imports)
+  travels in ``frontmatter_json`` under a ``code_unit`` key.
+- **``reindex`` post-pass.** After the upsert loop, code units'
+  edge intent gets resolved against the freshly-populated graph.
+  ``defines`` and ``method_of`` are within-file and always
+  resolve; ``imports`` is best-effort -- unmatched targets
+  silently produce no edge so stdlib / pip-installed imports
+  don't pollute the graph with dangling pointers.
+- **``code_repo`` default include patterns.** A registered
+  ``code_repo`` source with no user-supplied include set walks the
+  bundled tree-sitter extensions (``*.py``, ``*.ts``, ``*.tsx``,
+  ``*.js``, ``*.go``, ``*.json``, ``*.yaml``, ``*.md``, ...). The
+  walker reuses ``auto_router.DEFAULT_SKIP_DIRS`` so ``.git`` /
+  ``node_modules`` / ``__pycache__`` / etc. never reach the
+  extractor.
+- **Line-range source_paths.** Declaration nodes use
+  ``<file>:<start>-<end>`` as their ``source_path`` so two same-name
+  functions in the same file (overloads, conditional definitions)
+  get distinct keys. ``paths.path_under_source`` strips the suffix
+  before path comparison so reconciliation + cascade delete continue
+  to work correctly. Modules keep the bare file path.
+- **Body truncation.** Function and module bodies > 60 lines get a
+  ``... (N more lines)`` trailing marker so retrieval hits don't
+  blow the token budget on a 5,000-line file.
+
+### Tests (phase 4)
+
+- ``tests/unit/test_v2_schema.py`` -- 8 new tests covering the four
+  code node types and the three structural edge relations.
+- ``tests/unit/test_parsers_code.py`` -- 16 tests covering the
+  Python extractor (decls, decorated methods, docstrings, imports,
+  body truncation, line-range source_paths) and the module-only
+  fallback for JSON / Markdown / JS / unknown.
+- ``tests/unit/test_ingest_code_repo.py`` -- 10 tests covering the
+  ingest wiring: default include, scan_source dispatch, skip-dirs
+  passthrough, and the reindex edge post-pass for ``defines`` /
+  ``method_of`` / ``imports``.
+
+Combined: phases 1 -> 4 advance 478 -> 573 passing tests, 0 failing.
+
+### Added (v2.0 phase 5 -- Tier 2 call-graph resolver)
+
+The flagship Tier 2 capability: "where is ``<function>`` called from?"
+finally returns correct answers. Built around a Stack-Graphs-inspired
+scope resolver that walks the freshly-populated Tier 1 graph to
+match each call site with its callee.
+
+- **``calls`` edge relation.** Caller function / method -> callee
+  function / method / class (the constructor case). Inferred edges
+  carry calibrated confidence: 0.95 for within-file resolution and
+  0.8 for cross-file resolution via the ``imports`` edge. The design
+  pegs unresolved calls as "no edge" -- best-effort retrieval beats
+  fabricated edges.
+
+- **``mnemo.parsers.code.CallSite``.** New dataclass capturing a
+  recorded call expression: ``callee_name``, ``receiver`` (``None``
+  for free calls, ``"self"`` / ``"this"`` / ``"cls"`` for method
+  calls, or an identifier for ``module.f()`` qualified calls), and
+  the source line.
+
+- **Python call-site extraction.** ``_python_call_sites`` walks each
+  function / method body and collects ``call`` AST nodes. Recursive
+  through nested control flow (``if`` / ``for`` / ``with`` /
+  comprehensions) but NOT through nested function / class
+  definitions -- those have their own units and their own
+  ``call_sites``. Chained receivers (``a.b.c.method()``) are
+  reduced to the outermost identifier so the resolver can still
+  match against imports.
+
+- **``mnemo.parsers.scope`` module.** The Tier 2 resolver.
+  :func:`resolve_calls` builds a one-pass index of the code graph
+  (source_path -> Node, (module, name) -> Node, method_of /
+  imports lookups), then walks each touched node's call sites
+  applying three rules in order:
+
+  1. ``receiver in {self, this, cls}`` -> walk ``method_of`` to
+     the enclosing class, match by callee name on its methods.
+  2. ``receiver is None`` -> match against the enclosing module's
+     top-level declarations (functions + classes; the latter
+     handles constructor calls like ``Session()``).
+  3. ``receiver`` matches an imported module name -> walk the
+     ``imports`` edge to the target module and match by callee
+     name on its declarations.
+
+  Self-edges (a recursive function's name matching itself) are
+  suppressed so the graph stays clean.
+
+- **Reindex post-pass extension.** After Tier 1 edges (``defines``,
+  ``method_of``, ``imports``) are wired, the reindex pipeline
+  invokes :func:`scope_resolver.resolve_calls` with the same
+  touched-node batch. The resolver hits the just-populated graph so
+  same-run cross-file resolution works end-to-end (no second
+  reindex needed).
+
+### Tests (phase 5)
+
+- ``tests/unit/test_v2_schema.py`` -- 2 new tests for the ``calls``
+  edge relation and confidence persistence.
+- ``tests/unit/test_parsers_code.py`` -- 7 new tests covering the
+  ``CallSite`` dataclass shape, free / self / qualified call
+  capture, constructor detection, and nested-call attribution.
+- ``tests/unit/test_ingest_code_repo.py`` -- 7 new tests for the
+  end-to-end resolution: same-module free call, ``self.method``,
+  constructor -> class, cross-file via imports, unresolved (no
+  edge), and confidence levels for same-file vs cross-file.
+
+Combined: phases 1 -> 5 advance 478 -> 589 passing tests, 0 failing.
+
+### Deferred to follow-on phases
+
+- **JavaScript / TypeScript / Go resolvers.** The design promises
+  Tier 2 across all three; phase 5 ships Python end-to-end and
+  leaves the resolver framework / call-site extraction stubs for
+  these three to land in a follow-on commit. Tier 1 already
+  produces ``code_module`` nodes for these languages so the
+  graph isn't blocked on them.
+
+### Added (v2.0 phase 6 -- Tier 3 backend framework extractors)
+
+FastAPI, Flask, and Express route extraction. The first Tier 3
+phase wires the framework idioms each of those backends uses into
+graph nodes + edges, setting up the cross-stack sitemap that
+lands when phase 7 ships the React / Next.js side.
+
+- **``code_route`` node type.** One node per detected route
+  declaration. Carries ``framework`` (``fastapi`` / ``flask`` /
+  ``express``), HTTP method (uppercased), and path on its
+  ``code_unit`` intent block. The display ``name`` is
+  ``METHOD path`` (e.g. ``GET /api/users``) so retrieval hits
+  read naturally.
+- **``routes_to`` edge relation.** Route -> handler function.
+  Inferred edges with confidence 0.95 -- within-file resolution
+  is high-confidence by construction (the extractor matched the
+  decorator + handler in the same parse). The post-pass wires
+  the edge by source_path lookup.
+- **``mnemo.extractors.fastapi``.** Matches
+  ``@<receiver>.<method>(<path>, ...)`` decorators on top-level
+  functions where the method name is one of GET / POST / PUT /
+  DELETE / PATCH / HEAD / OPTIONS / TRACE. Stacked decorators on
+  the same handler each emit their own route. The receiver name
+  is intentionally permissive (``app`` / ``router`` / ``api`` /
+  ``v1`` are all valid in real codebases).
+- **``mnemo.extractors.flask``.** Matches
+  ``@<receiver>.route(<path>, methods=[...])`` decorators on
+  top-level functions. Default method is GET when ``methods``
+  is omitted; multi-method lists fan out to one route per verb.
+  ``@app.route`` and ``@blueprint.route`` are detected the same
+  way (any receiver name).
+- **``mnemo.extractors.express``.** Matches top-level
+  ``<receiver>.<method>(<path>, <handler>)`` call expressions
+  where the method name is GET / POST / PUT / DELETE / PATCH /
+  HEAD / OPTIONS / ALL / USE. JavaScript handler resolution is
+  deferred to phase 7 (when JS Tier 1 ships): the route node is
+  emitted but ``handler_source_path`` stays None, so
+  ``routes_to`` doesn't wire yet for Express. The endpoint
+  surface is still there for phase 7's React-side join.
+- **Framework dispatch in ``parsers.code.extract``.** After Tier 1
+  extraction runs, the appropriate set of framework extractors
+  (per ``FRAMEWORK_EXTRACTORS`` in ``mnemo.extractors``) walks
+  the same tree and emits Tier 3 units. A broken extractor is
+  caught defensively -- it can never crash the reindex.
+
+### Tests (phase 6)
+
+- ``tests/unit/test_v2_schema.py`` -- 3 new tests for the
+  ``code_route`` node type and the ``routes_to`` edge.
+- ``tests/unit/test_extractors.py`` -- 12 new tests: 6 for the
+  FastAPI extractor (GET, POST, APIRouter, name shape,
+  no-decorator regression, stacked decorators), 3 for Flask
+  (default GET, ``methods`` kwarg, blueprint), 2 for Express
+  (``app.get`` and ``router.post``), and 1 end-to-end integration
+  test asserting the ``routes_to`` edge appears after reindex.
+
+Combined: phases 1 -> 6 advance 478 -> 604 passing tests, 0 failing.
+
 ## [1.2.1] - 2026-05-11
 
 **Closing the 1.2.x line.** A real-use test of v1.2.0 against a

@@ -29,7 +29,10 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from mnemo import parsers
+from mnemo import auto_router, parsers
+from mnemo.parsers import code as code_parser
+from mnemo.parsers import scope as scope_resolver
+from mnemo.parsers import tree_sitter as ts_loader
 from mnemo.paths import path_under_source
 from mnemo.store import NODE_TYPES, SOURCE_KINDS, Node, Source, Store
 
@@ -72,6 +75,12 @@ class ParsedFile:
     # v1.1: frontmatter ``base: true`` flag. BASE knowledge bypasses
     # project isolation and surfaces in every project's queries.
     base: bool = False
+    # v2.0 phase 4: when set, used as the resulting ``Node.source_path``
+    # instead of ``str(path)``. Code declarations use this to encode
+    # ``<file>:<start_line>-<end_line>`` so two same-name functions in
+    # the same file get distinct nodes. For v1.x source kinds it stays
+    # None and reindex falls back to the path-as-string default.
+    source_path: str | None = None
 
 
 @dataclass
@@ -217,6 +226,75 @@ def parse_file(path: Path, *, kind: str, project_key: str | None = None) -> Pars
     )
 
 
+def parse_code_file(path: Path, *, project_key: str | None = None) -> list[ParsedFile]:
+    """v2.0 phase 4: dispatch a single code file through the tree-sitter
+    extractor.
+
+    Returns one :class:`ParsedFile` per :class:`CodeUnit`. The first
+    record is always the ``code_module`` for the file itself;
+    subsequent records are top-level declarations and class methods.
+
+    Edge intent (``defines`` / ``method_of`` / ``imports``) is JSON-
+    encoded into each record's ``frontmatter_json`` under a
+    ``code_unit`` key. The reindex post-pass turns the intent into
+    real ``Edge`` rows.
+
+    Unknown / unsupported extensions return an empty list -- the
+    walker shouldn't call this with non-code files but we stay
+    defensive (rather than letting a stray extension crash the
+    whole reindex).
+    """
+    language = ts_loader.language_for_extension(path.suffix)
+    if language is None:
+        return []
+    try:
+        source = path.read_bytes()
+    except OSError:
+        return []
+    units = code_parser.extract(path, source, language=language)
+
+    project = _resolve_project_key({}, path, project_key)
+    out: list[ParsedFile] = []
+    for u in units:
+        # Pack the edge intent into frontmatter_json so the reindex
+        # post-pass can read it back after the node is upserted.
+        # v2.0 phase 5: call_sites travel here too -- the scope
+        # resolver consumes them after Tier 1 edges are wired.
+        # v2.0 phase 6: framework-extracted routes thread their
+        # handler pointer + framework metadata through the same
+        # ``code_unit`` block.
+        edge_intent: dict[str, object] = {
+            "imports": u.imports,
+            "children_source_paths": u.children_source_paths,
+            "parent_source_path": u.parent_source_path,
+            "call_sites": [
+                {"callee": cs.callee_name, "receiver": cs.receiver, "line": cs.line}
+                for cs in u.call_sites
+            ],
+            "framework": u.framework,
+            "route_method": u.route_method,
+            "route_path": u.route_path,
+            "handler_source_path": u.handler_source_path,
+        }
+        fm = {"code_unit": edge_intent}
+        out.append(
+            ParsedFile(
+                path=path,
+                type=u.type,
+                name=u.name,
+                description=u.description,
+                body=u.body,
+                frontmatter_json=json.dumps(fm, sort_keys=True),
+                hash=u.hash,
+                source_kind="code_repo",
+                project_key=project,
+                base=False,
+                source_path=u.source_path,
+            )
+        )
+    return out
+
+
 def _resolve_base_flag(fm: dict[str, object]) -> bool:
     """Read frontmatter ``base`` (truthy) -> True. Treat 'true', 'yes',
     '1' (case-insensitive) as True. Default False."""
@@ -239,9 +317,26 @@ def _default_include_for_kind(kind: str) -> list[str]:
     parser registry knows how to handle (markdown, plain text, PDF).
     Sources that want narrower behavior set their own ``include``.
     claude_md: always matches its single configured file -- no walk.
+
+    v2.0 phase 4: ``code_repo`` defaults to the bundled tree-sitter
+    languages (Python / TS/TSX / JS / Go / JSON / YAML / Markdown)
+    plus C-family / Java / Rust / Ruby / Bash / PHP for repos that
+    have those wheels installed via the lazy loader. The walker
+    additionally skips the ``DEFAULT_SKIP_DIRS`` set from the
+    auto-router so ``node_modules`` / ``__pycache__`` / ``.git`` /
+    etc. never reach the extractor.
+
+    ``docs_dir`` keeps the empty default for one more phase --
+    docs_dir ingestion lands in phase 11 with the ``/code`` UI work.
     """
     if kind in ("memory_dir", "plan_dir", "transcripts"):
         return ["**/*.md", "**/*.markdown", "**/*.txt", "**/*.pdf"]
+    if kind == "code_repo":
+        # One pattern per registered extension so users can read the
+        # list and immediately understand the scope of the walk. The
+        # extension dispatch table in ``parsers.tree_sitter`` is the
+        # canonical registry; this list mirrors it.
+        return [f"**/*{ext}" for ext in sorted(ts_loader.EXT_TO_LANGUAGE.keys())]
     return []
 
 
@@ -289,21 +384,37 @@ def scan_source(source: Source) -> Iterator[ParsedFile]:
     include_patterns = _parse_pattern_field(source.include) or _default_include_for_kind(
         source.kind
     )
+    # v2.0 phase 1 safety: empty include set means "this kind has no
+    # parser wired yet" (currently only ``docs_dir`` -- code_repo got
+    # its defaults in phase 4). Yield nothing rather than letting the
+    # rglob fan-out feed every file to the markdown parser.
+    if not include_patterns:
+        return
     exclude_patterns = _parse_pattern_field(source.exclude)
     include_spec = _build_pathspec(include_patterns)
     exclude_spec = _build_pathspec(exclude_patterns)
+    # v2.0 phase 4: skip the same noisy directories the auto-router
+    # skips. Without this, every reindex of a code_repo would try to
+    # parse every file in ``node_modules`` / ``__pycache__`` / etc.
+    skip_dirs = auto_router.DEFAULT_SKIP_DIRS if source.kind == "code_repo" else frozenset()
 
     for f in sorted(p.rglob("*")):
         if not f.is_file():
             continue
         if f.name == "MEMORY.md":
             continue
-        rel = f.relative_to(p).as_posix()
-        if include_spec is not None and not include_spec.match_file(rel):
+        rel = f.relative_to(p)
+        if skip_dirs and any(part in skip_dirs for part in rel.parts[:-1]):
             continue
-        if exclude_spec is not None and exclude_spec.match_file(rel):
+        rel_posix = rel.as_posix()
+        if include_spec is not None and not include_spec.match_file(rel_posix):
             continue
-        yield parse_file(f, kind=source.kind, project_key=source.project_key)
+        if exclude_spec is not None and exclude_spec.match_file(rel_posix):
+            continue
+        if source.kind == "code_repo":
+            yield from parse_code_file(f, project_key=source.project_key)
+        else:
+            yield parse_file(f, kind=source.kind, project_key=source.project_key)
 
 
 # --- Reconciliation --------------------------------------------------------
@@ -327,22 +438,32 @@ def reindex(
     For each source, parse all files; upsert new and changed nodes; delete
     nodes whose source files have vanished. If ``embedder`` is supplied, also
     re-embed any node that was added or updated. Returns a tally.
+
+    v2.0 phase 4: code_repo sources emit multiple nodes per file
+    (module + declarations). After the upsert loop, a post-pass walks
+    the freshly-upserted nodes' frontmatter for ``code_unit`` edge
+    intent and creates ``defines`` / ``method_of`` / ``imports`` edges.
     """
     report = ReindexReport()
     src_list = sources if sources is not None else store.list_sources(only_enabled=True)
-    seen_paths: set[str] = set()
+    seen_source_paths: set[str] = set()
+    # Track every just-touched code node so the edge post-pass can run
+    # against a small, freshly-parsed set instead of re-scanning the
+    # whole store.
+    touched_code_node_ids: list[str] = []
 
     for src in src_list:
         try:
             for parsed in scan_source(src):
-                seen_paths.add(str(parsed.path))
-                existing = store.get_node_by_source(str(parsed.path))
+                node_source_path = parsed.source_path or str(parsed.path)
+                seen_source_paths.add(node_source_path)
+                existing = store.get_node_by_source(node_source_path)
                 if existing is None:
                     new_node = Node.new(
                         type=parsed.type,
                         name=parsed.name,
                         body=parsed.body,
-                        source_path=str(parsed.path),
+                        source_path=node_source_path,
                         source_kind=parsed.source_kind,
                         description=parsed.description,
                         project_key=parsed.project_key,
@@ -354,6 +475,8 @@ def reindex(
                     if embedder is not None:
                         _embed(store, new_node, embedder)
                     report.added += 1
+                    if parsed.type.startswith("code_"):
+                        touched_code_node_ids.append(new_node.id)
                 elif existing.hash != parsed.hash:
                     existing.type = parsed.type
                     existing.name = parsed.name
@@ -369,12 +492,33 @@ def reindex(
                     if embedder is not None:
                         _embed(store, existing, embedder)
                     report.updated += 1
+                    if parsed.type.startswith("code_"):
+                        touched_code_node_ids.append(existing.id)
                 else:
                     report.unchanged += 1
+                    if parsed.type.startswith("code_"):
+                        # Same hash but the edges might have been
+                        # missed last run (e.g. an imports target was
+                        # added after the first reindex). Cheap to
+                        # re-resolve so include it in the post-pass.
+                        touched_code_node_ids.append(existing.id)
             store.mark_source_indexed(src.path)
         except Exception as exc:  # noqa: BLE001 - we want to keep going on bad files
             report.errors.append((src.path, str(exc)))
             log.warning("error scanning source %s: %s", src.path, exc)
+
+    # v2.0 phase 4 edge post-pass: resolve code-unit edge intent into
+    # real Edge rows. We run this AFTER all nodes are upserted so the
+    # within-file pointers (defines, method_of) and the cross-file
+    # imports lookups can hit the freshly-populated graph.
+    if touched_code_node_ids:
+        _resolve_code_edges(store, touched_code_node_ids)
+        # v2.0 phase 5: Tier 2 ``calls`` resolution runs AFTER Tier 1
+        # so the resolver can walk the just-wired imports + method_of
+        # edges. Returns the count for diagnostics; we don't surface
+        # it in the report shape today (the ReindexReport tracks node
+        # counts, not edge counts).
+        scope_resolver.resolve_calls(store, touched_code_node_ids)
 
     # Deletions: any node whose source_path falls under a scanned source
     # but wasn't seen this run.
@@ -383,12 +527,151 @@ def reindex(
         for node in all_nodes:
             for src in src_list:
                 if path_under_source(node.source_path, src.path, src.kind):
-                    if node.source_path not in seen_paths:
+                    if node.source_path not in seen_source_paths:
                         store.delete_node(node.id)
                         report.removed += 1
                     break
 
     return report
+
+
+def _resolve_code_edges(store: Store, node_ids: list[str]) -> None:
+    """Wire ``defines`` / ``method_of`` / ``imports`` edges for the
+    code nodes just touched by reindex.
+
+    Reads each node's ``frontmatter_json`` for the ``code_unit`` intent
+    block:
+
+    - ``children_source_paths``: source_paths of top-level declarations
+      this module ``defines``.
+    - ``parent_source_path``: source_path of the containing class for
+      a ``code_method`` (the ``method_of`` target).
+    - ``imports``: module-name strings the file imports. Resolved
+      against ``code_module`` nodes in the same store by matching the
+      module name (file stem for top-level, dotted path for packages).
+      Best-effort: unmatched names produce no edge.
+    """
+    # Build a source_path -> node_id index for the fresh nodes plus
+    # any other code_module / code_class nodes already in the store.
+    # For ``defines`` / ``method_of`` resolution we need the full set
+    # because the parent class might be in a different parsed batch.
+    sp_to_id: dict[str, str] = {}
+    name_to_module_id: dict[str, str] = {}
+    for n in store.list_nodes(type="code_module", limit=1_000_000):
+        sp_to_id[n.source_path] = n.id
+        # The importable module name is the file stem for top-level
+        # files. Packages (dotted paths) need future framework
+        # extractors to capture; phase 4 handles only the trivial
+        # ``import name`` -> ``name.py`` case.
+        stem = Path(n.source_path).stem
+        name_to_module_id.setdefault(stem, n.id)
+    for ct in ("code_class", "code_function", "code_method", "code_route"):
+        for n in store.list_nodes(type=ct, limit=1_000_000):
+            sp_to_id[n.source_path] = n.id
+
+    for nid in node_ids:
+        node = store.get_node(nid)
+        if node is None or not node.frontmatter_json:
+            continue
+        try:
+            fm = json.loads(node.frontmatter_json)
+        except ValueError:
+            continue
+        intent = fm.get("code_unit")
+        if not isinstance(intent, dict):
+            continue
+
+        # method_of: this node points at its containing class.
+        parent = intent.get("parent_source_path")
+        if isinstance(parent, str) and parent in sp_to_id:
+            store.add_edge(node.id, sp_to_id[parent], "method_of")
+
+        # defines: module -> top-level declarations in this file.
+        children = intent.get("children_source_paths") or []
+        for child_sp in children:
+            target = sp_to_id.get(child_sp)
+            if target is not None and target != node.id:
+                store.add_edge(node.id, target, "defines")
+
+        # imports: module -> module. Best-effort name match.
+        imports = intent.get("imports") or []
+        for imp_name in imports:
+            if not isinstance(imp_name, str):
+                continue
+            # ``mnemo.store`` -> last segment ``store``. Tier 1 imports
+            # resolution is "shallow": a more sophisticated package /
+            # __init__ walk lands in a later phase.
+            last = imp_name.rsplit(".", 1)[-1]
+            target = name_to_module_id.get(last)
+            if target is not None and target != node.id:
+                # Inferred edges carry calibrated uncertainty; imports
+                # is the most-confident structural inference at Tier 1.
+                store.add_edge(node.id, target, "imports", confidence=0.9)
+
+        # v2.0 phase 6: routes_to. A ``code_route`` node carries its
+        # handler's source_path in the intent block; resolve it to a
+        # node id and wire the edge. Confidence 0.95 mirrors the
+        # within-file resolution semantics (the extractor identified
+        # the exact decorator + handler pair in the same parse).
+        handler_sp = intent.get("handler_source_path")
+        if isinstance(handler_sp, str) and handler_sp in sp_to_id:
+            target_id = sp_to_id[handler_sp]
+            if target_id != node.id:
+                store.add_edge(node.id, target_id, "routes_to", confidence=0.95)
+
+    # v2.0 phase 7: endpoint dedup + at_endpoint edges.
+    # For every freshly-touched ``code_route`` or ``code_component``
+    # whose intent block carries ``route_method`` + ``route_path``,
+    # upsert a shared ``code_endpoint`` node (keyed by
+    # ``endpoint:METHOD:path``) and wire an ``at_endpoint`` edge.
+    # This is what creates the cross-stack join: a React component
+    # that fetches ``/api/users`` and a FastAPI route at the same
+    # path both end up pointing at the same endpoint node.
+    _resolve_endpoint_edges(store, node_ids)
+
+
+def _resolve_endpoint_edges(store: Store, node_ids: list[str]) -> None:
+    """Upsert ``code_endpoint`` nodes for routes / components that
+    declare a (method, path) and wire each touched declarer to the
+    endpoint via an ``at_endpoint`` edge.
+
+    Endpoints are deduplicated by source_path = ``endpoint:METHOD:path``.
+    The endpoint node's project_key is left None (cross-cutting), so
+    strict-isolation retrieval treats it as a shared anchor between
+    every project's frontend and backend.
+    """
+    for nid in node_ids:
+        node = store.get_node(nid)
+        if node is None or not node.frontmatter_json:
+            continue
+        if node.type not in ("code_route", "code_component"):
+            continue
+        try:
+            fm = json.loads(node.frontmatter_json)
+        except ValueError:
+            continue
+        intent = fm.get("code_unit")
+        if not isinstance(intent, dict):
+            continue
+        method = intent.get("route_method")
+        path = intent.get("route_path")
+        if not isinstance(method, str) or not isinstance(path, str):
+            continue
+
+        endpoint_sp = f"endpoint:{method}:{path}"
+        endpoint = store.get_node_by_source(endpoint_sp)
+        if endpoint is None:
+            endpoint = Node.new(
+                type="code_endpoint",
+                name=f"{method} {path}",
+                body="",
+                source_path=endpoint_sp,
+                source_kind="code_repo",
+                description=f"Endpoint {method} {path}",
+                hash=endpoint_sp,
+            )
+            store.upsert_node(endpoint)
+        store.add_edge(node.id, endpoint.id, "at_endpoint", confidence=0.9)
 
 
 def register_default_sources(store: Store, claude_home: Path) -> int:

@@ -125,6 +125,43 @@ class SourceUpdateIn(BaseModel):
     exclude: str | None = None
 
 
+class SourcePreviewIn(BaseModel):
+    """v2.0 phase 2 body for ``POST /v1/sources/preview``.
+
+    Side-effect-free: the endpoint scans the path on disk and returns
+    a suggested kind plus a per-extension breakdown so the user can
+    decide whether to call ``POST /v1/sources`` next. ``force=True``
+    suppresses the 50k safety-ceiling flag.
+    """
+
+    path: str
+    force: bool = False
+
+
+class SourcePreviewBreakdownOut(BaseModel):
+    by_ext: dict[str, int]
+    total_files: int
+    md_with_frontmatter: int
+    md_without_frontmatter: int
+    has_git: bool
+
+
+class SourcePreviewOut(BaseModel):
+    """Response shape for ``POST /v1/sources/preview``.
+
+    Mirrors :class:`mnemo.auto_router.PreviewResult` so the UI can
+    render the suggestion without remapping. ``proposed_kind`` is
+    ``None`` when no heuristic matches and the user must pick the
+    kind explicitly.
+    """
+
+    path: str
+    proposed_kind: str | None
+    confidence: str  # "high" | "medium" | "low"
+    breakdown: SourcePreviewBreakdownOut
+    exceeds_safety_ceiling: bool
+
+
 # --- Queries --------------------------------------------------------------
 
 

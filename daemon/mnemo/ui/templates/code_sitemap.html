@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %} - sitemap{% endblock %}
+
+{% block content %}
+<section class="code-sitemap">
+  <header class="page-header">
+    <p class="breadcrumb">
+      <a href="/code">Code</a> /
+      <a href="/code/{{ project_key | urlencode }}">{{ project_key }}</a> /
+      <strong>sitemap</strong>
+    </p>
+    <h2>Cross-stack sitemap</h2>
+    <p class="hint">
+      One row per endpoint URI. Backend routes + frontend components
+      that point at the same URI converge here; the handler column shows
+      what the route resolves to via <code>routes_to</code>.
+    </p>
+  </header>
+
+  {% if rows %}
+  <div class="sitemap-table">
+    <div class="sitemap-row sitemap-header-row">
+      <div>Endpoint</div>
+      <div>Route(s)</div>
+      <div>Handler(s)</div>
+      <div>Component(s)</div>
+    </div>
+    {% for row in rows %}
+    <div class="sitemap-row">
+      <div class="sitemap-endpoint">
+        <a href="/node/{{ row.id }}">
+          <span class="badge http-method http-{{ row.method | lower }}">{{ row.method }}</span>
+          <code>{{ row.path }}</code>
+        </a>
+      </div>
+      <div>
+        {% for r in row.routes %}
+        <a href="/node/{{ r.id }}"><code>{{ r.name }}</code></a>
+        <br>
+        {% endfor %}
+        {% if not row.routes %}<span class="hint">(none)</span>{% endif %}
+      </div>
+      <div>
+        {% for h in row.handlers %}
+        <a href="/node/{{ h.id }}"><code>{{ h.name }}</code></a>
+        <br>
+        {% endfor %}
+        {% if not row.handlers %}<span class="hint">(unresolved)</span>{% endif %}
+      </div>
+      <div>
+        {% for c in row.components %}
+        <a href="/node/{{ c.id }}"><code>{{ c.name }}</code></a>
+        <br>
+        {% endfor %}
+        {% if not row.components %}<span class="hint">(none)</span>{% endif %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <h3>No endpoints yet</h3>
+    <p>
+      The cross-stack sitemap lights up when a code_repo has framework
+      routes (FastAPI / Flask / Express) or React components fetching
+      backend URLs. Register one via the
+      <a href="/sources-page">Sources page</a> + reindex.
+    </p>
+  </div>
+  {% endif %}
+</section>
+{% endblock %}

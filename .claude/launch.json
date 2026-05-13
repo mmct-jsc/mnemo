@@ -1,0 +1,14 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "mnemo-daemon-prod",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "-e",
+        "setInterval(() => {}, 10000)"
+      ],
+      "port": 7373
+    }
+  ]
+}

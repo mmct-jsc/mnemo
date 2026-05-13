@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="code-landing">
+  <header class="code-hero">
+    <h2>Code intelligence</h2>
+    <p class="code-hero-sub">
+      Every registered <code>code_repo</code> source becomes a typed
+      Nebula graph of modules, functions, classes, routes, components,
+      and the relationships between them. Click a project to open it
+      in the Nebula visualization.
+    </p>
+  </header>
+
+  {% if projects %}
+  <div class="code-project-grid">
+    {% for p in projects %}
+    <article class="code-project-card">
+      <a class="code-project-card-link" href="/graph?project={{ p.project_key | urlencode }}">
+        <header class="code-project-card-head">
+          <h3>{{ p.project_key }}</h3>
+          <span class="code-project-card-total">{{ p.total }}</span>
+        </header>
+
+        <div class="code-project-card-bars">
+          {% set total_bar = (p.total or 1) %}
+          {% for t, color in [
+              ('code_module', '#06b6d4'),
+              ('code_function', '#2dd4bf'),
+              ('code_method', '#38bdf8'),
+              ('code_class', '#e879f9'),
+              ('code_route', '#fb923c'),
+              ('code_component', '#c084fc'),
+          ] %}
+            {% set count = p.by_type.get(t, 0) %}
+            {% if count > 0 %}
+            <div class="bar-row" title="{{ count }} {{ t | replace('code_','') }}">
+              <span class="bar-dot" style="background: {{ color }}; box-shadow: 0 0 6px {{ color }}66;"></span>
+              <span class="bar-label">{{ t | replace('code_','') }}</span>
+              <span class="bar-track">
+                <span class="bar-fill" style="width: {{ (count * 100 / total_bar) | round(1) }}%; background: {{ color }};"></span>
+              </span>
+              <span class="bar-count">{{ count }}</span>
+            </div>
+            {% endif %}
+          {% endfor %}
+        </div>
+
+        {% if p.source_path %}
+        <p class="code-project-card-path"><code>{{ p.source_path }}</code></p>
+        {% endif %}
+
+        <footer class="code-project-card-foot">
+          <span class="code-card-cta">
+            <span>Open in Nebula</span>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 12h14M13 5l7 7-7 7"/></svg>
+          </span>
+        </footer>
+      </a>
+      <a class="code-project-card-summary" href="/code/{{ p.project_key | urlencode }}"
+         title="File-by-file summary view">
+        summary view &rarr;
+      </a>
+    </article>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <h3>No code repos indexed yet</h3>
+    <p>
+      Register a code repository via
+      <code>mnemo source add &lt;path&gt; --kind code_repo</code>
+      or from the <a href="/sources-page">Sources page</a> (the
+      auto-router will propose <code>code_repo</code> when it sees a
+      <code>.git/</code> dir plus source files).
+    </p>
+  </div>
+  {% endif %}
+
+  {% if endpoints %}
+  <section class="endpoint-section" x-data="{
+    expanded: false,
+    filter: '',
+    shouldShow(method, path, i) {
+      const matchesText = !this.filter ||
+        path.toLowerCase().includes(this.filter.toLowerCase()) ||
+        method.toLowerCase().includes(this.filter.toLowerCase());
+      const withinFirst30 = i < 30;
+      return matchesText && (this.expanded || withinFirst30 || this.filter);
+    }
+  }">
+    <header class="endpoint-section-head">
+      <h3>Cross-stack endpoints</h3>
+      <span class="endpoint-section-count">{{ endpoints | length }}</span>
+      <input type="search" class="endpoint-filter"
+             placeholder="filter path or method..."
+             x-model="filter">
+    </header>
+    <p class="endpoint-section-hint">
+      URI anchors shared between backend routes and frontend components.
+      A route and a component at the same path converge on a single endpoint.
+    </p>
+    <div class="endpoint-grid">
+      {% for ep in endpoints %}
+      <a class="endpoint-card endpoint-method-{{ ep.method | lower }}"
+         href="/node/{{ ep.id }}"
+         x-show="shouldShow('{{ ep.method }}', '{{ ep.path | replace("'", "") }}', {{ loop.index0 }})">
+        <span class="endpoint-method">{{ ep.method }}</span>
+        <code class="endpoint-path">{{ ep.path }}</code>
+        <span class="endpoint-fanout" title="{{ ep.fanout }} incoming at_endpoint edges">
+          {{ ep.fanout }}<span>{% if ep.fanout != 1 %}link{% endif %}</span>
+        </span>
+      </a>
+      {% endfor %}
+    </div>
+    {% if endpoints | length > 30 %}
+    <div class="endpoint-expand-row">
+      <button type="button" class="expand-toggle"
+              @click="expanded = !expanded"
+              x-show="!filter" x-cloak>
+        <span x-show="!expanded" x-cloak>show {{ endpoints | length - 30 }} more endpoints &darr;</span>
+        <span x-show="expanded" x-cloak>collapse &uarr;</span>
+      </button>
+    </div>
+    {% endif %}
+  </section>
+  {% endif %}
+</section>
+{% endblock %}

@@ -87,9 +87,10 @@
                  placeholder="/absolute/path/to/your/memory"
                  @focus="pathAc.show(form.path)"
                  @input.debounce.180ms="pathAc.show(form.path)"
+                 @input.debounce.350ms="runPreview()"
                  @keydown.down.prevent="pathAc.show(form.path); pathAc.move(1)"
                  @keydown.up.prevent="pathAc.show(form.path); pathAc.move(-1)"
-                 @keydown.enter.prevent="if (pathAc.activeIdx >= 0) { form.path = pathAc.entries[pathAc.activeIdx].value; pathAc.open = false; pathAc.recordRecent(form.path); }">
+                 @keydown.enter.prevent="if (pathAc.activeIdx >= 0) { form.path = pathAc.entries[pathAc.activeIdx].value; pathAc.open = false; pathAc.recordRecent(form.path); runPreview(); }">
           <div class="ac-pop" x-show="pathAc.open && pathAc.entries.length" x-cloak>
             <template x-for="(e, i) in pathAc.entries" :key="e.kind + ':' + e.value">
               <button type="button"
@@ -106,6 +107,53 @@
         <p class="ac-hint hint">Type to filter your filesystem; recent picks appear above.</p>
       </div>
 
+      <!-- v2.0 phase 2: dry-run preview panel. Surfaces when the user
+           types a path; shows what the auto-router proposes plus a
+           per-extension breakdown so nothing gets written by accident. -->
+      <div class="preview-panel" x-show="!editing && preview.loading" x-cloak>
+        <span class="hint">scanning {{ '...' }}</span>
+      </div>
+      <div class="preview-panel"
+           x-show="!editing && preview.result && !preview.loading"
+           x-cloak>
+        <div class="preview-row">
+          <span class="hint">proposed kind:</span>
+          <span class="badge"
+                x-text="preview.result.proposed_kind || '(no match)'"></span>
+          <span class="hint" x-text="'(' + preview.result.confidence + ')'"></span>
+          <button type="button" class="preview-use"
+                  x-show="preview.result.proposed_kind"
+                  x-cloak
+                  @click="form.kind = preview.result.proposed_kind">
+            Use suggested
+          </button>
+        </div>
+        <div class="preview-row hint"
+             x-text="preview.result.breakdown.total_files + ' file(s) after skip-dirs'">
+        </div>
+        <div class="preview-row preview-by-ext hint" x-show="preview.topExts.length" x-cloak>
+          <template x-for="e in preview.topExts" :key="e.ext">
+            <span class="preview-ext">
+              <code x-text="e.ext || '(none)'"></code><span x-text="' x' + e.count"></span>
+            </span>
+          </template>
+        </div>
+        <div class="preview-warn"
+             x-show="preview.result.exceeds_safety_ceiling"
+             x-cloak>
+          <p>
+            This path's source-file count exceeds the
+            <strong>50,000</strong>-file safety ceiling. Registering it
+            anyway will index a very large tree -- be sure that's
+            intentional.
+          </p>
+          <label class="check">
+            <input type="checkbox" x-model="form.force">
+            <span>I understand &mdash; index it anyway (--force)</span>
+          </label>
+        </div>
+      </div>
+
       <!-- Kind: themed select inherits global styling -->
       <div class="ac-field" x-show="!editing" x-cloak>
         <label for="ac-kind-select">Kind</label>
@@ -114,6 +162,8 @@
           <option value="claude_md">claude_md &mdash; single CLAUDE.md file</option>
           <option value="plan_dir">plan_dir &mdash; directory of design / plan docs</option>
           <option value="transcripts">transcripts &mdash; chat transcript dump</option>
+          <option value="code_repo">code_repo &mdash; tree-sitter-indexed code repo (v2.0)</option>
+          <option value="docs_dir">docs_dir &mdash; plain markdown docs site (v2.0)</option>
         </select>
       </div>
 
@@ -188,7 +238,13 @@ function sourcesPage() {
     formOpen: false,
     editing: false,
     saving: false,
-    form: { path: '', kind: 'memory_dir', project_key: '', include: '', exclude: '', enabled: true },
+    form: { path: '', kind: 'memory_dir', project_key: '', include: '', exclude: '', enabled: true, force: false },
+    // v2.0 phase 2: dry-run preview. ``runPreview()`` hits
+    // ``POST /v1/sources/preview`` whenever the path field changes;
+    // ``preview.result`` carries the proposed kind + breakdown so the
+    // panel above the Kind dropdown can show it. ``topExts`` is the
+    // first 5 extensions by count, ready for ``x-for`` rendering.
+    preview: { loading: false, result: null, topExts: [] },
 
     pathAc: makeAutocomplete({
       recentsKey: 'mnemo.recent.paths',
@@ -302,13 +358,46 @@ function sourcesPage() {
 
     openAdd() {
       this.editing = false;
-      this.form = { path: '', kind: 'memory_dir', project_key: '', include: '', exclude: '', enabled: true };
+      this.form = { path: '', kind: 'memory_dir', project_key: '', include: '', exclude: '', enabled: true, force: false };
+      this.preview = { loading: false, result: null, topExts: [] };
       this.formOpen = true;
+    },
+
+    async runPreview() {
+      const path = (this.form.path || '').trim();
+      if (!path) {
+        this.preview = { loading: false, result: null, topExts: [] };
+        return;
+      }
+      this.preview.loading = true;
+      try {
+        const r = await fetch('/v1/sources/preview', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: path, force: !!this.form.force }),
+        });
+        if (!r.ok) {
+          // 404 = path missing. Hide the panel instead of confusing the user.
+          this.preview = { loading: false, result: null, topExts: [] };
+          return;
+        }
+        const data = await r.json();
+        const topExts = Object.entries(data.breakdown.by_ext || {})
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 5)
+          .map(([ext, count]) => ({ ext: ext, count: count }));
+        this.preview = { loading: false, result: data, topExts: topExts };
+      } catch (_) {
+        this.preview = { loading: false, result: null, topExts: [] };
+      }
     },
 
     openEdit(path, kind, project_key, include, exclude, enabled) {
       this.editing = true;
-      this.form = { path, kind, project_key, include, exclude, enabled };
+      this.form = { path, kind, project_key, include, exclude, enabled, force: false };
+      // Editing an existing source skips the preview panel entirely;
+      // it's an Add-only affordance.
+      this.preview = { loading: false, result: null, topExts: [] };
       this.formOpen = true;
     },
 
