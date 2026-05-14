@@ -2,6 +2,63 @@
 
 All notable changes to mnemo are documented here.
 
+## [2.2.6] - 2026-05-14
+
+**Layout-change preserves focus state** -- DOM-overlay cross-fade
+replaces the cytoscape opacity bypass.
+
+### Fixed (focus state lost after layout change)
+
+Reported (2026-05-14): clicking a node selects it (which adds
+``.hl`` to the neighborhood + ``.dim`` to everything else); then
+clicking a layout button (rings / tree / grid / force) silently
+killed the blur-others effect. The selected node still pulsed
+(DOM overlay was intact), but the contrast against the dimmed
+background vanished and the focus read as "gone".
+
+Root cause: the prior ``relayout()`` cross-faded by calling
+``cy.elements().animate({ style: { opacity: 0.3 -> 1.0 } })``. In
+cytoscape, ``.animate({ style: ... })`` writes INLINE BYPASS
+styles that persist after the animation completes. After the
+fadeIn settled, every node carried inline ``opacity: 1``, which
+overrode the ``.dim`` class's stylesheet rule
+``opacity: 0.12`` -- so the dim effect disappeared. The ``.hl``
+halos were still rendered but had nothing to contrast against.
+
+### Changed (pipeline 18: DOM-overlay cross-fade)
+
+The fade moves off cytoscape's style cascade entirely. A new
+``.nebula-layout-veil`` ``<div>`` lives above the canvas (z:5,
+below the pulse anchor at z:6); ``layoutFading`` (new Alpine
+state) toggles its ``.on`` class, and a 140 ms CSS opacity
+transition does the rest. ``relayout()`` flips the veil on,
+waits one fade cycle (``setTimeout 140``), snaps positions
+inside ``cy.batch`` (single redraw), animates the camera tween,
+then flips the veil off in the camera animation's ``complete``
+callback. Cytoscape's per-element opacity is never touched, so
+``.hl`` / ``.dim`` class rules own the focus visual throughout.
+
+Same pattern as the v2.2.4 pulse rewrite. Pipeline 18 in
+``reference_mnemo_pipelines.md`` (BASE).
+
+### Accessibility
+
+``prefers-reduced-motion: reduce`` collapses the veil delay to
+0 ms AND keeps the veil at opacity 0, so the layout change is
+an instant snap with no fade for users who opted out.
+
+### Tests
+
+- ``daemon/tests/unit/test_relayout_focus_state.py`` (6 new cases):
+  - ``relayout()`` no longer contains
+    ``.animate({ style: { opacity: ... } })`` anywhere
+  - position snap stays inside ``cy.batch``
+  - ``.nebula-layout-veil`` ``<div>`` is in graph.html
+  - ``layoutFading`` Alpine state is wired
+  - ``.nebula-layout-veil`` class exists in app.css
+  - the CSS rules include an opacity transition
+- Total daemon suite: 656 passing.
+
 ## [2.2.5] - 2026-05-14
 
 **Phase 5 of the v2.2 progressive-UX rollout.** Body content now
