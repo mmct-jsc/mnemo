@@ -404,11 +404,18 @@ def _clean_docstring(raw: str) -> str:
 def _extract_imports(tree: tree_sitter.Tree, language: str) -> list[str]:
     """Pull import target names off the AST.
 
-    Phase 4 only handles Python imports. Other bundled languages get
-    an empty list -- phase 6+ framework extractors fill in the rest.
+    Phase 4 wired Python; v2.5.0 adds JavaScript / TypeScript / TSX.
+    Other bundled languages still get an empty list -- their
+    extractors land in v2.5.1+ (Go) and beyond.
     """
-    if language != "python":
-        return []
+    if language == "python":
+        return _extract_python_imports(tree)
+    if language in ("javascript", "typescript", "tsx"):
+        return _extract_jsts_imports(tree)
+    return []
+
+
+def _extract_python_imports(tree: tree_sitter.Tree) -> list[str]:
     targets: list[str] = []
     for child in tree.root_node.children:
         if child.type == "import_statement":
@@ -424,6 +431,50 @@ def _extract_imports(tree: tree_sitter.Tree, language: str) -> list[str]:
             if module is not None:
                 targets.append(_slice_text(module))
     return targets
+
+
+def _extract_jsts_imports(tree: tree_sitter.Tree) -> list[str]:
+    """JS / TS ``import`` statements.
+
+    Recognized shapes:
+      - ``import x from 'mod'``                -> ``mod``
+      - ``import { a, b } from 'mod'``         -> ``mod``
+      - ``import * as ns from 'mod'``          -> ``mod``
+      - ``import 'mod'``  (side-effect import) -> ``mod``
+      - dynamic ``import('mod')``              -> not currently captured
+      - ``require('mod')``                     -> not currently captured
+
+    The ``source`` (the module string) is what we want, NOT the
+    imported symbols -- the importable target is the module.
+    """
+    targets: list[str] = []
+    for child in tree.root_node.children:
+        if child.type != "import_statement":
+            continue
+        source = child.child_by_field_name("source")
+        if source is None:
+            # tree-sitter-javascript exposes the string as a direct
+            # child rather than a named field in some versions; fall
+            # back to scanning children.
+            for c in child.children:
+                if c.type == "string":
+                    source = c
+                    break
+        if source is None:
+            continue
+        targets.append(_unquote_jsts_string(_slice_text(source)))
+    return targets
+
+
+def _unquote_jsts_string(raw: str) -> str:
+    """Strip surrounding single / double / backtick quotes from a JS
+    string literal. The tree-sitter string node value INCLUDES the
+    quotes."""
+    s = raw.strip()
+    for q in ('"', "'", "`"):
+        if len(s) >= 2 and s.startswith(q) and s.endswith(q):
+            return s[1:-1]
+    return s
 
 
 # --- Helpers --------------------------------------------------------------
@@ -488,5 +539,225 @@ _LANGUAGE_EXTRACTORS: dict[str, LanguageExtractor] = {
     "python": _extract_python,
 }
 """Languages with a structural extractor. Others fall back to the
-module-only path in :func:`extract`. Phase 4 ships Python; later
-phases add JS/TS/Go etc."""
+module-only path in :func:`extract`. Phase 4 ships Python; v2.5.0
+adds JavaScript + TypeScript (registered after their extractor
+helpers are defined below); Go follows in v2.5.1."""
+
+
+# --- JavaScript / TypeScript extractor (v2.5.0) --------------------------
+
+# Tree-sitter-javascript + tree-sitter-typescript share most of the
+# AST shape we care about (function_declaration, class_declaration,
+# method_definition, import_statement, call_expression, ...). The
+# TS grammar adds parameter / return type annotations that we
+# silently ignore, plus interface / type_alias / enum nodes that
+# we leave for a future cut.
+
+_JSTS_DECLARATION_TYPES = frozenset(
+    {
+        "function_declaration",
+        "class_declaration",
+        # Arrow / function-expression assignments live under a
+        # ``lexical_declaration`` (const / let) or
+        # ``variable_declaration`` (var) wrapper.
+        "lexical_declaration",
+        "variable_declaration",
+        # TS interface / type alias / enum could land here later;
+        # the current extractor focuses on runtime declarations.
+    }
+)
+
+
+def _extract_jsts(tree: tree_sitter.Tree, source: bytes, file_path: str) -> list[CodeUnit]:
+    """v2.5.0 Tier 1 for JavaScript + TypeScript.
+
+    Walks the module's top-level statements and emits one CodeUnit
+    per function / class / arrow-function-assignment / method. Each
+    function / method records its call_sites for the Tier 2
+    resolver to consume.
+    """
+    units: list[CodeUnit] = []
+    for child in tree.root_node.children:
+        # ``export`` wraps the inner declaration; unwrap so we treat
+        # ``export function foo() {}`` like ``function foo() {}``.
+        node = _jsts_unwrap_export(child)
+        if node.type == "function_declaration":
+            units.append(_jsts_function_unit(node, source, file_path))
+        elif node.type == "class_declaration":
+            cls_unit = _jsts_class_unit(node, source, file_path)
+            units.append(cls_unit)
+            units.extend(_jsts_methods(node, source, file_path, parent=cls_unit))
+        elif node.type in ("lexical_declaration", "variable_declaration"):
+            # ``const f = () => {}`` -- pull the arrow function out
+            # so it counts as a top-level function declaration.
+            units.extend(_jsts_arrow_function_units(node, source, file_path))
+    return units
+
+
+def _jsts_unwrap_export(node: tree_sitter.Node) -> tree_sitter.Node:
+    """``export function foo() {}`` wraps the function in an
+    ``export_statement``. Return the inner declaration so callers
+    don't have to know about the wrapper."""
+    if node.type != "export_statement":
+        return node
+    for child in node.children:
+        if child.type in _JSTS_DECLARATION_TYPES:
+            return child
+    return node
+
+
+def _jsts_function_unit(
+    node: tree_sitter.Node,
+    source: bytes,
+    file_path: str,
+    *,
+    is_method: bool = False,
+    name_override: str | None = None,
+) -> CodeUnit:
+    name = name_override or _jsts_decl_name(node)
+    start_line = node.start_point[0] + 1
+    end_line = node.end_point[0] + 1
+    body_bytes = _slice_bytes(source, node)
+    body = body_bytes.decode("utf-8", errors="replace")
+    return CodeUnit(
+        type="code_method" if is_method else "code_function",
+        name=name,
+        body=_truncate_lines(body, FUNCTION_BODY_HEAD_LINES),
+        source_path=f"{file_path}:{start_line}-{end_line}",
+        description=None,
+        hash=_hash_bytes(body_bytes),
+        call_sites=_jsts_call_sites(node),
+    )
+
+
+def _jsts_class_unit(node: tree_sitter.Node, source: bytes, file_path: str) -> CodeUnit:
+    name = _jsts_decl_name(node)
+    start_line = node.start_point[0] + 1
+    end_line = node.end_point[0] + 1
+    body_bytes = _slice_bytes(source, node)
+    return CodeUnit(
+        type="code_class",
+        name=name,
+        body=_truncate_lines(body_bytes.decode("utf-8", errors="replace"), MODULE_HEAD_LINES),
+        source_path=f"{file_path}:{start_line}-{end_line}",
+        description=None,
+        hash=_hash_bytes(body_bytes),
+    )
+
+
+def _jsts_methods(
+    class_node: tree_sitter.Node,
+    source: bytes,
+    file_path: str,
+    *,
+    parent: CodeUnit,
+) -> list[CodeUnit]:
+    """Walk a class body, pulling out every ``method_definition``."""
+    methods: list[CodeUnit] = []
+    body = class_node.child_by_field_name("body")
+    if body is None:
+        return methods
+    for child in body.children:
+        if child.type != "method_definition":
+            continue
+        unit = _jsts_function_unit(child, source, file_path, is_method=True)
+        unit.parent_source_path = parent.source_path
+        methods.append(unit)
+    return methods
+
+
+def _jsts_arrow_function_units(
+    decl: tree_sitter.Node, source: bytes, file_path: str
+) -> list[CodeUnit]:
+    """``const x = () => {}`` / ``let x = function() {}`` -- pull
+    each variable declarator whose value is a function / arrow
+    function and emit a ``code_function`` named after the variable.
+    """
+    out: list[CodeUnit] = []
+    for child in decl.children:
+        if child.type != "variable_declarator":
+            continue
+        name_node = child.child_by_field_name("name")
+        value_node = child.child_by_field_name("value")
+        if name_node is None or value_node is None:
+            continue
+        if value_node.type not in ("arrow_function", "function_expression", "function"):
+            continue
+        name = _slice_text(name_node)
+        unit = _jsts_function_unit(value_node, source, file_path, name_override=name)
+        out.append(unit)
+    return out
+
+
+def _jsts_decl_name(node: tree_sitter.Node) -> str:
+    name_node = node.child_by_field_name("name")
+    if name_node is None:
+        return "<anonymous>"
+    return _slice_text(name_node)
+
+
+def _jsts_call_sites(fn_node: tree_sitter.Node) -> list[CallSite]:
+    """Walk a function / method body collecting every
+    ``call_expression`` (Tier 2's raw input)."""
+    body = fn_node.child_by_field_name("body")
+    if body is None:
+        return []
+    sites: list[CallSite] = []
+    _collect_jsts_calls(body, sites)
+    return sites
+
+
+def _collect_jsts_calls(node: tree_sitter.Node, out: list[CallSite]) -> None:
+    """DFS for ``call_expression`` nodes; skip nested function /
+    class definitions so they don't pollute the enclosing function's
+    call_sites."""
+    if node.type in (
+        "function_declaration",
+        "class_declaration",
+        "method_definition",
+        "arrow_function",
+        "function_expression",
+    ):
+        return
+    if node.type == "call_expression":
+        site = _jsts_call_site_from_node(node)
+        if site is not None:
+            out.append(site)
+    for child in node.children:
+        _collect_jsts_calls(child, out)
+
+
+def _jsts_call_site_from_node(call: tree_sitter.Node) -> CallSite | None:
+    """Read the function expression of a ``call_expression`` node
+    (JS / TS) and produce a :class:`CallSite`. JS expresses a
+    bare call as ``identifier`` and a member call as
+    ``member_expression`` (the JS analogue of Python's
+    ``attribute``)."""
+    fn = call.child_by_field_name("function")
+    if fn is None:
+        return None
+    line = call.start_point[0] + 1
+    if fn.type == "identifier":
+        return CallSite(callee_name=_slice_text(fn), receiver=None, line=line)
+    if fn.type == "member_expression":
+        receiver_node = fn.child_by_field_name("object")
+        property_node = fn.child_by_field_name("property")
+        if property_node is None:
+            return None
+        callee_name = _slice_text(property_node)
+        receiver = _slice_text(receiver_node) if receiver_node is not None else None
+        if receiver and "." in receiver:
+            receiver = receiver.split(".", 1)[0]
+        return CallSite(callee_name=callee_name, receiver=receiver, line=line)
+    return None
+
+
+# Register JS + TS extractors. TypeScript shares the JS shape -- TS-
+# only nodes (type annotations, interface_declaration, etc.) are
+# silently ignored by the walk above.
+_LANGUAGE_EXTRACTORS["javascript"] = _extract_jsts
+_LANGUAGE_EXTRACTORS["typescript"] = _extract_jsts
+# TSX shares the TypeScript grammar (with JSX nodes layered on top).
+# We register the same extractor so a .tsx file gets its function /
+# class declarations indexed alongside React extractor output.
+_LANGUAGE_EXTRACTORS["tsx"] = _extract_jsts
