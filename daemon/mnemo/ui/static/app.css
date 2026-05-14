@@ -4054,6 +4054,51 @@ dl.meta dd { margin: 0; color: var(--fg); }
   box-shadow: 0 0 0 1px var(--accent) inset;
 }
 
+/* v2.2.3: edge + label visibility toggles. Match the layout-buttons
+   palette (border, color) but pair with a leading dot that fills
+   when ON and outlines when OFF -- gives a quick visual scan of
+   what's enabled across the filter bar. */
+.nebula-toggle-buttons {
+  display: flex;
+  gap: 0.25rem;
+  margin-left: 0.45rem;
+}
+.nebula-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.2rem 0.55rem;
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--fg);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: color var(--transition), border-color var(--transition),
+              background var(--transition);
+}
+.nebula-toggle:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.nebula-toggle .nebula-toggle-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 4px var(--accent);
+  transition: background var(--transition), box-shadow var(--transition);
+}
+.nebula-toggle.off {
+  color: var(--fg-muted);
+  background: transparent;
+}
+.nebula-toggle.off .nebula-toggle-dot {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--fg-dim);
+}
+
 .nebula-stats {
   margin-left: auto;
   font-size: 0.7rem;
