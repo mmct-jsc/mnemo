@@ -30,6 +30,8 @@ script that wants to classify a path (e.g. ``mnemo source repair``).
 
 from __future__ import annotations
 
+import os
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -236,6 +238,33 @@ def _has_frontmatter_type(path: Path) -> bool:
     return False
 
 
+def _walk_with_prune(
+    root: Path,
+    *,
+    skip_dirs: frozenset[str],
+) -> Iterator[Path]:
+    """Walk ``root`` and yield every file path, pruning entire skip-dir
+    subtrees up front.
+
+    v2.6.0 polish: ``Path.rglob`` walks INSIDE skip-dir trees (it does
+    not support pre-pruning) which makes a propose / scan call on a
+    repo that ships ``node_modules`` take many seconds-to-minutes
+    even though every file is later discarded. ``os.walk`` is the
+    standard way to prune by mutating its yielded ``dirs`` list, which
+    short-circuits the deep traversal.
+    """
+    if not root.is_dir():
+        return
+    skip_lc = {d.lower() for d in skip_dirs}
+    for dirpath, dirs, files in os.walk(root):
+        # In-place mutation: os.walk re-reads ``dirs`` each iteration so
+        # removing entries prunes that subtree entirely.
+        dirs[:] = [d for d in dirs if d.lower() not in skip_lc]
+        base = Path(dirpath)
+        for name in files:
+            yield base / name
+
+
 def scan_path(
     path: Path | str,
     *,
@@ -266,17 +295,14 @@ def scan_path(
             has_git=False,
         )
 
-    for f in p.rglob("*"):
-        if not f.is_file():
-            continue
+    # v2.6.0 polish: prune skip-dirs at walk time so node_modules /
+    # __pycache__ / .git don't get traversed at all. ``Path.rglob``
+    # descends into them and discards files post-hoc -- death on a
+    # NestJS monorepo with 10 services each pulling node_modules.
+    for f in _walk_with_prune(p, skip_dirs=skip_dirs):
         try:
             rel = f.relative_to(p)
         except ValueError:
-            continue
-        # Skip if any parent dir name is in the skip set. The file's own
-        # name is excluded (rel.parts[:-1]) so a file literally named
-        # ``.git`` -- unusual but legal -- doesn't get silently dropped.
-        if any(part in skip_dirs for part in rel.parts[:-1]):
             continue
         ext = f.suffix.lower()
         by_ext[ext] = by_ext.get(ext, 0) + 1
@@ -416,7 +442,13 @@ def _gather_gitignores(
 
     merged: list[str] = []
     found: list[str] = []
-    for f in sorted(root.rglob(".gitignore")):
+    # v2.6.0 polish: prune skip-dirs at walk time. Without this an
+    # rglob('.gitignore') call walks the entire node_modules tree on
+    # a NestJS monorepo and never returns.
+    gitignore_files = sorted(
+        f for f in _walk_with_prune(root, skip_dirs=skip_dirs) if f.name == ".gitignore"
+    )
+    for f in gitignore_files:
         if not f.is_file():
             continue
         try:
@@ -513,15 +545,9 @@ def propose_source(
         elif ext in RECOGNIZED_SOURCE_EXTS:
             code_files.append(p)
     else:
-        for f in p.rglob("*"):
-            if not f.is_file():
-                continue
-            try:
-                rel = f.relative_to(p)
-            except ValueError:
-                continue
-            if any(part in skip_dirs for part in rel.parts[:-1]):
-                continue
+        # v2.6.0 polish: prune skip-dirs at walk time -- see _walk_with_prune
+        # docstring for rationale.
+        for f in _walk_with_prune(p, skip_dirs=skip_dirs):
             ext = f.suffix.lower()
             if ext in RECOGNIZED_DOC_EXTS:
                 doc_files.append(f)
