@@ -3258,11 +3258,14 @@ dl.meta dd { margin: 0; color: var(--fg); }
 .nebula-detail::-webkit-scrollbar-thumb:hover { background: rgba(126, 231, 224, 0.4); }
 
 /* Silky fade-in for the detail content when a node is selected.
-   Triggered by Alpine's x-if mounting the inner div. */
+   Triggered by Alpine's x-if mounting the inner div. ``.nebula-body``
+   is the v2.2.7 generic body container (replaces the old hardcoded
+   ``<pre>``; mnemoRenderBody now picks code vs markdown). */
 .nebula-detail h3,
 .nebula-detail .ntype,
 .nebula-detail .nsource,
 .nebula-detail .ndesc,
+.nebula-detail .nebula-body,
 .nebula-detail pre,
 .nebula-detail h4,
 .nebula-detail .nlist,
