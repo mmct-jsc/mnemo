@@ -2,6 +2,50 @@
 
 All notable changes to mnemo are documented here.
 
+## [2.2.2] - 2026-05-14
+
+**Consistent select feedback in Nebula + stronger heart-beat pulse.**
+
+### Fixed
+
+- **Canvas-tap selection had no visual feedback on the node itself.**
+  Clicking a node directly on the graph dimmed the rest of the
+  canvas and opened the detail panel, but the selected node sat
+  perfectly still -- no camera framing, no perceptible pulse.
+  Clicking the same node from the file tree DID frame it
+  (camera pan + zoom 1.4), so the same logical action felt
+  totally different depending on the path. Two changes:
+
+  - **Camera framing is now in ``selectFromCanvas``**, so every
+    entry path (canvas tap, file-tree click, neighbor list click,
+    ``?node=`` URL deep-link) runs the same ``cy.animate({center,
+    zoom})`` over 350ms. Zoom bumps UP to 1.4 when the user is
+    further out, otherwise their current zoom is preserved (we
+    don't yank them out when they've zoomed in deliberately).
+    The duplicate ``cy.animate`` calls in ``focusNode`` and the
+    ``?node=`` pre-select have been removed.
+  - **The pulse is now unmistakable.** Pre-v2.2.2 the
+    ``_startPulse`` animation went underlay-padding 14 -> 20
+    (+6 px) and underlay-opacity 0.6 -> 0.7 (+0.1) over a 900ms
+    half-cycle. Too subtle to read as "beating" without the
+    camera framing the node. Now it goes 14 -> 28 (+14 px) and
+    0.6 -> 0.95 (+0.35) over a 600ms half-cycle. The selected
+    node now visibly breathes -- you can see it from across the
+    canvas, not just when zoomed in.
+
+### Behavior at a glance
+
+  before:   click node on canvas -> nothing moves, faint pulse
+            click file in tree   -> camera pans, faint pulse
+
+  after:    click node on canvas -> camera frames it, strong pulse
+            click file in tree   -> camera frames it, strong pulse
+
+All five existing tests in ``test_nebula_progressive.py`` still
+pass (they assert ``cy.animate({center: ...})`` is referenced --
+still is, just in one place now). 545 unit tests pass total.
+Ruff lint + format clean.
+
 ## [2.2.1] - 2026-05-14
 
 **Phase 4 of the v2.2 progressive-UX rollout: Nebula goes
