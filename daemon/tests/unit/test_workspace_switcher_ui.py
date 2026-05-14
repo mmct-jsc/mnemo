@@ -46,8 +46,7 @@ def test_base_html_does_not_double_init_workspace_switcher(base_html: str) -> No
     assert matches, "workspaceSwitcher x-data tag not found"
     for m in matches:
         assert 'x-init="init()"' not in m, (
-            "double-init anti-pattern: drop x-init=init() per "
-            "feedback_alpine_double_init.md"
+            "double-init anti-pattern: drop x-init=init() per feedback_alpine_double_init.md"
         )
 
 

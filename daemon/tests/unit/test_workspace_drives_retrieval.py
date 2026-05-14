@@ -61,9 +61,7 @@ def test_resolve_falls_back_to_legacy_active_project_field(store: Store) -> None
 
 def test_resolve_uses_workspace_first_project_key(store: Store) -> None:
     """v2.6 default: with no explicit hints, active workspace wins."""
-    ws = workspaces.create_workspace(
-        store, name="ws", project_keys=["P_FIRST", "P_SECOND"]
-    )
+    ws = workspaces.create_workspace(store, name="ws", project_keys=["P_FIRST", "P_SECOND"])
     workspaces.set_active_workspace(store, ws.id)
     body = _Body()
     assert _resolve_query_project(store, body) == "P_FIRST"
@@ -94,9 +92,7 @@ def test_resolve_workspace_with_empty_project_keys_is_skipped(store: Store) -> N
 # --- Query route uses the resolved project ----------------------------------
 
 
-def test_query_route_uses_workspace_project_for_retrieval(
-    client: TestClient, store: Store
-) -> None:
+def test_query_route_uses_workspace_project_for_retrieval(client: TestClient, store: Store) -> None:
     """A POST /v1/query with no explicit project_key sees results from the
     active workspace's first project_key."""
     # Seed a P1-tagged node.
@@ -134,9 +130,7 @@ def test_active_project_pill_removed_from_base_html() -> None:
     assert 'x-data="activeProjectWidget()"' not in html, (
         "v2.6 phase 10.1 must drop the active-project pill from the top bar"
     )
-    assert 'class="active-proj"' not in html, (
-        "the old .active-proj container should also be gone"
-    )
+    assert 'class="active-proj"' not in html, "the old .active-proj container should also be gone"
 
 
 def test_active_project_endpoints_still_exist(client: TestClient) -> None:

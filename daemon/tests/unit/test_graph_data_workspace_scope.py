@@ -69,22 +69,18 @@ def test_project_keys_returns_balanced_set_across_projects(
     filter ran (the aibox+edge workspace looked like a
     disconnected grid for one repo + nothing for the other).
 
-    Per-key query (uses the project_key index) plus type-priority
-    sort returns a balanced set even when the workspace exceeds
-    GRAPH_NODE_CAP=3000.
+    Per-key query (uses the project_key index) returns the full
+    union with no truncation.
     """
     _seed(store, key="P1", n=800, prefix="p1n")
     _seed(store, key="P2", n=800, prefix="p2n")
     resp = client.get("/ui/graph-data?project_keys=P1,P2")
     data = resp.json()
     nodes = [e for e in data["elements"] if "id" in e["data"]]
-    assert len(nodes) == 1600, (
-        f"expected 1600 nodes under the 3000 cap; got {len(nodes)}"
-    )
+    assert len(nodes) == 1600
     by_proj: dict[str, int] = {}
     for n in nodes:
         by_proj[n["data"]["project"]] = by_proj.get(n["data"]["project"], 0) + 1
-    # Both projects surface in full when total is below the cap.
     assert by_proj.get("P1") == 800
     assert by_proj.get("P2") == 800
     assert data["truncated"] is False
@@ -92,15 +88,15 @@ def test_project_keys_returns_balanced_set_across_projects(
     assert data["shown_node_count"] == 1600
 
 
-def test_project_keys_tree_modules_unbounded_even_when_canvas_truncated(
-    client: TestClient, store: Store
-) -> None:
-    """v2.6.0 polish: tree_modules side-channel returns EVERY in-scope
-    code_module regardless of the canvas cap, so the file tree shows
-    the full project layout even when the canvas is truncated. Clicking
-    a tree row whose id isn't on the canvas triggers an ego-network
-    fetch via ?node=."""
-    # Seed 4000 code_modules so the canvas truncates (cap = 3000).
+def test_project_keys_returns_all_in_scope_no_truncation(client: TestClient, store: Store) -> None:
+    """v2.6.0 polish: 'always display all'. No GRAPH_NODE_CAP. The
+    user wants the full graph so v3 chat can reference any node in
+    the flow tree. The canvas + tree both reflect 100% of the scope.
+
+    Seed 4000 code_modules -> response returns ALL of them. The
+    tree_modules side-channel mirrors the same count (1:1 since
+    every node IS a module here).
+    """
     for i in range(4000):
         store.upsert_node(
             Node.new(
@@ -114,64 +110,30 @@ def test_project_keys_tree_modules_unbounded_even_when_canvas_truncated(
         )
     resp = client.get("/ui/graph-data?project_keys=P1")
     data = resp.json()
-    # The canvas truncates (architecture-priority cap + isolate drop).
-    assert data["truncated"] is True
-    # But the tree side-channel carries EVERY module.
+    nodes = [e for e in data["elements"] if "id" in e["data"]]
+    # No truncation -- every in-scope node lands on the canvas.
+    assert data["truncated"] is False
+    assert len(nodes) == 4000
+    # tree_modules carries every module by source_path.
     assert "tree_modules" in data
     assert len(data["tree_modules"]) == 4000
-    # Each entry has the navigation contract: id + source_path.
     for m in data["tree_modules"][:5]:
         assert "id" in m
         assert "source_path" in m
         assert m["type"] == "code_module"
 
 
-def test_project_keys_truncates_huge_workspaces_with_banner(
-    client: TestClient, store: Store
-) -> None:
-    """Workspaces past GRAPH_NODE_CAP trigger the type-priority cap
-    + drop isolated nodes in the rendered subgraph. The response
-    surfaces total_in_scope so the UI can render a banner.
-
-    Seed a workspace with 4000 nodes + edges chaining them in pairs
-    so the rendered set is connected after the cap kicks in.
-    """
-    _seed(store, key="P1", n=4000, prefix="big")
-    # Wire pairs of nodes so the cap'd set has a connected core.
-    all_nodes = list(store.list_nodes(project_key="P1", limit=4000))
-    for i in range(0, len(all_nodes) - 1, 2):
-        store.add_edge(all_nodes[i].id, all_nodes[i + 1].id, "mentions")
+def test_project_keys_isolates_kept_in_full_graph(client: TestClient, store: Store) -> None:
+    """v2.6.0 polish: isolate-drop was a workaround for the previous
+    truncation cap; now that we always return the full graph, isolated
+    nodes stay so v3 chat can reference them. The client picks a
+    layout strategy that handles disconnected components."""
+    _seed(store, key="P1", n=50, prefix="iso")
     resp = client.get("/ui/graph-data?project_keys=P1")
     data = resp.json()
     nodes = [e for e in data["elements"] if "id" in e["data"]]
-    assert data["truncated"] is True
-    assert data["total_in_scope"] == 4000
-    # Either the GRAPH_NODE_CAP kicked in OR isolates were dropped.
-    # Both produce <= 3000 nodes; for this seed every node has an
-    # edge so we expect the full cap.
-    assert 1 <= len(nodes) <= 3000
-
-
-def test_project_keys_drops_isolated_nodes_after_cap(
-    client: TestClient, store: Store
-) -> None:
-    """v2.6.0 polish: the architecture-priority cap kept modules +
-    classes but discarded their function/method anchors -- the user
-    saw a 'grid of disconnected cells' for any module whose only
-    edges pointed at filtered-out functions. Drop isolates from the
-    rendered subgraph so fcose lays out a connected core.
-
-    Seed 4000 isolate nodes (no edges) -> the cap renders nothing
-    because every kept node is isolated after edge filter.
-    """
-    _seed(store, key="P1", n=4000, prefix="iso")
-    resp = client.get("/ui/graph-data?project_keys=P1")
-    data = resp.json()
-    nodes = [e for e in data["elements"] if "id" in e["data"]]
-    # Truncated workspace with no edges -> all isolates dropped.
-    assert data["truncated"] is True
-    assert len(nodes) == 0
-    assert data["total_in_scope"] == 4000
+    assert len(nodes) == 50
+    assert data["truncated"] is False
 
 
 def test_project_keys_filters_to_csv_set(client: TestClient, store: Store) -> None:

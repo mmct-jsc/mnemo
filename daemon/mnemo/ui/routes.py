@@ -18,11 +18,34 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from mnemo import config, retrieve, workspaces as ws_mod
+from mnemo import config, retrieve
+from mnemo import workspaces as ws_mod
 from mnemo.embed import Embedder
 from mnemo.store import Node, Store
 
 UI_DIR = Path(__file__).parent
+
+# v2.6.0: type-priority order for the workspace canvas. Used by the
+# /ui/graph-data route when the in-scope set exceeds the canvas cap.
+# Module-level so ruff N806 stays happy + the constant is testable
+# from outside.
+_GRAPH_TYPE_PRIORITY: dict[str, int] = {
+    "code_module": 0,
+    "code_class": 1,
+    "code_route": 2,
+    "code_endpoint": 3,
+    "code_component": 4,
+    "memory_reference": 5,
+    "memory_project": 6,
+    "memory_feedback": 7,
+    "memory_user": 8,
+    "session_summary": 9,
+    "project_doc": 10,
+    "plan_doc": 11,
+    "code_function": 12,
+    "code_method": 13,
+    "commit": 14,
+}
 TEMPLATES_DIR = UI_DIR / "templates"
 STATIC_DIR = UI_DIR / "static"
 
@@ -764,7 +787,8 @@ def mount_ui(
                 boundary: list[Node] = []
                 if not base_only:
                     null_candidates = [
-                        n for n in nodes
+                        n
+                        for n in nodes
                         if n.project_key is None and not n.base and n.id not in in_scope_ids
                     ]
                     if null_candidates and in_scope_ids:
@@ -782,53 +806,22 @@ def mount_ui(
         else:
             # v2.6.0 polish: when a workspace project_keys scope is set,
             # query per-key (uses the project_key index) so the canvas
-            # gets every in-scope node up to ``GRAPH_NODE_CAP``. The
-            # global ``list_nodes(limit=2000)`` path used to truncate
-            # large workspaces silently -- a 10 k-node monorepo would
-            # show as a disconnected grid because most of the
-            # candidate set was discarded BEFORE the scope filter ran.
-            #
-            # 3 000 is the practical fcose limit on a modern browser;
-            # workspaces above this cap surface a "truncated" banner
-            # in the response so the UI can prompt drill-down via
-            # ?node= ego-network.
-            GRAPH_NODE_CAP = 3_000
-
-            # v2.6.0 polish: type priority -- when the in-scope set
-            # exceeds GRAPH_NODE_CAP, keep the most-skeletal nodes
-            # first so the user sees the architecture before the
-            # implementation noise. Modules / classes / routes /
-            # endpoints / components anchor the graph; functions +
-            # methods fill remaining capacity.
-            _TYPE_PRIORITY: dict[str, int] = {
-                "code_module": 0,
-                "code_class": 1,
-                "code_route": 2,
-                "code_endpoint": 3,
-                "code_component": 4,
-                "memory_reference": 5,
-                "memory_project": 6,
-                "memory_feedback": 7,
-                "memory_user": 8,
-                "session_summary": 9,
-                "project_doc": 10,
-                "plan_doc": 11,
-                "code_function": 12,
-                "code_method": 13,
-                "commit": 14,
-            }
-
+            # gets EVERY in-scope node. The chat-companion (v3) will
+            # use the graph as a reference flow tree -- the user
+            # explicitly asked for "always display all", so no
+            # truncation cap. fcose layout choice + the client-side
+            # progressive layout strategy handle large graphs without
+            # blocking the main thread.
             if keys_set is not None:
                 seen_ids: set[str] = set()
                 collected: list[Node] = []
-                # v2.6.0 polish: keep a separate unbounded list of every
-                # code_module in scope so the file-tree shows the full
-                # repo structure. This is the navigation surface; the
-                # canvas cap below doesn't apply here.
+                # v2.6.0 polish: every in-scope node returned; the
+                # tree_modules side-channel still captures every module
+                # by source_path for the file tree navigation surface.
                 for key in keys_set:
                     for n in s.list_nodes(
                         project_key=key,
-                        limit=100_000,  # unbounded for tree purposes
+                        limit=100_000,
                         include_base=False,
                     ):
                         if n.id not in seen_ids:
@@ -851,25 +844,20 @@ def mount_ui(
                         seen_ids.add(n.id)
                         collected.append(n)
                 total_in_scope_total = len(collected)
-                # Apply type priority then cap at GRAPH_NODE_CAP so the
-                # canvas can render. Stable sort -- ties keep
-                # updated_at-desc order from list_nodes.
-                collected.sort(key=lambda n: (_TYPE_PRIORITY.get(n.type, 99), -n.updated_at))
-                in_scope = collected[:GRAPH_NODE_CAP]
+                # Type-priority sort so the architecture-shaping nodes
+                # land first in the rendered list -- when the client
+                # picks a layout the high-priority types sit near the
+                # center. No truncation.
+                collected.sort(key=lambda n: (_GRAPH_TYPE_PRIORITY.get(n.type, 99), -n.updated_at))
+                in_scope = collected
                 in_scope_ids = {n.id for n in in_scope}
                 # pass 2: NULL-project boundary nodes EDGE-connected to
-                # in-scope. Pull NULL-project candidates directly via
-                # type-agnostic query, then keep only the edge-connected
-                # ones.
+                # in-scope.
                 boundary: list[Node] = []
                 if in_scope_ids:
-                    # Walk every node once to find NULL-project candidates.
-                    # This is the one O(N) scan we can't avoid because
-                    # list_nodes(project_key=None) doesn't exist as a
-                    # filter today. Still cheap -- one pass over the
-                    # store.
                     null_candidates = [
-                        n for n in s.list_nodes(limit=GRAPH_NODE_CAP)
+                        n
+                        for n in s.list_nodes(limit=100_000)
                         if n.project_key is None and not n.base and n.id not in in_scope_ids
                     ]
                     if null_candidates:
@@ -885,13 +873,9 @@ def mount_ui(
                         boundary = [n for n in null_candidates if n.id in connected]
                 nodes = in_scope + boundary
             elif base_only or project:
-                nodes = s.list_nodes(limit=GRAPH_NODE_CAP)
+                nodes = s.list_nodes(limit=100_000)
                 in_scope = [n for n in nodes if _passes_scope_strict(n)]
                 in_scope_ids = {n.id for n in in_scope}
-                # Populate tree_modules from in_scope (single-project
-                # path doesn't need unbounded lookup -- list_nodes is
-                # capped here for the canvas path, and the same set
-                # feeds the tree).
                 tree_modules.extend(
                     {
                         "id": n.id,
@@ -906,7 +890,8 @@ def mount_ui(
                 boundary = []
                 if not base_only:
                     null_candidates = [
-                        n for n in nodes
+                        n
+                        for n in nodes
                         if n.project_key is None and not n.base and n.id not in in_scope_ids
                     ]
                     if null_candidates and in_scope_ids:
@@ -926,18 +911,12 @@ def mount_ui(
                 # to protect canvas rendering across the entire store.
                 nodes = s.list_nodes(limit=2000)
 
-        # v2.6.0 polish: when the candidate set was truncated by the
-        # workspace path's type-priority cap, drop nodes that have no
-        # edge to any other rendered node. The cap kept modules +
-        # classes but dropped functions; orphan modules whose only
-        # ``defines`` edges point at filtered-out functions show up as
-        # disconnected grid cells in fcose layout, which is visually
-        # noisy + the user's "no connections" complaint. Keep the
-        # connected core; the file-tree on the left still surfaces
-        # every project + module by source_path so nothing is hidden
-        # from navigation.
-        drop_isolates = total_in_scope_total > 0 and total_in_scope_total > len(nodes)
-
+        # v2.6.0 polish: no isolate drop. The user wants the full
+        # graph so v3 chat can reference any node + flow. Isolated
+        # nodes get a grid layout cluster on the canvas; the file
+        # tree on the left renders them too. The chat companion can
+        # still cite them. The layout choice (force vs grid) is the
+        # client's decision -- not ours to filter for it.
         elements: list[dict[str, Any]] = []
         candidate_ids: set[str] = {n.id for n in nodes}
         edges_for_render: list[Any] = []
@@ -946,16 +925,8 @@ def mount_ui(
                 if edge.dst_id in candidate_ids and edge.src_id in candidate_ids:
                     edges_for_render.append(edge)
 
-        # Compute degree per candidate to identify isolates.
-        degree: dict[str, int] = {}
-        for edge in edges_for_render:
-            degree[edge.src_id] = degree.get(edge.src_id, 0) + 1
-            degree[edge.dst_id] = degree.get(edge.dst_id, 0) + 1
-
         node_ids: set[str] = set()
         for n in nodes:
-            if drop_isolates and degree.get(n.id, 0) == 0:
-                continue
             elements.append(
                 {
                     "data": {
@@ -992,17 +963,19 @@ def mount_ui(
         # priority-cap may have truncated; other branches leave it at 0
         # which the client treats as "no truncation".
         shown_count = len(node_ids)
-        truncated = total_in_scope_total > shown_count
+        # v2.6.0 polish: truncated is always False after the cap was
+        # dropped -- kept in the schema for back-compat with clients
+        # still reading the field. total_in_scope still useful so
+        # the UI can show "rendering 10,762 nodes" once.
         return JSONResponse(
             {
                 "elements": elements,
                 "shown_node_count": shown_count,
-                "total_in_scope": total_in_scope_total,
-                "truncated": truncated,
+                "total_in_scope": total_in_scope_total or shown_count,
+                "truncated": False,
                 # v2.6.0 polish: unbounded module list for the
                 # left-panel file tree. Lets the user navigate to a
-                # module that's outside the canvas cap (click triggers
-                # an ego-network fetch via ?node=).
+                # module that may not be rendered on the canvas.
                 "tree_modules": tree_modules,
             }
         )

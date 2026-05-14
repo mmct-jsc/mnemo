@@ -109,7 +109,7 @@ def _seed_full_universe(store: Store, embedder: FakeEmbedder | None = None) -> d
             type="code_function",
             name=f"p_code::func{i}",
             body="def f(): ...",
-            source_path=f"/p_code/mod{i}.py:{i*10}-{(i+1)*10}",
+            source_path=f"/p_code/mod{i}.py:{i * 10}-{(i + 1) * 10}",
             source_kind="code_repo",
             description=f"func {i}",
             project_key="P_CODE",
@@ -160,9 +160,7 @@ def test_base_only_topbar_shows_no_workspace(client: TestClient, store: Store) -
     assert "is-base-only" in body or "No workspace" in body
 
 
-def test_base_only_workspaces_active_returns_null(
-    client: TestClient, store: Store
-) -> None:
+def test_base_only_workspaces_active_returns_null(client: TestClient, store: Store) -> None:
     _seed_full_universe(store)
     workspaces.clear_active_workspace(store)
     resp = client.get("/v1/workspaces/active")
@@ -170,9 +168,7 @@ def test_base_only_workspaces_active_returns_null(
     assert resp.json() == {"active": None}
 
 
-def test_base_only_code_landing_shows_pick_workspace(
-    client: TestClient, store: Store
-) -> None:
+def test_base_only_code_landing_shows_pick_workspace(client: TestClient, store: Store) -> None:
     _seed_full_universe(store)
     workspaces.clear_active_workspace(store)
     resp = client.get("/code")
@@ -184,9 +180,7 @@ def test_base_only_code_landing_shows_pick_workspace(
     assert "BASE-only" in body or "Pick a workspace" in body
 
 
-def test_base_only_graph_data_returns_only_base_nodes(
-    client: TestClient, store: Store
-) -> None:
+def test_base_only_graph_data_returns_only_base_nodes(client: TestClient, store: Store) -> None:
     _seed_full_universe(store)
     workspaces.clear_active_workspace(store)
     resp = client.get("/ui/graph-data?base_only=1")
@@ -217,9 +211,7 @@ def test_base_only_query_returns_base_hits(
 # --- State 2: workspace with code + memory ---------------------------------
 
 
-def test_code_workspace_topbar_shows_workspace_name(
-    client: TestClient, store: Store
-) -> None:
+def test_code_workspace_topbar_shows_workspace_name(client: TestClient, store: Store) -> None:
     _seed_full_universe(store)
     ws = workspaces.create_workspace(store, name="code-ws", project_keys=["P_CODE"])
     workspaces.set_active_workspace(store, ws.id)
@@ -231,9 +223,7 @@ def test_code_workspace_topbar_shows_workspace_name(
     assert 'x-text="active ? active.name' in body
 
 
-def test_code_workspace_code_landing_lists_repo_card(
-    client: TestClient, store: Store
-) -> None:
+def test_code_workspace_code_landing_lists_repo_card(client: TestClient, store: Store) -> None:
     _seed_full_universe(store)
     ws = workspaces.create_workspace(store, name="code-ws", project_keys=["P_CODE"])
     workspaces.set_active_workspace(store, ws.id)
@@ -245,9 +235,7 @@ def test_code_workspace_code_landing_lists_repo_card(
     assert "P_OTHER" not in body or body.count("P_OTHER") == 0
 
 
-def test_code_workspace_graph_data_surfaces_code_modules(
-    client: TestClient, store: Store
-) -> None:
+def test_code_workspace_graph_data_surfaces_code_modules(client: TestClient, store: Store) -> None:
     _seed_full_universe(store)
     ws = workspaces.create_workspace(store, name="code-ws", project_keys=["P_CODE"])
     workspaces.set_active_workspace(store, ws.id)
@@ -357,9 +345,7 @@ def test_workspaces_page_lists_two_workspaces(client: TestClient, store: Store) 
     assert 'x-data="workspacesPage()"' in body
 
 
-def test_workspaces_active_switch_broadcasts_event(
-    client: TestClient, store: Store
-) -> None:
+def test_workspaces_active_switch_broadcasts_event(client: TestClient, store: Store) -> None:
     import queue
 
     _seed_full_universe(store)
@@ -396,9 +382,7 @@ def test_reindex_report_endpoint_404_then_populated(
     assert "suspicious" in body
 
 
-def test_sources_propose_returns_dual_proposal(
-    client: TestClient, store: Store, tmp_path
-) -> None:  # noqa: ANN001
+def test_sources_propose_returns_dual_proposal(client: TestClient, store: Store, tmp_path) -> None:  # noqa: ANN001
     docs = tmp_path / "docs"
     docs.mkdir()
     for i in range(5):
@@ -414,14 +398,10 @@ def test_sources_propose_returns_dual_proposal(
     assert kinds == {"docs_dir", "code_repo"}
 
 
-def test_hard_cap_refuses_with_per_project_payload(
-    client: TestClient, store: Store
-) -> None:
+def test_hard_cap_refuses_with_per_project_payload(client: TestClient, store: Store) -> None:
     _seed_full_universe(store)
     ws = workspaces.create_workspace(store, name="big-ws", project_keys=["P_CODE"])
-    resp = client.post(
-        f"/v1/workspaces/{ws.id}/activate", params={"hard_cap_nodes": 1}
-    )
+    resp = client.post(f"/v1/workspaces/{ws.id}/activate", params={"hard_cap_nodes": 1})
     assert resp.status_code == 409
     detail = resp.json()["detail"]
     assert detail["error"] == "workspace_too_large"
@@ -444,11 +424,16 @@ def test_nebula_file_tree_has_base_only_copy(client: TestClient) -> None:
     assert "No code modules in workspace" in body
 
 
-def test_nebula_template_has_truncated_banner(client: TestClient) -> None:
+def test_nebula_template_has_status_chip(client: TestClient) -> None:
+    """v2.6.0 polish: the truncation banner was replaced with a
+    always-on status chip in the lower-right. Shows '<count> nodes ·
+    <workspace>' without overlapping the pan/zoom hint or scope
+    chip in the top row."""
     resp = client.get("/graph")
     body = resp.text
-    assert "nebula-truncated-banner" in body
-    assert 'x-show="truncated"' in body
+    assert "nebula-status" in body
+    assert "nebula-status-ws" in body
+    assert "shownNodeCount" in body
 
 
 def test_nebula_template_reads_active_workspace_in_init(
