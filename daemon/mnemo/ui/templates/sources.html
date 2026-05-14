@@ -18,6 +18,52 @@
     </div>
   </header>
 
+  <!-- v2.2 phase 3: streaming reindex progress. Reuses the
+       palette-driven .bar-fill + the phase 1 mnemoStreamFromSSE
+       helper + the phase 2 /v1/reindex/events endpoint. See
+       docs/plans/2026-05-14-ux-progressive-design.md § 3. -->
+  <div class="reindex-progress" x-show="progress.active" x-cloak
+       :class="{ 'reindex-done': progress.done }">
+    <div class="reindex-progress-row">
+      <span class="reindex-counter">
+        <span class="dot pulse" aria-hidden="true"></span>
+        <span x-text="progress.total
+                        ? (progress.idx + ' / ' + progress.total)
+                        : (progress.idx + ' files')"></span>
+      </span>
+      <span class="reindex-current" :title="progress.currentFile"
+            x-text="progress.currentFile"></span>
+      <button class="link-button" type="button"
+              @click="cancelReindex()"
+              :disabled="progress.done"
+              x-show="!progress.done" x-cloak>stop</button>
+    </div>
+    <div class="bar-track"
+         style="--type-color: #7ee7e0;"
+         :style="progress.errors.length
+                   ? '--type-color: #f87171;'
+                   : '--type-color: #7ee7e0;'">
+      <div class="bar-fill"
+           :style="'width: ' + (
+             progress.total
+               ? Math.min(100, progress.idx * 100 / progress.total)
+               : Math.min(95, progress.idx * 4)
+           ) + '%;'"></div>
+    </div>
+    <p class="reindex-summary" x-show="progress.done" x-cloak>
+      <span x-text="progress.added"></span> added &middot;
+      <span x-text="progress.updated"></span> updated &middot;
+      <span x-text="progress.unchanged"></span> unchanged &middot;
+      <span x-text="progress.removed"></span> removed
+      <span x-show="progress.errors.length" x-cloak>
+        &middot;
+        <span class="err" x-text="progress.errors.length + ' errors'"></span>
+      </span>
+      <span class="hint" x-show="progress.durationMs > 0" x-cloak
+            x-text="' &middot; ' + (progress.durationMs / 1000).toFixed(1) + 's'"></span>
+    </p>
+  </div>
+
   {% if sources %}
   <table>
     <thead>
@@ -238,6 +284,20 @@ function sourcesPage() {
     formOpen: false,
     editing: false,
     saving: false,
+    // v2.2 phase 3 streaming reindex progress. ``active`` toggles
+    // the .reindex-progress block; ``done`` flips to true after the
+    // SSE 'done' event lands (we keep showing the bar for ~4s after
+    // so the user can read the summary, then auto-dismiss).
+    progress: {
+      active: false, done: false,
+      idx: 0, total: 0,
+      currentFile: '',
+      added: 0, updated: 0, unchanged: 0, removed: 0,
+      errors: [],
+      durationMs: 0,
+    },
+    _reindexCtrl: null,
+    _reindexStream: null,
     form: { path: '', kind: 'memory_dir', project_key: '', include: '', exclude: '', enabled: true, force: false },
     // v2.0 phase 2: dry-run preview. ``runPreview()`` hits
     // ``POST /v1/sources/preview`` whenever the path field changes;
@@ -316,15 +376,115 @@ function sourcesPage() {
       setTimeout(tick, 2000);
     },
 
+    // v2.2 phase 3: stream-first reindex. Opens an SSE subscription to
+    // /v1/reindex/events; per-file events update the progress bar
+    // live. Falls back to the v2.1 POST + poll path when SSE is
+    // unavailable (old browsers, restrictive proxies, EventSource
+    // disabled).
     reindexAll() {
+      // Reset state for a fresh run.
       this.running = true;
+      this.progress = {
+        active: true, done: false,
+        idx: 0, total: 0,
+        currentFile: 'starting...',
+        added: 0, updated: 0, unchanged: 0, removed: 0,
+        errors: [],
+        durationMs: 0,
+      };
+
+      // SSE path. The phase 1 primitive handles named-event dispatch,
+      // JSON decoding, and AbortSignal-based cancellation.
+      if (typeof window.EventSource !== 'function' || !window.mnemoStreamFromSSE) {
+        // Browser too old for SSE -- fall straight through to POST.
+        this._reindexPostFallback();
+        return;
+      }
+      this._reindexCtrl = new AbortController();
+      let sawAnyEvent = false;
+      this._reindexStream = window.mnemoStreamFromSSE('/v1/reindex/events', {
+        signal: this._reindexCtrl.signal,
+        onEvent: (name, data) => {
+          sawAnyEvent = true;
+          if (name === 'start') {
+            // total_files isn't known yet -- the design accepts an
+            // indeterminate bar that fills as idx grows.
+            this.progress.currentFile = 'scanning...';
+          } else if (name === 'busy') {
+            // Another reindex is already running. Don't double-fire;
+            // poll the status endpoint instead.
+            this.progress.currentFile = 'already running -- waiting...';
+            this._pollReindex();
+          } else if (name === 'file') {
+            this.progress.idx = data.idx || 0;
+            this.progress.currentFile = data.path || '';
+            this.progress.added     += data.added     || 0;
+            this.progress.updated   += data.updated   || 0;
+            this.progress.unchanged += data.unchanged || 0;
+            if (data.errors && data.errors.length) {
+              this.progress.errors.push(...data.errors);
+            }
+          } else if (name === 'done') {
+            this.progress.added      = data.added;
+            this.progress.updated    = data.updated;
+            this.progress.unchanged  = data.unchanged;
+            this.progress.removed    = data.removed;
+            this.progress.durationMs = data.duration_ms || 0;
+            if (data.errors && data.errors.length) {
+              this.progress.errors = data.errors;
+            }
+            // Lock in 'total' to idx so the bar lands at exactly 100%.
+            this.progress.total = this.progress.idx;
+            this.progress.done = true;
+            // Toast + auto-dismiss summary + reload after a beat so
+            // the user can read the totals before the table refreshes.
+            const summary = '+' + data.added + ' new, ~' + data.updated +
+                            ' updated, -' + data.removed + ' removed' +
+                            (data.errors?.length ? ', ' + data.errors.length + ' errors' : '');
+            window.toastAfterReload('Reindex done: ' + summary,
+                                    data.errors?.length ? 'warn' : 'success');
+            this.running = false;
+            setTimeout(() => location.reload(), 1500);
+          }
+        },
+        onError: (_err) => {
+          // EventSource gave up reconnecting. If we never saw a single
+          // event, the endpoint probably doesn't exist (older daemon)
+          // -- silently fall back to POST. If we did see events, the
+          // stream just dropped mid-run; switch to polling so the
+          // user doesn't lose feedback.
+          if (!sawAnyEvent) {
+            this._reindexPostFallback();
+          } else {
+            window.toast('Stream dropped -- polling for completion', 'info');
+            this._pollReindex();
+          }
+        },
+      });
+    },
+
+    cancelReindex() {
+      // Closes the SSE stream + drops the daemon's lock via the
+      // finally block in /v1/reindex/events. We KEEP progress.active
+      // on screen for ~2s so the user sees we acknowledged the cancel.
+      if (this._reindexCtrl) this._reindexCtrl.abort();
+      if (this._reindexStream && this._reindexStream.cancel) this._reindexStream.cancel();
+      this.progress.currentFile = 'cancelled';
+      this.progress.done = true;
+      this.running = false;
+      setTimeout(() => {
+        this.progress.active = false;
+      }, 2000);
+    },
+
+    // v2.1 POST fallback retained -- kept verbatim from pre-phase-3
+    // so SSE-incapable environments (old browsers, blocking proxies)
+    // continue to work. Removed in v2.3 once SSE has been proven.
+    _reindexPostFallback() {
       window.toast('Reindexing... (re-embedding can take a few seconds per node)', 'info');
       fetch('/v1/reindex', { method: 'POST' })
         .then(async r => {
           if (r.status === 409) {
-            // Another reindex is already running -- switch to poll mode
-            // instead of failing. The user just sees a single toast and
-            // the button stays disabled until the in-flight run finishes.
             const body = await r.json().catch(() => ({}));
             const startedAt = body && body.detail && body.detail.started_at;
             const since = startedAt ? ' since ' + new Date(startedAt * 1000).toLocaleTimeString() : '';
@@ -336,7 +496,7 @@ function sourcesPage() {
           return r.json();
         })
         .then(d => {
-          if (d === null) return; // 409 path handled above
+          if (d === null) return;
           const total = d.added + d.updated + d.unchanged;
           let msg, level;
           if (d.errors && d.errors.length) {
@@ -351,9 +511,14 @@ function sourcesPage() {
           }
           window.toastAfterReload(msg, level);
           this.running = false;
+          this.progress.active = false;
           setTimeout(() => location.reload(), 400);
         })
-        .catch(e => { window.toast('Reindex failed: ' + e, 'error'); this.running = false; });
+        .catch(e => {
+          window.toast('Reindex failed: ' + e, 'error');
+          this.running = false;
+          this.progress.active = false;
+        });
     },
 
     openAdd() {
