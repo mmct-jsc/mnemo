@@ -1022,6 +1022,12 @@ dl.meta dd { margin: 0; color: var(--fg); }
   overflow: hidden;
 }
 .bar-fill {
+  /* Defensive: width + height only apply to block / inline-block /
+     flex-item elements. The dashboard markup uses <div> which is
+     already block, but other call sites use <span> -- forcing
+     ``display: block`` here so the rule paints regardless of the
+     element type the template chose. */
+  display: block;
   height: 100%;
   border-radius: 4px;
   transition: width 300ms ease-out;
@@ -2030,6 +2036,14 @@ dl.meta dd { margin: 0; color: var(--fg); }
 }
 
 .code-project-card-bars .bar-fill {
+  /* The /code template renders the bar with <span> elements
+     (vs the dashboard's <div>). A <span> is display:inline by
+     default and inline elements IGNORE width + height per the CSS
+     spec -- so the explicit ``style="width: 8.7%"`` and the
+     ``height: 100%`` below were both being ignored, leaving the
+     bar at 0x0 (invisible but DOM-present + colored). Forcing
+     ``display: block`` makes the box-model apply. */
+  display: block;
   height: 100%;
   border-radius: 2px;
   background: var(--type-color, var(--accent));
