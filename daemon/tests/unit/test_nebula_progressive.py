@@ -101,11 +101,28 @@ def test_chunked_paint_has_chunk_size_constant(graph_html: str) -> None:
 
 
 def test_focus_node_streams_body_via_mnemo_stream_text(graph_html: str) -> None:
-    """When the body fetch resolves, the body is revealed via
-    ``window.mnemoStreamText`` rather than rendered in one shot."""
-    assert "mnemoStreamText" in graph_html, (
-        "graph.html must call window.mnemoStreamText so the detail-panel "
-        "body reveals progressively (phase 1 primitive). See design § 4 + § 5."
+    """When the body fetch resolves, the body is revealed progressively.
+
+    v2.2.0-v2.2.6 routed the side-panel body through
+    ``window.mnemoStreamText`` directly (via the helper
+    ``streamBodyToCode``). v2.2.7 retired that helper and delegated
+    to ``window.mnemoRenderBody`` instead -- which itself routes
+    through mnemoStreamText for every branch AND adds type-aware
+    rendering (markdown bodies render as HTML, not as monospace
+    source).
+
+    The INTENT this test guards is "the side-panel body reveals
+    progressively via the v2.2 streaming primitives" -- so it
+    accepts either surface.
+    """
+    streaming_surfaces = ("mnemoStreamText", "mnemoRenderBody")
+    assert any(s in graph_html for s in streaming_surfaces), (
+        "graph.html must call window.mnemoStreamText or "
+        "window.mnemoRenderBody (which itself routes through "
+        "mnemoStreamText) so the detail-panel body reveals "
+        "progressively. See design § 4 + § 5 and the v2.2.7 "
+        "regression fix (Nebula side panel now uses mnemoRenderBody "
+        "for type-aware markdown / code / commit rendering)."
     )
 
 

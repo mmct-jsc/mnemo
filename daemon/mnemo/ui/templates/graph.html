@@ -185,19 +185,26 @@
              x-text="selected.source_path"></p>
           <p class="ndesc" x-show="selected.description" x-cloak
              x-text="selected.description"></p>
-          <!-- v2.2 phase 4: body streams in word-by-word via
-               window.mnemoStreamText. Old x-text path is gone --
-               streamBodyToCode handles both fill + Prism highlight.
-               The x-effect re-runs whenever selected.body changes
-               (i.e. on every node click); streamBodyToCode cancels
-               any in-flight stream before starting the new one so
-               clicks during a reveal don't race. -->
-          <pre x-show="selected.body" x-cloak
-               class="line-numbers"
-               :class="'language-' + bodyLanguage(selected.source_path)"><code
-               x-ref="bodyCode"
-               :class="'language-' + bodyLanguage(selected.source_path)"
-               x-effect="streamBodyToCode($refs.bodyCode, selected.body, selected.source_path)"></code></pre>
+          <!-- v2.2.7: type-aware body preview via mnemoRenderBody.
+               Previously this was a hardcoded ``<pre><code>`` shell
+               + ``streamBodyToCode``, which streamed plain text and
+               called Prism.highlightElement at the end -- so EVERY
+               body (markdown memory entries, project docs, session
+               summaries, etc.) rendered through the code path and
+               appeared as monospace source. Now the side panel
+               delegates to ``window.mnemoRenderBody`` which already
+               does the three-branch decision (code_* -> Prism,
+               commit -> escaped pre, everything else -> marked
+               markdown) AND owns streaming + cancellation since
+               v2.2.5. The ``.is-code`` modifier mirrors node.html's
+               same affordance so code bodies get the dark code
+               chrome and markdown bodies get the typographic md
+               style. -->
+          <div x-show="selected.body" x-cloak
+               class="nebula-body md-body"
+               :class="{ 'is-code': bodyMode === 'code' }"
+               x-ref="nebulaBody"
+               x-effect="renderSelectedBody($refs.nebulaBody, selected.body, selected.type, selected.source_path)"></div>
 
           <h4 x-show="neighbors.length">Connections (<span x-text="neighbors.length"></span>)</h4>
           <!-- v2.2 phase 4: neighbors render via mnemoStaggeredReveal
@@ -360,6 +367,12 @@ function nebula() {
     // cytoscape selector inside a cy.batch so the redraw is one frame.
     edgesVisible: true,
     labelsVisible: true,
+    // v2.2.7: which mnemoRenderBody path the side-panel body used
+    // on the most recent render. The .is-code class hangs off this
+    // so code bodies get the dark monospace chrome and markdown
+    // bodies get the typographic md style. Mirrors node.html's
+    // ``lastRenderedAs`` affordance.
+    bodyMode: 'markdown',
     // v2.2.6: drives the .nebula-layout-veil opacity during a
     // layout change. relayout() flips this on, waits for the CSS
     // transition to settle behind the veil, snaps positions, then
@@ -405,43 +418,38 @@ function nebula() {
       this._persistState();
     },
 
-    // v2.2 phase 4: body streaming. Called from the x-effect on
-    // <code x-ref="bodyCode">. Cancels any in-flight reveal (so
-    // clicks during a stream don't race) and starts a new
-    // mnemoStreamText with the body content. After the stream
-    // completes, Prism highlights the now-static <code>.
-    streamBodyToCode(codeEl, body, sourcePath) {
-      if (!codeEl) return;
-      if (this._bodyStream && this._bodyStream.cancel) {
-        try { this._bodyStream.cancel(); } catch (_) {}
-      }
-      this._bodyStream = null;
-      if (!body) {
-        codeEl.textContent = '';
+    // v2.2.7: side-panel body render. Delegates to
+    // ``window.mnemoRenderBody`` so the three-branch decision
+    // (code_* -> Prism, commit -> escaped pre, everything else ->
+    // marked markdown) runs the SAME way it does on /node/<id>
+    // and in the search popover. mnemoRenderBody itself owns
+    // streaming + cancellation since v2.2.5 -- it attaches a
+    // ``_mnemoStreamCancel`` handle to the target element and
+    // cancels any prior reveal before starting a new one when the
+    // same target gets re-rendered.
+    //
+    // The previous helper ``streamBodyToCode`` hardcoded the body
+    // through a ``<pre><code>`` shell with Prism.highlightElement,
+    // so markdown memory entries / project docs / session
+    // summaries rendered as monospace source instead of HTML.
+    // Reported 2026-05-14; full case study lives in the v2.2.7
+    // CHANGELOG entry.
+    renderSelectedBody(el, body, type, sourcePath) {
+      if (!el) return;
+      if (!window.mnemoRenderBody) {
+        // Cold-load fallback: paint plain text + retry next frame.
+        // Keeps the panel usable even if app.js is mid-hydration.
+        el.textContent = body || '';
+        requestAnimationFrame(() => this.renderSelectedBody(el, body, type, sourcePath));
         return;
       }
-      if (!window.mnemoStreamText) {
-        // Fallback: text-only fill, then highlight. Lets the page
-        // work even if app.js failed to load.
-        codeEl.textContent = body;
-        if (window.Prism) requestAnimationFrame(() => Prism.highlightElement(codeEl));
-        return;
-      }
-      // Pick per-language unit. Word-by-word for prose; line-by-line
-      // for code (cheaper highlight + reads as "code arriving line
-      // by line" rather than typing-effect).
-      const lang = this.bodyLanguage(sourcePath);
-      const isCode = lang !== 'none' && lang !== 'markdown';
-      this._bodyStream = window.mnemoStreamText(codeEl, body, {
-        unit: isCode ? 'line' : 'word',
-        // 5ms/word is fast enough that a 200-word memory body
-        // settles in ~1s; 8ms/line keeps even a 100-line code
-        // block visible in under a second.
-        perUnitDelayMs: isCode ? 8 : 5,
+      const mode = window.mnemoRenderBody(el, body || '', {
+        type: type,
+        sourcePath: sourcePath,
       });
-      this._bodyStream.done.then(() => {
-        if (window.Prism) requestAnimationFrame(() => Prism.highlightElement(codeEl));
-      });
+      // Default to 'markdown' so the cosmetic .is-code class only
+      // attaches when we actually picked the code path.
+      this.bodyMode = mode || 'markdown';
     },
 
     // v2.2 phase 4: neighbors list staggered reveal. Replaces the
