@@ -2,6 +2,99 @@
 
 All notable changes to mnemo are documented here.
 
+## [2.2.0] - 2026-05-14
+
+**Streaming reindex + unified progressive-UX foundation.** First
+release of the v2.2 progressive-UX rollout (design:
+``docs/plans/2026-05-14-ux-progressive-design.md``). One coherent
+streaming pattern shared by every future heavy operation in mnemo;
+the Sources page is the first visible consumer.
+
+### Added
+
+- **Shared client primitives** (``daemon/mnemo/ui/static/app.js``)
+  loaded site-wide from ``base.html``. Four helpers + one a11y
+  probe that every future progressive UI consumes:
+  - ``window.mnemoSkeleton(kind, opts)`` -- shimmer placeholder
+    for ``list`` / ``paragraph`` / ``code`` / ``graph`` / ``card``
+    shapes. Returns a DOM node the caller replaces with real
+    content.
+  - ``window.mnemoStaggeredReveal(container, items, opts)`` --
+    RAF-paced fade-in for items already in memory. Returns
+    ``{ cancel(), done }``.
+  - ``window.mnemoStreamFromSSE(url, opts)`` -- ``EventSource``
+    wrapper with per-event dispatch, JSON decoding,
+    ``AbortSignal`` cancellation.
+  - ``window.mnemoStreamText(target, source, opts)`` -- paces
+    text reveal char/word/line at a time; accepts a string OR
+    a ``ReadableStream`` so call sites stay identical when real
+    streaming arrives.
+  - ``window.mnemoPrefersReducedMotion()`` -- single shared probe.
+  All five honor ``prefers-reduced-motion: reduce`` (animations
+  collapse to 0; content snaps to final state).
+- **``.skeleton`` / ``.reveal-item`` / ``.fade-in`` CSS** plus
+  ``@media (prefers-reduced-motion: reduce)`` snap-rules.
+
+- **``ingest.reindex_events()`` generator** yielding
+  ``(event_name, payload)`` tuples (``start`` / ``file`` / ``done``).
+  ``ingest.reindex()`` is now a thin wrapper that drains the
+  generator and reconstructs the legacy ``ReindexReport``. Existing
+  callers (CLI + ``POST /v1/reindex``) see zero behavior change.
+
+- **``GET /v1/reindex/events``** -- Server-Sent Events route.
+  Streams the ``reindex_events`` generator as
+  ``event: <name>\ndata: <json>`` frames. Shares the same
+  ``reindex_lock`` ``POST /v1/reindex`` uses; concurrent connections
+  get a single ``event: busy`` frame then EOF. Sets
+  ``Cache-Control: no-store`` + ``X-Accel-Buffering: no`` so proxies
+  and browsers never cache the stream.
+
+- **Streaming reindex progress on the Sources page.** The "Reindex
+  all" button now opens a live progress block above the table:
+  - ``N / M files`` counter + current file name.
+  - Palette-driven progress bar (reuses ``.bar-fill`` from the
+    dashboard; turns red if errors accumulate).
+  - "stop" button that aborts the stream via ``AbortController``.
+  - Summary line after ``done``: added / updated / unchanged /
+    removed + duration.
+  - Auto-reloads the page ~1.5s after ``done`` so the table
+    reflects the new state.
+
+- **``app.state.mnemo_state``** -- the per-app ``AppState`` is
+  now reachable from the FastAPI instance, so tests and helpers
+  can introspect the reindex lock without monkey-patching internals.
+
+### Changed
+
+- **Sources page reindex flow is stream-first.** If the browser
+  supports ``EventSource``, the page subscribes to
+  ``/v1/reindex/events`` and updates the bar live. If SSE is
+  unavailable (legacy browsers, restrictive proxies) the page
+  falls back to the previous ``POST /v1/reindex`` + status-poll
+  pattern. The POST path is retained for v2.2.x and will be
+  removed in v2.3 once SSE is proven everywhere.
+
+### Tests
+
+- ``tests/unit/test_progressive.py`` (12 cases) -- locks the
+  surface of the four primitives + base.html wiring + CSS classes.
+- ``tests/unit/test_reindex_events.py`` (9 cases) -- generator
+  contract (start/file/done shape + ordering, idempotent reruns,
+  ``ReindexReport`` regression); SSE wire contract
+  (``text/event-stream``, frame format, busy event, POST regression).
+- ``tests/unit/test_sources_progress.py`` (7 cases) -- template
+  ships the progress markup with ``mnemoStreamFromSSE`` + cancel
+  affordance + POST fallback retained.
+- 537 unit tests pass total (was 521). Ruff lint + format clean.
+
+### Phases 4 + 5 (deferred to v2.2.x point releases)
+
+- Phase 4: chunked Nebula initial paint + coordinated node-to-node
+  transitions. Reuses ``mnemoStaggeredReveal`` + ``.fade-in``.
+- Phase 5: ``mnemoRenderBody`` adopts ``mnemoStreamText`` so every
+  body preview reveals word-by-word (memory) or line-by-line
+  (code). Call sites unchanged.
+
 ## [2.1.3] - 2026-05-14
 
 **Hotfix.** The /code page project-card progress bars were
