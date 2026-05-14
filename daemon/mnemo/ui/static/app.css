@@ -1323,7 +1323,11 @@ dl.meta dd { margin: 0; color: var(--fg); }
 }
 
 .workspace-switcher-pop {
-  position: absolute; top: 110%; left: 0;
+  /* v2.6.0 polish: anchored to the right edge of the pill (matches
+     the slot the legacy active-project popover used). The pill now
+     lives right-of-nav so the dropdown unfolds toward the left,
+     keeping it inside the viewport even on narrow windows. */
+  position: absolute; top: 110%; right: 0;
   width: 340px; max-width: calc(100vw - 1.5rem);
   background: var(--panel);
   border: 1px solid var(--border);

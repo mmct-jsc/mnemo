@@ -384,8 +384,26 @@
   <header class="topbar">
     <a href="/" class="brand" aria-label="mnemo home">mnemo</a>
 
-    <!-- v2.6 phase 7: Workspace switcher. Named factory + NO double-init.
-         The dropdown lists active + recent workspaces and exposes
+    <nav>
+      <a href="/"             class="{% if page == 'dashboard' %}active{% endif %}">Dashboard</a>
+      <a href="/nodes-page"        class="{% if page == 'nodes' %}active{% endif %}">Nodes</a>
+      <a href="/graph"        class="{% if page == 'graph' %}active{% endif %}">Nebula</a>
+      <a href="/code"         class="{% if page == 'code' %}active{% endif %}">Code</a>
+      <a href="/sources-page" class="{% if page == 'sources' %}active{% endif %}">Sources</a>
+      <a href="/audit-page"   class="{% if page == 'audit' %}active{% endif %}">Audit</a>
+      <a href="/settings"     class="{% if page == 'settings' %}active{% endif %}">Settings</a>
+    </nav>
+
+    <!-- v2.6 phase 10.1: active-project pill removed. Workspaces fully
+         own retrieval scope now -- the workspace-switcher below sits
+         where the old pill used to live. /v1/projects/active endpoints
+         stay alive for CLI back-compat. -->
+
+    <!-- v2.6 phase 7 + 10.3: Workspace switcher. Named factory + NO
+         double-init. Right-aligned slot (where the old active-project
+         pill lived, after <nav>) so the "current scope" affordance
+         stays in the spot users already train their eyes on. The
+         dropdown lists active + recent workspaces and exposes
          "+ New workspace", "Manage workspaces", and "No workspace
          (BASE-only mode)" actions. The factory subscribes to
          /v1/events so every open tab re-fetches on workspace_activated
@@ -525,23 +543,6 @@
         </div>
       </div>
     </div>
-
-    <nav>
-      <a href="/"             class="{% if page == 'dashboard' %}active{% endif %}">Dashboard</a>
-      <a href="/nodes-page"        class="{% if page == 'nodes' %}active{% endif %}">Nodes</a>
-      <a href="/graph"        class="{% if page == 'graph' %}active{% endif %}">Nebula</a>
-      <a href="/code"         class="{% if page == 'code' %}active{% endif %}">Code</a>
-      <a href="/sources-page" class="{% if page == 'sources' %}active{% endif %}">Sources</a>
-      <a href="/audit-page"   class="{% if page == 'audit' %}active{% endif %}">Audit</a>
-      <a href="/settings"     class="{% if page == 'settings' %}active{% endif %}">Settings</a>
-    </nav>
-
-    <!-- v2.6 phase 10.1: active-project pill removed. Workspaces fully
-         own retrieval scope now -- see the workspace-switcher above.
-         /v1/projects/active endpoints stay alive for CLI back-compat;
-         the activeProjectWidget Alpine factory is kept too in case
-         a future surface wants it, but nothing in the topbar binds
-         to it. -->
 
     <!-- Notification bell + history dropdown -->
     <div class="bell-wrap" x-data="bellHistory()" @mnemo-toast.document="record($event.detail)" @click.outside="open = false">
