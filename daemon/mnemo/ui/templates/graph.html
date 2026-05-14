@@ -606,6 +606,20 @@ function nebula() {
         const es = new EventSource('/v1/events');
         this._eventSource = es;
         const refresh = async () => {
+          // v2.6.0 polish: clear any focused node + DOM-overlay pulse
+          // before re-fetching. Without this the old selected node
+          // pulses on top of the new (post-switch) canvas even after
+          // its underlying cytoscape node is gone -- the pulse anchor
+          // is a DOM div whose x-show is governed by ``selected``;
+          // clearing both ``selected`` + ``_pulseNode`` collapses the
+          // overlay before reload() rebuilds the graph.
+          this._stopPulse();
+          this.selected = null;
+          this.neighbors = [];
+          if (this.cy) {
+            this.cy.elements().stop(true, false);
+            this.cy.batch(() => this.cy.elements().removeClass('hl dim'));
+          }
           await this._loadWorkspaceScope();
           await this.reload();
         };

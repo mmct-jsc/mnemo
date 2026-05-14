@@ -18,7 +18,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from mnemo import config, retrieve
+from mnemo import config, retrieve, workspaces as ws_mod
 from mnemo.embed import Embedder
 from mnemo.store import Node, Store
 
@@ -215,7 +215,35 @@ def mount_ui(
     @app.get("/code", response_class=HTMLResponse)
     def code_landing(request: Request, s: Store = Depends(get_store)) -> Any:
         """Landing page: one card per code_repo project + a cross-stack
-        endpoint summary."""
+        endpoint summary.
+
+        v2.6.0 polish: scopes to the active workspace's ``project_keys``.
+        When the workspace has no code-typed nodes in its set the page
+        shows an empty state (mentioning the workspace name) instead
+        of listing every code project on disk. With no active workspace
+        the page drops into BASE-only mode and shows no code projects
+        (code nodes are always project-scoped, never BASE-flagged).
+        """
+        # v2.6.0 polish: resolve the active workspace's project_keys.
+        # Three states:
+        #   active + project_keys non-empty -> filter to that set
+        #   active + project_keys empty     -> BASE-only (no code)
+        #   no active                       -> show all (back-compat)
+        active_ws = ws_mod.get_active_workspace(s)
+        if active_ws is None or not active_ws.project_keys:
+            # No active workspace OR active workspace with empty
+            # project_keys -> BASE-only UI mode per the v2.6 design.
+            # /code in BASE-only mode is empty (code nodes are always
+            # project-scoped, never BASE-flagged) so the page shows
+            # a "Pick a workspace" empty state.
+            scope_mode = "base_only"
+            scope_keys: set[str] = set()
+            scope_name: str | None = active_ws.name if active_ws else None
+        else:
+            scope_mode = "workspace"
+            scope_keys = set(active_ws.project_keys)
+            scope_name = active_ws.name
+
         # Aggregate code-typed nodes by project_key. A "project" here is
         # whatever project_key value the code nodes carry (auto-derived
         # from the source path during ingest).
@@ -231,6 +259,14 @@ def mount_ui(
         all_code = []
         for t in code_types:
             all_code.extend(s.list_nodes(type=t, limit=100_000))
+
+        # v2.6.0 polish: drop nodes outside the workspace scope BEFORE
+        # the aggregation. base_only collapses to an empty list since
+        # code nodes are never BASE-flagged.
+        if scope_mode == "workspace":
+            all_code = [n for n in all_code if n.project_key in scope_keys]
+        elif scope_mode == "base_only":
+            all_code = [n for n in all_code if n.base]
 
         # Group by project_key.
         by_project: dict[str | None, dict[str, int]] = {}
@@ -259,9 +295,25 @@ def mount_ui(
 
         # Cross-stack endpoint summary: every code_endpoint with the
         # number of incoming ``at_endpoint`` edges (the "fanout").
+        # v2.6.0 polish: skip endpoints whose only at_endpoint edges
+        # come from out-of-scope projects.
         endpoints = []
         for ep in s.list_nodes(type="code_endpoint", limit=10_000):
             in_edges = s.get_edges(dst_id=ep.id, relation="at_endpoint")
+            if scope_mode in ("workspace", "base_only"):
+                # Only count edges whose src node is in-scope.
+                src_ids = [e.src_id for e in in_edges]
+                if not src_ids:
+                    continue
+                src_nodes = s.get_nodes_by_ids(src_ids)
+                if scope_mode == "workspace":
+                    in_scope_count = sum(
+                        1 for n in src_nodes.values() if n.project_key in scope_keys
+                    )
+                else:  # base_only
+                    in_scope_count = sum(1 for n in src_nodes.values() if n.base)
+                if in_scope_count == 0:
+                    continue
             method, _, path = ep.source_path.removeprefix("endpoint:").partition(":")
             endpoints.append(
                 {
@@ -276,7 +328,13 @@ def mount_ui(
         return templates.TemplateResponse(
             request,
             "code_landing.html",
-            _ctx(page="code", projects=projects, endpoints=endpoints),
+            _ctx(
+                page="code",
+                projects=projects,
+                endpoints=endpoints,
+                workspace_scope_mode=scope_mode,
+                workspace_scope_name=scope_name,
+            ),
         )
 
     @app.get("/code/{project_key}", response_class=HTMLResponse)
