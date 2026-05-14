@@ -22,18 +22,22 @@
         <span x-show="contextProject" x-cloak class="tree-title-scope"
               x-text="contextProject"></span>
       </h3>
-      {# v2.6.0 polish: context-aware empty-state copy. The blanket
-         "Add a code_repo?" message lied in BASE-only mode (where the
-         right action is "pick a workspace") and in truncated
-         workspaces (modules were omitted by the cap, not missing
-         from the store). Three states, three messages. #}
-      <template x-if="treeRoot && Object.keys(treeRoot.children).length === 0 && contextBaseOnly">
+      {# v2.6.0 polish: context-aware empty-state copy + flat indented
+         tree renderer. The previous template only went 3 levels deep
+         which truncated trees like
+         D:/Repository/aibox-prod-all/backend/services/asset-service/src/...
+         to just the top three rungs. We now flatten the tree into
+         ``treeRows`` (each with a ``depth`` field) and let CSS pad-
+         left handle the visual indentation. Expansion state is
+         tracked in ``expandedPaths`` so any depth can collapse /
+         expand. #}
+      <template x-if="treeRows && treeRows.length === 0 && contextBaseOnly">
         <p class="hint" style="padding:0.5rem;">
           BASE-only view -- code is never BASE-flagged.
           <a href="/workspaces">Pick a workspace</a> to see modules.
         </p>
       </template>
-      <template x-if="treeRoot && Object.keys(treeRoot.children).length === 0 && contextWorkspaceName && !contextBaseOnly">
+      <template x-if="treeRows && treeRows.length === 0 && contextWorkspaceName && !contextBaseOnly">
         <p class="hint" style="padding:0.5rem;">
           No code modules in workspace
           &ldquo;<span x-text="contextWorkspaceName"></span>&rdquo;.
@@ -41,89 +45,47 @@
           is in this workspace.
         </p>
       </template>
-      <template x-if="treeRoot && Object.keys(treeRoot.children).length === 0 && !contextWorkspaceName && !contextBaseOnly">
+      <template x-if="treeRows && treeRows.length === 0 && !contextWorkspaceName && !contextBaseOnly">
         <p class="hint" style="padding:0.5rem;">
           No code modules in this view.
           <a href="/sources-page">Add a code_repo</a>?
         </p>
       </template>
-      <!-- Recursive renderer: emits a directory branch or a file row
-           based on the node shape. Indentation depth is passed in. -->
-      <template x-if="treeRoot">
+      <template x-if="treeRows && treeRows.length > 0">
         <ul class="vscode-tree">
-          <template x-for="(child, name) in treeRoot.children" :key="name">
-            <li x-data="{ child: child, name: name }">
-              <!-- Directory -->
-              <template x-if="child.isDir">
-                <details open>
-                  <summary class="vscode-dir"><span class="vscode-dir-row">
-                    <span class="vscode-chev" aria-hidden="true"></span>
+          <template x-for="row in visibleTreeRows" :key="row.path">
+            <li>
+              <template x-if="row.isDir">
+                <button type="button"
+                        class="vscode-dir vscode-dir-button"
+                        :style="'padding-left: ' + (8 + row.depth * 14) + 'px;'"
+                        @click="toggleTreeDir(row.path)">
+                  <span class="vscode-dir-row">
+                    <span class="vscode-chev"
+                          :class="{ 'is-open': expandedPaths[row.path] }"
+                          aria-hidden="true"></span>
                     <svg class="vscode-icon dir-icon" viewBox="0 0 16 16">
                       <path fill="#7eb6d6" d="M1.5 3.5A1.5 1.5 0 0 1 3 2h3l1.5 1.5H13A1.5 1.5 0 0 1 14.5 5v7A1.5 1.5 0 0 1 13 13.5H3A1.5 1.5 0 0 1 1.5 12V3.5Z"/>
                     </svg>
-                    <span class="vscode-dir-label" x-text="name"></span>
-                  </span></summary>
-                  <ul>
-                    <template x-for="(grand, gname) in child.children" :key="gname">
-                      <li>
-                        <template x-if="grand.isDir">
-                          <details>
-                            <summary class="vscode-dir"><span class="vscode-dir-row">
-                              <span class="vscode-chev" aria-hidden="true"></span>
-                              <svg class="vscode-icon dir-icon" viewBox="0 0 16 16">
-                                <path fill="#7eb6d6" d="M1.5 3.5A1.5 1.5 0 0 1 3 2h3l1.5 1.5H13A1.5 1.5 0 0 1 14.5 5v7A1.5 1.5 0 0 1 13 13.5H3A1.5 1.5 0 0 1 1.5 12V3.5Z"/>
-                              </svg>
-                              <span class="vscode-dir-label" x-text="gname"></span>
-                            </span></summary>
-                            <ul>
-                              <template x-for="leaf in grand.leaves" :key="leaf.id">
-                                <li>
-                                  <a href="#" class="tree-file vscode-file"
-                                     :class="[
-                                       { active: selected && selected.id === leaf.id },
-                                       'ext-' + fileExt(leaf.label),
-                                     ]"
-                                     :title="leaf.label"
-                                     @click.prevent="focusNode(leaf.id)">
-                                    <span class="vscode-file-icon" x-html="fileIcon(leaf.label)"></span>
-                                    <span class="vscode-file-name" x-text="leaf.label"></span>
-                                    <span class="vscode-file-meta" x-text="leaf.childCount"></span>
-                                  </a>
-                                </li>
-                              </template>
-                            </ul>
-                          </details>
-                        </template>
-                        <template x-if="!grand.isDir">
-                          <a href="#" class="tree-file vscode-file"
-                             :class="[
-                               { active: selected && selected.id === grand.id },
-                               'ext-' + fileExt(gname),
-                             ]"
-                             :title="gname"
-                             @click.prevent="focusNode(grand.id)">
-                            <span class="vscode-file-icon" x-html="fileIcon(gname)"></span>
-                            <span class="vscode-file-name" x-text="gname"></span>
-                            <span class="vscode-file-meta" x-text="grand.childCount"></span>
-                          </a>
-                        </template>
-                      </li>
-                    </template>
-                  </ul>
-                </details>
+                    <span class="vscode-dir-label" x-text="row.name"></span>
+                    <span class="vscode-dir-count"
+                          x-show="row.fileCount > 0" x-cloak
+                          x-text="row.fileCount"></span>
+                  </span>
+                </button>
               </template>
-              <!-- File at the top level (no directory wrapping) -->
-              <template x-if="!child.isDir">
+              <template x-if="!row.isDir">
                 <a href="#" class="tree-file vscode-file"
                    :class="[
-                     { active: selected && selected.id === child.id },
-                     'ext-' + fileExt(name),
+                     { active: selected && selected.id === row.id },
+                     'ext-' + fileExt(row.name),
                    ]"
-                   :title="name"
-                   @click.prevent="focusNode(child.id)">
-                  <span class="vscode-file-icon" x-html="fileIcon(name)"></span>
-                  <span class="vscode-file-name" x-text="name"></span>
-                  <span class="vscode-file-meta" x-text="child.childCount"></span>
+                   :style="'padding-left: ' + (8 + row.depth * 14) + 'px;'"
+                   :title="row.name"
+                   @click.prevent="focusNode(row.id)">
+                  <span class="vscode-file-icon" x-html="fileIcon(row.name)"></span>
+                  <span class="vscode-file-name" x-text="row.name"></span>
+                  <span class="vscode-file-meta" x-text="row.childCount"></span>
                 </a>
               </template>
             </li>
@@ -399,6 +361,8 @@ function nebula() {
     selected: null,
     neighbors: [],
     treeRoot: null,
+    treeRows: [],                 // v2.6.0: flat indented rows for arbitrary depth
+    expandedPaths: {},            // v2.6.0: { 'D:/Repository': true, ... }
     nodeTypes: [],
     typeFilters: {},
     filterText: '',
@@ -413,6 +377,7 @@ function nebula() {
     truncated: false,            // v2.6.0: server returned fewer nodes than scope
     totalInScope: 0,             // v2.6.0: total nodes the workspace covers
     shownNodeCount: 0,           // v2.6.0: nodes painted on canvas
+    treeModules: [],             // v2.6.0: unbounded module list for left-panel tree
     _eventSource: null,
     stats: '',
     rawElements: [],
@@ -739,6 +704,10 @@ function nebula() {
       this.truncated = !!data.truncated;
       this.totalInScope = data.total_in_scope || 0;
       this.shownNodeCount = data.shown_node_count || 0;
+      // v2.6.0 polish: the unbounded module list for the file tree
+      // (independent of the canvas cap). The tree is the navigation
+      // surface -- ever module in the workspace must show up here.
+      this.treeModules = Array.isArray(data.tree_modules) ? data.tree_modules : [];
       this.renderCanvas();
       this.buildTree();
       this.buildTypeFilters();
@@ -1130,23 +1099,41 @@ function nebula() {
     },
 
     buildTree() {
-      // Same source-presence trick as buildStats() -- detect nodes by
-      // the ABSENCE of ``source`` so Cytoscape's auto-assigned edge ids
-      // don't pollute the tree.
-      const nodes = this.rawElements.filter(e => e.data.source === undefined && e.data.source_path);
-      const root = { children: {}, isDir: true };
-      // Modules only -- declarations are folded under their module.
-      const modules = nodes.filter(n => n.data.type === 'code_module');
+      // v2.6.0 polish: tree builds from the UNBOUNDED ``treeModules``
+      // side-channel, not from ``rawElements``. The canvas may cap
+      // at 3 000 + drop isolates, but the tree must surface EVERY
+      // in-scope module so navigation isn't hidden. Clicking a tree
+      // entry whose id is missing from the canvas triggers an ego-
+      // network fetch via ?node=.
+      //
+      // ``declCounts`` still comes from rawElements -- it counts the
+      // function/class/method declarations whose module is in the
+      // rendered set. Missing declarations just leave the count at 0
+      // until the user drills into the ego-network.
+      const renderedNodes = this.rawElements.filter(
+        e => e.data.source === undefined && e.data.source_path,
+      );
       const declCounts = {};
-      for (const n of nodes) {
+      for (const n of renderedNodes) {
         if (n.data.type !== 'code_module' && n.data.source_path) {
           // Strip the line-range suffix to find the owning module path.
           const filePath = n.data.source_path.replace(/:\d+-\d+(#.+)?$/, '');
           declCounts[filePath] = (declCounts[filePath] || 0) + 1;
         }
       }
-      for (const m of modules) {
-        const path = (m.data.source_path || m.data.name).replace(/\\/g, '/');
+      const root = { children: {}, isDir: true };
+      // Modules from the unbounded tree side-channel.
+      const moduleList = (this.treeModules && this.treeModules.length)
+        ? this.treeModules
+        : renderedNodes.filter(n => n.data.type === 'code_module').map(n => ({
+            id: n.data.id,
+            name: n.data.name,
+            source_path: n.data.source_path,
+            type: n.data.type,
+            project: n.data.project,
+          }));
+      for (const m of moduleList) {
+        const path = (m.source_path || m.name).replace(/\\/g, '/');
         const parts = path.split('/').filter(Boolean);
         let cur = root;
         for (let i = 0; i < parts.length - 1; i++) {
@@ -1157,7 +1144,7 @@ function nebula() {
         const leafName = parts[parts.length - 1];
         cur.children[leafName] = {
           isDir: false,
-          id: m.data.id,
+          id: m.id,
           label: leafName,
           childCount: declCounts[path] || 0,
         };
@@ -1169,6 +1156,94 @@ function nebula() {
       // the template can iterate its files in one pass.
       this._annotateLeaves(root);
       this.treeRoot = root;
+      // v2.6.0 polish: flatten to indented rows so arbitrary-depth
+      // trees render in a single x-for loop. Previous nested-template
+      // approach capped at 3 levels deep -- aibox-prod-all's
+      // backend/services/asset-service/src/... path was invisible.
+      this.treeRows = this._flattenTreeRows(root);
+      // Auto-expand the top two levels so the user sees structure
+      // without clicking. Below that, click-to-expand is the contract.
+      const auto = {};
+      for (const row of this.treeRows) {
+        if (row.isDir && row.depth < 2) auto[row.path] = true;
+      }
+      this.expandedPaths = auto;
+    },
+
+    _flattenTreeRows(root) {
+      // Walk the tree depth-first, emitting flat rows. Each row
+      // carries an ``ancestors`` array of every parent directory's
+      // ``path`` so visibleTreeRows can check "every ancestor must be
+      // expanded" without splitting strings -- _collapseTree may have
+      // produced names like "D:/Repository/aibox-prod-all/.tmp" that
+      // contain the separator character and break naive split logic.
+      const rows = [];
+      const walk = (node, depth, parentPath, ancestors) => {
+        if (!node.children) return;
+        const entries = Object.entries(node.children);
+        // Sort: directories first, then files; both alphabetical.
+        entries.sort((a, b) => {
+          const [an, av] = a;
+          const [bn, bv] = b;
+          if (av.isDir !== bv.isDir) return av.isDir ? -1 : 1;
+          return an.localeCompare(bn);
+        });
+        for (const [name, child] of entries) {
+          const path = parentPath ? (parentPath + '/' + name) : name;
+          if (child.isDir) {
+            const fc = this._countLeaves(child);
+            rows.push({
+              depth, isDir: true, name, path,
+              ancestors: [...ancestors],
+              fileCount: fc,
+            });
+            walk(child, depth + 1, path, [...ancestors, path]);
+          } else {
+            rows.push({
+              depth, isDir: false, name, path,
+              ancestors: [...ancestors],
+              id: child.id,
+              childCount: child.childCount,
+            });
+          }
+        }
+      };
+      walk(root, 0, '', []);
+      return rows;
+    },
+
+    _countLeaves(node) {
+      if (!node.isDir) return 1;
+      let total = 0;
+      for (const child of Object.values(node.children)) {
+        total += this._countLeaves(child);
+      }
+      return total;
+    },
+
+    get visibleTreeRows() {
+      // A row is visible iff EVERY ancestor directory is expanded.
+      // ``ancestors`` is the literal list of dir paths from root down
+      // to (but not including) the row -- no fragile string-split.
+      const out = [];
+      for (const row of this.treeRows) {
+        let allOpen = true;
+        for (const ancestor of row.ancestors) {
+          if (!this.expandedPaths[ancestor]) {
+            allOpen = false;
+            break;
+          }
+        }
+        if (allOpen) out.push(row);
+      }
+      return out;
+    },
+
+    toggleTreeDir(path) {
+      this.expandedPaths = {
+        ...this.expandedPaths,
+        [path]: !this.expandedPaths[path],
+      };
     },
 
     _collapseTree(node) {

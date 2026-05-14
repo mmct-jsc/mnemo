@@ -92,6 +92,40 @@ def test_project_keys_returns_balanced_set_across_projects(
     assert data["shown_node_count"] == 1600
 
 
+def test_project_keys_tree_modules_unbounded_even_when_canvas_truncated(
+    client: TestClient, store: Store
+) -> None:
+    """v2.6.0 polish: tree_modules side-channel returns EVERY in-scope
+    code_module regardless of the canvas cap, so the file tree shows
+    the full project layout even when the canvas is truncated. Clicking
+    a tree row whose id isn't on the canvas triggers an ego-network
+    fetch via ?node=."""
+    # Seed 4000 code_modules so the canvas truncates (cap = 3000).
+    for i in range(4000):
+        store.upsert_node(
+            Node.new(
+                type="code_module",
+                name=f"P1/mod{i}.py",
+                body="...",
+                source_path=f"/P1/mod{i}.py",
+                source_kind="code_repo",
+                project_key="P1",
+            )
+        )
+    resp = client.get("/ui/graph-data?project_keys=P1")
+    data = resp.json()
+    # The canvas truncates (architecture-priority cap + isolate drop).
+    assert data["truncated"] is True
+    # But the tree side-channel carries EVERY module.
+    assert "tree_modules" in data
+    assert len(data["tree_modules"]) == 4000
+    # Each entry has the navigation contract: id + source_path.
+    for m in data["tree_modules"][:5]:
+        assert "id" in m
+        assert "source_path" in m
+        assert m["type"] == "code_module"
+
+
 def test_project_keys_truncates_huge_workspaces_with_banner(
     client: TestClient, store: Store
 ) -> None:

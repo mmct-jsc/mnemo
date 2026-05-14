@@ -4059,6 +4059,42 @@ dl.meta dd { margin: 0; color: var(--fg); }
   border-left: 5px solid currentColor;
 }
 
+/* v2.6.0 polish: flat-tree chevron rotates when the dir is expanded. */
+.vscode-chev.is-open {
+  transform: rotate(90deg);
+}
+
+/* v2.6.0 polish: flat-tree dir is now a <button> not a <details/summary>.
+   Match the existing summary styles so the visual stays identical. */
+.vscode-tree .vscode-dir-button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 0.18rem 0.35rem;
+  border-radius: var(--radius);
+  font-family: var(--mono);
+  font-size: 0.74rem;
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  transition: background 200ms ease;
+}
+.vscode-tree .vscode-dir-button:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+/* File-count badge next to a dir name -- shows "1234" if the dir
+   contains 1234 modules deep. */
+.vscode-tree .vscode-dir-count {
+  margin-left: auto;
+  color: var(--fg-dim);
+  font-size: 0.65rem;
+  font-family: var(--mono);
+}
+
 .vscode-icon {
   width: 14px;
   height: 14px;
