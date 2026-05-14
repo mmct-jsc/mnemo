@@ -251,6 +251,28 @@
         <button @click="relayout('grid')"
                 :class="{ active: currentLayout === 'grid' }">grid</button>
       </div>
+      <!-- v2.2.3: edge + label visibility toggles. Both default to
+           ON; tapping each flips a class on the matching cytoscape
+           selector (.edges-off / .labels-off) inside a cy.batch so
+           the canvas redraws once. -->
+      <div class="nebula-toggle-buttons">
+        <button type="button"
+                class="nebula-toggle"
+                :class="{ off: !edgesVisible }"
+                @click="toggleEdges()"
+                title="Show / hide edges">
+          <span class="nebula-toggle-dot"></span>
+          <span>edges</span>
+        </button>
+        <button type="button"
+                class="nebula-toggle"
+                :class="{ off: !labelsVisible }"
+                @click="toggleLabels()"
+                title="Show / hide node names">
+          <span class="nebula-toggle-dot"></span>
+          <span>labels</span>
+        </button>
+      </div>
       <span class="nebula-stats" x-text="stats"></span>
     </div>
   </section>
@@ -305,6 +327,12 @@ function nebula() {
     stats: '',
     rawElements: [],
     currentLayout: 'fcose',
+    // v2.2.3: user-toggleable canvas affordances. Both default to ON
+    // (preserve pre-2.2.3 behavior). When the user flips one OFF,
+    // toggleEdges / toggleLabels add a class on the matching
+    // cytoscape selector inside a cy.batch so the redraw is one frame.
+    edgesVisible: true,
+    labelsVisible: true,
 
     // Single source of truth for ANY in-DOM type color (filter chips,
     // neighbor dots, detail-panel ntype pill). Reads from the same
@@ -313,6 +341,26 @@ function nebula() {
     // palette.py updates BOTH at once.
     typeColor(t) {
       return TYPE_COLORS[t] || TYPE_COLOR_FALLBACK;
+    },
+
+    // v2.2.3: edges + labels visibility toggles. Mirror cytoscape
+    // class toggles inside cy.batch() so the canvas redraws once
+    // per toggle, not per affected element.
+    toggleEdges() {
+      this.edgesVisible = !this.edgesVisible;
+      if (!this.cy) return;
+      this.cy.batch(() => {
+        if (this.edgesVisible) this.cy.edges().removeClass('edges-off');
+        else this.cy.edges().addClass('edges-off');
+      });
+    },
+    toggleLabels() {
+      this.labelsVisible = !this.labelsVisible;
+      if (!this.cy) return;
+      this.cy.batch(() => {
+        if (this.labelsVisible) this.cy.nodes().removeClass('labels-off');
+        else this.cy.nodes().addClass('labels-off');
+      });
     },
 
     // v2.2 phase 4: body streaming. Called from the x-effect on
@@ -484,7 +532,14 @@ function nebula() {
         // as a texture during pan/zoom so we don't redraw every edge
         // every frame. Render labels only at moderate zoom.
         textureOnViewport: true,
-        hideEdgesOnViewport: true,
+        // v2.2.3: edges stay visible during pan/drag. The pop-out
+        // behavior of hideEdgesOnViewport felt jarring -- the user
+        // saw the graph "collapse" into bare nodes mid-drag, then
+        // snap back into shape on release. Labels still hide
+        // during fast viewport changes because they're cheap to
+        // re-render and the busy-text effect was a real
+        // distraction during pans.
+        hideEdgesOnViewport: false,
         hideLabelsOnViewport: true,
         pixelRatio: 1.0,
         wheelSensitivity: 0.18,  // slow, silky scroll-zoom
@@ -596,6 +651,20 @@ function nebula() {
               'line-dash-offset': 0,
           }},
           { selector: 'edge.hide', style: { display: 'none' }},
+          // v2.2.3: edges hidden during the chunked initial paint.
+          // Pre-v2.2.3 the user saw a frame of "edges only, no
+          // nodes" because edges between two .preload-hidden
+          // (opacity:0) nodes still drew the connecting line.
+          // Hiding edges via display:none until the node reveal
+          // completes makes the cold paint read as "nodes first,
+          // then connections".
+          { selector: 'edge.preload-hidden', style: { display: 'none' }},
+          // v2.2.3: user-toggleable edge + label visibility. Both
+          // are bound to the new filter-bar buttons (edgesVisible /
+          // labelsVisible) via Alpine; the toggles add/remove these
+          // classes in a cy.batch so the canvas redraws once.
+          { selector: 'edge.edges-off', style: { display: 'none' }},
+          { selector: 'node.labels-off', style: { 'text-opacity': 0 }},
         ],
         // Initial layout: NO animation, NO randomization. fcose
         // converges in ~50-100 quick iterations and renders once.
@@ -713,11 +782,15 @@ function nebula() {
       const REVEAL_INTERVAL_MS = 80;
       const FADE_IN_DURATION_MS = 260;
 
-      // Hide every node up front. Edges follow their endpoints in
-      // cytoscape (opacity:0 nodes draw their edges invisibly too,
-      // so we don't need to tag the edges explicitly).
+      // v2.2.3: hide EDGES too while we paint nodes. Pre-v2.2.3
+      // the user saw a frame of "all edges drawn between empty
+      // space" because edges between two ``.preload-hidden``
+      // (opacity:0) nodes still drew their connecting lines.
+      // Edges only reveal once every node chunk has landed, so
+      // the cold paint reads as "nodes first, then connections".
       this.cy.batch(() => {
         this.cy.nodes().addClass('preload-hidden');
+        this.cy.edges().addClass('preload-hidden');
       });
 
       // Sort by degree DESC so the cluster center appears first.
@@ -725,16 +798,14 @@ function nebula() {
         .toArray()
         .sort((a, b) => b.degree() - a.degree());
       const ids = sorted.map(n => n.id());
+      const chunkCount = Math.ceil(ids.length / CHUNK);
 
       // Schedule each chunk on a setTimeout cadence. Each chunk does
       // one cy.batch() so cytoscape only re-renders once per chunk.
-      // ``.fade-in`` (CSS class on cytoscape nodes via class API) is
-      // a no-op for the cytoscape canvas itself, but the layered
-      // .fade-in animation in app.css lights up any DOM overlay that
-      // mirrors these nodes (skeleton placeholders, future minimap).
       for (let i = 0; i < ids.length; i += CHUNK) {
         const slice = ids.slice(i, i + CHUNK);
         const chunkIdx = i / CHUNK;
+        const isLastChunk = chunkIdx === chunkCount - 1;
         setTimeout(() => {
           if (!this.cy) return; // panel disposed mid-reveal
           this.cy.batch(() => {
@@ -757,6 +828,23 @@ function nebula() {
               }
             });
           }, FADE_IN_DURATION_MS);
+
+          // v2.2.3: once the FINAL node chunk has landed, fade in
+          // every edge. Done in one batch with the .fade-in class
+          // so the transition feels coherent (a wave of edges
+          // appears over ~260ms after the last node wave).
+          if (isLastChunk) {
+            setTimeout(() => {
+              if (!this.cy) return;
+              this.cy.batch(() => {
+                this.cy.edges().removeClass('preload-hidden').addClass('fade-in');
+              });
+              setTimeout(() => {
+                if (!this.cy) return;
+                this.cy.batch(() => this.cy.edges().removeClass('fade-in'));
+              }, FADE_IN_DURATION_MS);
+            }, REVEAL_INTERVAL_MS);
+          }
         }, chunkIdx * REVEAL_INTERVAL_MS);
       }
     },
@@ -936,15 +1024,40 @@ function nebula() {
       this._startPulse(node);
     },
 
-    // v2.2.2: stronger, faster pulse so the "heart beat" is
-    // unmistakeable. Pre-v2.2.2:
-    //   peak: underlay-padding 20 (+6 from .hl), underlay-opacity 0.7 (+0.1)
-    //   period: 900ms each leg = 1.8s/cycle  -> too subtle, too slow
-    // Now:
-    //   peak: underlay-padding 28 (+14 from .hl), underlay-opacity 0.95 (+0.35)
-    //   period: 600ms each leg = 1.2s/cycle   -> reads as a clear heart beat
+    // v2.2.3: pulse keeps escalating amplitude AND adds a
+    // ``queue: false`` hint so it starts IMMEDIATELY instead of
+    // queueing behind the just-applied .hl class transitions
+    // (which were eating the first 220ms of the pulse cycle).
+    //
+    // Pre-v2.2.3 amplitudes were not visible to users who didn't
+    // also have the camera pan kicking in -- their report was
+    // "no pulse on canvas tap". The fix combines:
+    //   peak underlay-padding 14 -> 36 (+22) -- a wide halo bloom
+    //   peak underlay-opacity 0.6 -> 1.0    -- fully opaque ring
+    //   peak border-width      2 -> 5      -- thick bright stroke
+    //   period 500ms each leg = 1s/cycle    -- clear, urgent beat
+    //   queue: false                        -- runs from frame 0
+    //
+    // The border-width pulse is the headline change: ``border-width``
+    // IS in the base ``transition-property`` (v2.1.2 kept it for the
+    // .hl bloom feel), so it animates reliably via cy.animate.
     _startPulse(node) {
       this._pulseNode = node;
+      const peak = { style: {
+        'underlay-padding': 36,
+        'underlay-opacity': 1.0,
+        'border-width': 5,
+      }};
+      const rest = { style: {
+        'underlay-padding': 14,
+        'underlay-opacity': 0.6,
+        'border-width': 2,
+      }};
+      const opts = {
+        duration: 500,
+        easing: 'ease-in-out',
+        queue: false,
+      };
       const cycle = () => {
         if (
           !this._pulseNode ||
@@ -954,20 +1067,13 @@ function nebula() {
         ) {
           return;
         }
-        node.animate(
-          { style: { 'underlay-padding': 28, 'underlay-opacity': 0.95 } },
-          {
-            duration: 600,
-            easing: 'ease-in-out',
-            complete: () => {
-              if (this._pulseNode !== node) return;
-              node.animate(
-                { style: { 'underlay-padding': 14, 'underlay-opacity': 0.6 } },
-                { duration: 600, easing: 'ease-in-out', complete: cycle },
-              );
-            },
+        node.animate(peak, {
+          ...opts,
+          complete: () => {
+            if (this._pulseNode !== node) return;
+            node.animate(rest, { ...opts, complete: cycle });
           },
-        );
+        });
       };
       cycle();
     },
@@ -984,7 +1090,13 @@ function nebula() {
       if (this._pulseNode) {
         try {
           this._pulseNode.stop(true, false);
-          this._pulseNode.removeStyle('underlay-padding underlay-opacity');
+          // v2.2.3: also clear the border-width bypass added by
+          // the stronger pulse animation. Without this the
+          // de-selected node keeps a 5px border until the next
+          // .hl class change overwrites it.
+          this._pulseNode.removeStyle(
+            'underlay-padding underlay-opacity border-width'
+          );
         } catch (_) { /* node may have been removed; ignore */ }
       }
       this._pulseNode = null;

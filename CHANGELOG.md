@@ -2,6 +2,78 @@
 
 All notable changes to mnemo are documented here.
 
+## [2.2.3] - 2026-05-14
+
+**Nebula polish: visibility toggles + drag-stable edges + clean
+cold paint + finally-visible pulse.** Four user-reported issues
+addressed in one ship.
+
+### Added
+
+- **Edge + label visibility toggles** in the Nebula filter bar.
+  Each toggle is a pill with a leading dot -- filled when ON,
+  outlined when OFF. Both default to ON. Tapping each flips a
+  cytoscape class (``edge.edges-off`` or ``node.labels-off``)
+  inside a ``cy.batch()`` so the canvas redraws once.
+
+### Fixed
+
+- **Edges no longer disappear during pan / drag.**
+  ``hideEdgesOnViewport`` was ``true`` since v2.0 to keep big
+  graphs cheap during fast zooms. The pop-out behavior felt
+  jarring -- the graph "collapsed" into bare nodes mid-drag,
+  then snapped back. Set to ``false`` for v2.2.3. Labels still
+  hide during fast viewport changes (``hideLabelsOnViewport:
+  true``) because re-rendering label text isn't cheap and the
+  busy-text effect is genuinely distracting.
+
+- **Cold paint no longer flashes "edges first, then nodes".**
+  The v2.2.1 chunked-paint hid nodes (via
+  ``.preload-hidden`` opacity:0) but did NOT hide edges. Edges
+  between two invisible nodes still drew their lines, so for
+  the first ~720ms of a cold load the user saw a tangle of
+  connections in empty space. Now ``.preload-hidden`` covers
+  edges too (``display: none``), and edges fade in AFTER the
+  final node chunk lands. Cold paint reads as "densest cluster
+  appears, more nodes wave in, then the connection web settles
+  in".
+
+- **Canvas-tap pulse is now visible.** Despite v2.2.2 unifying
+  the camera-pan + strengthening the pulse, the user still
+  reported "no heart beat" on direct canvas taps. Two compounding
+  causes:
+  1. ``node.animate({style: ...})`` was being QUEUED behind the
+     just-applied ``.hl`` class transitions (which animate
+     ``border-width`` + ``underlay-padding`` over 220ms via the
+     base ``transition-property``). The first half of the pulse
+     was eaten by the queue wait. Now uses ``queue: false`` so
+     it runs from frame 0.
+  2. The pulse amplitudes were still too subtle without the
+     camera framing the node center. Bumped further:
+
+         peak underlay-padding 28 -> 36  (+22 from .hl baseline)
+         peak underlay-opacity 0.95 -> 1.0
+         peak border-width      2 -> 5  (NEW: thick bright stroke)
+         period 600ms -> 500ms each leg (1.0s/cycle = clear beat)
+
+  The headline change is the border-width pulse: ``border-width``
+  IS in the base ``transition-property``, so cy.animate moves it
+  reliably regardless of where the node is on screen.
+
+- **Pulse cleanup also clears border-width bypass.**
+  ``_stopPulse`` previously cleared only ``underlay-padding`` and
+  ``underlay-opacity``; a de-selected node would keep its 5px
+  pulsed border until the next ``.hl`` change overwrote it.
+  ``_stopPulse`` now also clears ``border-width``.
+
+### Tests + CI
+
+545 unit tests pass. Ruff lint + format clean. The existing
+``test_nebula_progressive.py`` cases still cover the chunked
+paint, body streaming, and neighbors stagger from v2.2.1; no
+new assertions needed for v2.2.3 (the changes are CSS + cy
+config + amplitude tuning behind existing call sites).
+
 ## [2.2.2] - 2026-05-14
 
 **Consistent select feedback in Nebula + stronger heart-beat pulse.**
