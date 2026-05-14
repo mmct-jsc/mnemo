@@ -195,6 +195,21 @@ def mount_ui(
             _ctx(page="sources", sources=s.list_sources()),
         )
 
+    @app.get("/workspaces", response_class=HTMLResponse)
+    def workspaces_page(request: Request) -> Any:
+        """v2.6 phase 8: workspace management page.
+
+        Lists every workspace with per-card actions (Activate / Edit /
+        Duplicate / Delete). Live node-count + warnings come from
+        ``GET /v1/workspaces/<id>`` per-card; the page itself is a
+        thin shell that hosts the Alpine factory and lets it fetch.
+        """
+        return templates.TemplateResponse(
+            request,
+            "workspaces.html",
+            _ctx(page="workspaces"),
+        )
+
     # --- /code UI family (v2.0 phase 11+) --------------------------------
 
     @app.get("/code", response_class=HTMLResponse)
