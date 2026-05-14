@@ -2,6 +2,73 @@
 
 All notable changes to mnemo are documented here.
 
+## [2.2.7] - 2026-05-14
+
+**Nebula side panel body preview: type-aware rendering** -- markdown
+bodies now render as HTML instead of monospace source.
+
+### Fixed (Nebula misidentified markdown as code)
+
+Reported (2026-05-14): "md file preview in nebula page seems off,
+it might misunderstand code and md".
+
+Root cause: the Nebula side panel template hardcoded the body to
+render inside a ``<pre class="line-numbers"><code class="language-X">``
+shell, and the helper ``streamBodyToCode`` (introduced v2.2.1 phase
+4 BEFORE ``mnemoRenderBody`` became streaming-aware in v2.2.5) just
+streamed plain text into that ``<code>`` element + called
+``Prism.highlightElement`` at the end. So EVERY body in Nebula --
+``memory_*``, ``project_doc``, ``plan_doc``, ``session_summary``,
+``code_*`` whose ``source_path`` ends in ``.md`` -- rendered through
+the code path. Markdown source appeared as monospace text with
+Prism trying to syntax-color ``**bold**`` and ``# heading`` as
+markdown SOURCE.
+
+Meanwhile the ``/node/<id>`` detail page and the search popover
+both used ``mnemoRenderBody`` correctly. Only Nebula bypassed the
+type-aware branching.
+
+### Changed
+
+Drop the ``<pre><code>`` shell + ``streamBodyToCode`` path. The
+side panel now renders into a ``<div class="nebula-body md-body">``
+and delegates to ``window.mnemoRenderBody(el, body, { type,
+sourcePath })`` -- the SAME helper ``node.html`` +
+``_search_results.html`` use. Three-branch decision:
+
+| Branch | Render |
+|---|---|
+| ``code_*`` | Prism-highlighted ``<pre><code>`` (helper writes the shell) |
+| ``commit`` | escaped plain ``<pre>`` |
+| markdown (memory / project / plan / session / docs) | marked + DOMPurify -> rendered HTML with the same typography as node.html |
+
+``mnemoRenderBody`` already owns streaming (via ``mnemoStreamText``)
+AND cancellation (via ``targetEl._mnemoStreamCancel``) since
+v2.2.5, so the side panel keeps progressive reveal + click-during-
+stream cancellation for free. The new ``bodyMode`` Alpine state
+toggles a ``.is-code`` class on the container so code bodies still
+get the dark monospace chrome.
+
+### Removed (deprecated helper)
+
+``streamBodyToCode`` is gone -- it was a v2.2.1 phase-4 vestige
+that ``mnemoRenderBody`` subsumes. The test
+``test_focus_node_streams_body_via_mnemo_stream_text`` is updated
+to accept either ``mnemoStreamText`` OR ``mnemoRenderBody`` (which
+itself routes through mnemoStreamText) as the streaming surface.
+
+### Tests
+
+- ``daemon/tests/unit/test_nebula_body_render.py`` (5 new cases):
+  no hardcoded ``<pre class="line-numbers"><code>`` shell, no
+  ``streamBodyToCode`` x-effect, mnemoRenderBody call wired,
+  ``md-body``-classed container, ``bodyLanguage`` helper still
+  present.
+- ``daemon/tests/unit/test_nebula_progressive.py`` (1 case
+  updated): the streaming-surface assertion now accepts
+  mnemoRenderBody as the delegating front-door.
+- Total daemon suite: 661 passing.
+
 ## [2.2.6] - 2026-05-14
 
 **Layout-change preserves focus state** -- DOM-overlay cross-fade
