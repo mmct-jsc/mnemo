@@ -435,15 +435,45 @@ def reindex(
 ) -> ReindexReport:
     """Reindex enabled sources. Idempotent.
 
-    For each source, parse all files; upsert new and changed nodes; delete
-    nodes whose source files have vanished. If ``embedder`` is supplied, also
-    re-embed any node that was added or updated. Returns a tally.
+    Synchronous wrapper around ``reindex_events`` -- consumes the event
+    generator and returns the final tally. The generator is the v2.2
+    streaming surface (see docs/plans/2026-05-14-ux-progressive-design.md
+    § 2) but this function preserves the legacy report-only return
+    shape for callers that don't care about per-file progress (CLI +
+    POST /v1/reindex).
+    """
+    return _drain(reindex_events(store, sources=sources, embedder=embedder))
+
+
+def reindex_events(
+    store: Store,
+    *,
+    sources: list[Source] | None = None,
+    embedder: object | None = None,
+) -> Iterator[tuple[str, dict]]:
+    """Reindex enabled sources, yielding ``(event_name, payload)`` tuples.
+
+    Event sequence:
+
+      ('start', {'started_at': int})
+      ('file',  {'idx': int, 'path': str, 'status': str,
+                 'added': int, 'updated': int, 'unchanged': int,
+                 'errors': list}) -- one per parsed file
+      ('done',  {'added': int, 'updated': int, 'unchanged': int,
+                 'removed': int, 'errors': list, 'duration_ms': int})
+
+    ``status`` is one of ``indexed`` / ``updated`` / ``unchanged`` /
+    ``error``. The generator is the single source of truth -- the
+    legacy ``reindex()`` is now a thin consumer of it.
 
     v2.0 phase 4: code_repo sources emit multiple nodes per file
     (module + declarations). After the upsert loop, a post-pass walks
     the freshly-upserted nodes' frontmatter for ``code_unit`` edge
     intent and creates ``defines`` / ``method_of`` / ``imports`` edges.
     """
+    started_at = int(time.time())
+    yield ("start", {"started_at": started_at})
+
     report = ReindexReport()
     src_list = sources if sources is not None else store.list_sources(only_enabled=True)
     seen_source_paths: set[str] = set()
@@ -451,6 +481,7 @@ def reindex(
     # against a small, freshly-parsed set instead of re-scanning the
     # whole store.
     touched_code_node_ids: list[str] = []
+    file_idx = 0
 
     for src in src_list:
         try:
@@ -458,6 +489,11 @@ def reindex(
                 node_source_path = parsed.source_path or str(parsed.path)
                 seen_source_paths.add(node_source_path)
                 existing = store.get_node_by_source(node_source_path)
+                file_idx += 1
+                # Default per-file event delta; set the right counter
+                # below based on which branch we took.
+                delta = {"added": 0, "updated": 0, "unchanged": 0}
+                status: str
                 if existing is None:
                     new_node = Node.new(
                         type=parsed.type,
@@ -475,6 +511,8 @@ def reindex(
                     if embedder is not None:
                         _embed(store, new_node, embedder)
                     report.added += 1
+                    delta["added"] = 1
+                    status = "indexed"
                     if parsed.type.startswith("code_"):
                         touched_code_node_ids.append(new_node.id)
                 elif existing.hash != parsed.hash:
@@ -492,20 +530,47 @@ def reindex(
                     if embedder is not None:
                         _embed(store, existing, embedder)
                     report.updated += 1
+                    delta["updated"] = 1
+                    status = "updated"
                     if parsed.type.startswith("code_"):
                         touched_code_node_ids.append(existing.id)
                 else:
                     report.unchanged += 1
+                    delta["unchanged"] = 1
+                    status = "unchanged"
                     if parsed.type.startswith("code_"):
                         # Same hash but the edges might have been
                         # missed last run (e.g. an imports target was
                         # added after the first reindex). Cheap to
                         # re-resolve so include it in the post-pass.
                         touched_code_node_ids.append(existing.id)
+                yield (
+                    "file",
+                    {
+                        "idx": file_idx,
+                        "path": node_source_path,
+                        "status": status,
+                        **delta,
+                        "errors": [],
+                    },
+                )
             store.mark_source_indexed(src.path)
         except Exception as exc:  # noqa: BLE001 - we want to keep going on bad files
             report.errors.append((src.path, str(exc)))
             log.warning("error scanning source %s: %s", src.path, exc)
+            file_idx += 1
+            yield (
+                "file",
+                {
+                    "idx": file_idx,
+                    "path": src.path,
+                    "status": "error",
+                    "added": 0,
+                    "updated": 0,
+                    "unchanged": 0,
+                    "errors": [str(exc)],
+                },
+            )
 
     # v2.0 phase 4 edge post-pass: resolve code-unit edge intent into
     # real Edge rows. We run this AFTER all nodes are upserted so the
@@ -532,6 +597,37 @@ def reindex(
                         report.removed += 1
                     break
 
+    duration_ms = max(0, int((time.time() - started_at) * 1000))
+    yield (
+        "done",
+        {
+            "added": report.added,
+            "updated": report.updated,
+            "unchanged": report.unchanged,
+            "removed": report.removed,
+            # Errors are tuples; serialize as plain list for JSON.
+            "errors": [{"path": p, "error": e} for (p, e) in report.errors],
+            "duration_ms": duration_ms,
+        },
+    )
+
+
+def _drain(events: Iterator[tuple[str, dict]]) -> ReindexReport:
+    """Consume a ``reindex_events`` generator and reconstruct the legacy
+    ``ReindexReport`` shape from the final ``done`` payload.
+
+    Centralized here so existing callers (``ingest.reindex`` + future
+    server-side helpers) don't each have to know the event protocol.
+    """
+    report = ReindexReport()
+    for name, payload in events:
+        if name == "done":
+            report.added = payload["added"]
+            report.updated = payload["updated"]
+            report.unchanged = payload["unchanged"]
+            report.removed = payload["removed"]
+            # done's errors are dicts {path, error}; legacy report uses tuples.
+            report.errors = [(e["path"], e["error"]) for e in payload["errors"]]
     return report
 
 
