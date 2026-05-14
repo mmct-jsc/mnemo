@@ -412,7 +412,42 @@ def _extract_imports(tree: tree_sitter.Tree, language: str) -> list[str]:
         return _extract_python_imports(tree)
     if language in ("javascript", "typescript", "tsx"):
         return _extract_jsts_imports(tree)
+    if language == "go":
+        return _extract_go_imports(tree)
     return []
+
+
+def _extract_go_imports(tree: tree_sitter.Tree) -> list[str]:
+    """Go ``import`` declarations -- both single and grouped.
+
+    Recognized shapes:
+      - ``import "fmt"``                         -> ``fmt``
+      - ``import alias "pkg/path"``              -> ``pkg/path``
+        (we record the path, not the alias)
+      - ``import ( "fmt"; "os"; ... )``          -> each path
+      - dot ``import . "pkg"`` / blank ``import _ "pkg"``
+                                                 -> the path
+    """
+    targets: list[str] = []
+    for child in tree.root_node.children:
+        if child.type != "import_declaration":
+            continue
+        # Single import: import_declaration -> import_spec.
+        # Grouped:       import_declaration -> import_spec_list -> N import_spec.
+        _go_collect_import_specs(child, targets)
+    return targets
+
+
+def _go_collect_import_specs(node: tree_sitter.Node, targets: list[str]) -> None:
+    """DFS for ``import_spec`` nodes under an ``import_declaration``
+    or its inner ``import_spec_list``."""
+    if node.type == "import_spec":
+        path_node = node.child_by_field_name("path")
+        if path_node is not None:
+            targets.append(_unquote_jsts_string(_slice_text(path_node)))
+        return
+    for child in node.children:
+        _go_collect_import_specs(child, targets)
 
 
 def _extract_python_imports(tree: tree_sitter.Tree) -> list[str]:
@@ -761,3 +796,226 @@ _LANGUAGE_EXTRACTORS["typescript"] = _extract_jsts
 # We register the same extractor so a .tsx file gets its function /
 # class declarations indexed alongside React extractor output.
 _LANGUAGE_EXTRACTORS["tsx"] = _extract_jsts
+
+
+# --- Go extractor (v2.5.1) -----------------------------------------------
+
+# Tree-sitter-go AST node names for the shapes we care about:
+#   - ``function_declaration``         func foo() {}
+#   - ``method_declaration``           func (r *T) m() {} -- has a
+#                                       ``receiver`` field
+#   - ``type_declaration``             wraps one or more ``type_spec``
+#   - ``type_spec``                    has ``name`` + the underlying
+#                                       type expression
+#   - ``struct_type`` / ``interface_type``
+#                                       the type shapes we map onto
+#                                       ``code_class``
+#   - ``import_declaration``           wraps single or grouped imports
+#   - ``import_spec``                  has ``path`` (string literal)
+#                                       + optional alias ``name``
+#   - ``call_expression``              has ``function`` + ``arguments``
+#   - ``selector_expression``          ``a.b`` -- has ``operand`` +
+#                                       ``field``
+
+
+def _extract_go(tree: tree_sitter.Tree, source: bytes, file_path: str) -> list[CodeUnit]:
+    """v2.5.1 Tier 1 for Go.
+
+    Go has no classes; structs + their receiver-methods are the
+    natural analogue. We map ``type Foo struct { ... }`` and
+    ``type Foo interface { ... }`` to ``code_class``; methods on a
+    receiver type to ``code_method`` parented at the receiver
+    type's ``code_class`` source_path.
+    """
+    units: list[CodeUnit] = []
+    # First pass: collect type declarations so receiver-methods
+    # can later look up their parent's source_path.
+    type_units_by_name: dict[str, CodeUnit] = {}
+    for child in tree.root_node.children:
+        if child.type == "function_declaration":
+            units.append(_go_function_unit(child, source, file_path))
+        elif child.type == "type_declaration":
+            for type_unit in _go_type_units(child, source, file_path):
+                units.append(type_unit)
+                type_units_by_name[type_unit.name] = type_unit
+        elif child.type == "method_declaration":
+            # Deferred to second pass once type_units_by_name is full.
+            pass
+
+    # Second pass: method_declaration nodes can appear before OR
+    # after their receiver type's type_declaration in the file, so
+    # we run a separate sweep and attach each method to its parent
+    # via the index built above.
+    for child in tree.root_node.children:
+        if child.type == "method_declaration":
+            unit = _go_method_unit(child, source, file_path, type_units_by_name)
+            if unit is not None:
+                units.append(unit)
+    return units
+
+
+def _go_function_unit(node: tree_sitter.Node, source: bytes, file_path: str) -> CodeUnit:
+    name = _go_decl_name(node)
+    start_line = node.start_point[0] + 1
+    end_line = node.end_point[0] + 1
+    body_bytes = _slice_bytes(source, node)
+    return CodeUnit(
+        type="code_function",
+        name=name,
+        body=_truncate_lines(
+            body_bytes.decode("utf-8", errors="replace"), FUNCTION_BODY_HEAD_LINES
+        ),
+        source_path=f"{file_path}:{start_line}-{end_line}",
+        description=None,
+        hash=_hash_bytes(body_bytes),
+        call_sites=_go_call_sites(node),
+    )
+
+
+def _go_type_units(type_decl: tree_sitter.Node, source: bytes, file_path: str) -> list[CodeUnit]:
+    """A single ``type_declaration`` can contain multiple type_specs
+    (``type ( Foo struct{}; Bar interface{} )``). Yield one
+    ``code_class`` per spec whose underlying type is a struct or
+    interface.
+    """
+    out: list[CodeUnit] = []
+    for child in type_decl.children:
+        if child.type != "type_spec":
+            continue
+        name_node = child.child_by_field_name("name")
+        type_node = child.child_by_field_name("type")
+        if name_node is None or type_node is None:
+            continue
+        # We classify struct + interface as the class-analogue.
+        # Other type aliases (``type Foo int``) aren't class-shaped
+        # and stay out of the graph at Tier 1.
+        if type_node.type not in ("struct_type", "interface_type"):
+            continue
+        name = _slice_text(name_node)
+        start_line = child.start_point[0] + 1
+        end_line = child.end_point[0] + 1
+        body_bytes = _slice_bytes(source, child)
+        out.append(
+            CodeUnit(
+                type="code_class",
+                name=name,
+                body=_truncate_lines(
+                    body_bytes.decode("utf-8", errors="replace"), MODULE_HEAD_LINES
+                ),
+                source_path=f"{file_path}:{start_line}-{end_line}",
+                description=None,
+                hash=_hash_bytes(body_bytes),
+            )
+        )
+    return out
+
+
+def _go_method_unit(
+    node: tree_sitter.Node,
+    source: bytes,
+    file_path: str,
+    type_units_by_name: dict[str, CodeUnit],
+) -> CodeUnit | None:
+    name = _go_decl_name(node)
+    receiver_type = _go_receiver_type(node)
+    start_line = node.start_point[0] + 1
+    end_line = node.end_point[0] + 1
+    body_bytes = _slice_bytes(source, node)
+    unit = CodeUnit(
+        type="code_method",
+        name=name,
+        body=_truncate_lines(
+            body_bytes.decode("utf-8", errors="replace"), FUNCTION_BODY_HEAD_LINES
+        ),
+        source_path=f"{file_path}:{start_line}-{end_line}",
+        description=None,
+        hash=_hash_bytes(body_bytes),
+        call_sites=_go_call_sites(node),
+    )
+    # Wire the parent only when we resolved the receiver type to a
+    # type_spec in the same file. Cross-file resolution happens at
+    # the post-pass layer same as JS / Python.
+    if receiver_type and receiver_type in type_units_by_name:
+        unit.parent_source_path = type_units_by_name[receiver_type].source_path
+    return unit
+
+
+def _go_receiver_type(method: tree_sitter.Node) -> str | None:
+    """Pull the type name from a method_declaration's receiver
+    field. Strips a leading ``*`` for pointer receivers."""
+    receiver = method.child_by_field_name("receiver")
+    if receiver is None:
+        return None
+    # receiver is a parameter_list with one parameter_declaration.
+    for child in receiver.children:
+        if child.type != "parameter_declaration":
+            continue
+        type_node = child.child_by_field_name("type")
+        if type_node is None:
+            continue
+        if type_node.type == "pointer_type":
+            # *Receiver -- the inner type is the qualified type.
+            for inner in type_node.children:
+                if inner.type == "type_identifier":
+                    return _slice_text(inner)
+        if type_node.type == "type_identifier":
+            return _slice_text(type_node)
+    return None
+
+
+def _go_decl_name(node: tree_sitter.Node) -> str:
+    name_node = node.child_by_field_name("name")
+    if name_node is None:
+        return "<anonymous>"
+    return _slice_text(name_node)
+
+
+def _go_call_sites(fn_node: tree_sitter.Node) -> list[CallSite]:
+    """Walk a function / method body collecting every
+    ``call_expression``."""
+    body = fn_node.child_by_field_name("body")
+    if body is None:
+        return []
+    sites: list[CallSite] = []
+    _collect_go_calls(body, sites)
+    return sites
+
+
+def _collect_go_calls(node: tree_sitter.Node, out: list[CallSite]) -> None:
+    """DFS for ``call_expression`` nodes; skip nested function
+    declarations / func literals so they don't pollute the
+    enclosing function's call_sites."""
+    if node.type in ("function_declaration", "method_declaration", "func_literal"):
+        return
+    if node.type == "call_expression":
+        site = _go_call_site_from_node(node)
+        if site is not None:
+            out.append(site)
+    for child in node.children:
+        _collect_go_calls(child, out)
+
+
+def _go_call_site_from_node(call: tree_sitter.Node) -> CallSite | None:
+    """Read the function expression of a ``call_expression`` node
+    (Go). Bare call -> ``identifier``; package / receiver call ->
+    ``selector_expression``."""
+    fn = call.child_by_field_name("function")
+    if fn is None:
+        return None
+    line = call.start_point[0] + 1
+    if fn.type == "identifier":
+        return CallSite(callee_name=_slice_text(fn), receiver=None, line=line)
+    if fn.type == "selector_expression":
+        operand = fn.child_by_field_name("operand")
+        field = fn.child_by_field_name("field")
+        if field is None:
+            return None
+        callee_name = _slice_text(field)
+        receiver = _slice_text(operand) if operand is not None else None
+        if receiver and "." in receiver:
+            receiver = receiver.split(".", 1)[0]
+        return CallSite(callee_name=callee_name, receiver=receiver, line=line)
+    return None
+
+
+_LANGUAGE_EXTRACTORS["go"] = _extract_go
