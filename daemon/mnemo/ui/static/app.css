@@ -1444,6 +1444,125 @@ dl.meta dd { margin: 0; color: var(--fg); }
 }
 .ws-newform-actions button { padding: 0.4rem 0.8rem; font-size: 0.82rem; }
 
+/* --- v2.6 phase 10.2: chip-based project_keys picker ------------ */
+
+.ws-chips {
+  position: relative;
+  display: flex; flex-wrap: wrap;
+  gap: 0.3rem;
+  padding: 0.4rem 0.5rem;
+  margin-top: 0.3rem;
+  background: var(--bg);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  min-height: 2.25rem;
+  align-items: center;
+}
+.ws-chips:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.ws-chip {
+  display: inline-flex; align-items: center; gap: 0.3rem;
+  padding: 0.2rem 0.45rem;
+  background: var(--accent-soft);
+  border: 1px solid rgba(126, 231, 224, 0.3);
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  border-radius: 999px;
+  max-width: 100%;
+}
+.ws-chip-label {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  min-width: 0;
+  max-width: 220px;
+}
+.ws-chip-remove {
+  background: transparent;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  padding: 0;
+  width: 16px; height: 16px;
+  display: grid; place-items: center;
+  border-radius: 50%;
+  font-size: 1rem;
+  line-height: 1;
+  opacity: 0.7;
+  transition: var(--transition);
+}
+.ws-chip-remove:hover { opacity: 1; background: rgba(126, 231, 224, 0.18); }
+
+.ws-chip-input {
+  flex: 1 1 8rem;
+  min-width: 8rem;
+  background: transparent;
+  border: none;
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  padding: 0.15rem 0.2rem;
+  outline: none;
+}
+
+.ws-chip-suggest {
+  position: absolute; left: 0; right: 0; top: 100%;
+  margin-top: 0.25rem;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  max-height: 240px;
+  overflow-y: auto;
+  z-index: 70;
+}
+.ws-chip-suggest-item {
+  display: flex; align-items: center; gap: 0.5rem;
+  width: 100%;
+  padding: 0.35rem 0.6rem;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  text-align: left;
+  cursor: pointer;
+  transition: var(--transition);
+}
+.ws-chip-suggest-item:hover,
+.ws-chip-suggest-item.active {
+  background: var(--panel-2);
+  color: var(--accent);
+}
+.ws-chip-suggest-kind {
+  display: inline-block;
+  font-size: 0.66rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 0.05rem 0.4rem;
+  border-radius: 3px;
+  color: var(--fg-dim);
+  background: var(--bg);
+  border: 1px solid var(--border-soft);
+  flex-shrink: 0;
+  min-width: 3.2rem;
+  text-align: center;
+}
+.ws-chip-suggest-kind.kind-project { color: var(--accent); border-color: rgba(126, 231, 224, 0.3); }
+.ws-chip-suggest-kind.kind-fs      { color: var(--info);   border-color: rgba(108, 182, 255, 0.3); }
+.ws-chip-suggest-value {
+  flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  min-width: 0;
+}
+.ws-chip-suggest-meta {
+  color: var(--fg-muted);
+  font-size: 0.72rem;
+  flex-shrink: 0;
+}
+
 /* --- /workspaces management page -------------------------------- */
 
 .workspaces-page { max-width: 1200px; }

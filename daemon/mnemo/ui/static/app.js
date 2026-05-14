@@ -387,15 +387,152 @@
   // (DOM-overlay over canvas-library effects) we use CSS class
   // toggles for animations rather than imperative timeline work.
   // ------------------------------------------------------------------
+  // ------------------------------------------------------------------
+  // v2.6 phase 10.2: chip-based project_key picker.
+  //
+  // _wsChipMixin returns the shared state + methods both
+  // workspaceSwitcher and workspacesPage spread into themselves.
+  // Input field hits /v1/fs/suggest + /v1/projects/known via the
+  // shared makeAutocomplete helper -- but since the helper lives
+  // inside a per-page <script> in base.html, we wire the suggestions
+  // manually here.
+  // ------------------------------------------------------------------
+  function _wsChipMixin() {
+    return {
+      chips: [],
+      chipInput: '',
+      chipSuggestions: [],
+      chipSuggestOpen: false,
+      chipActiveIdx: -1,
+
+      async refreshChipSuggestions(query) {
+        const q = (query || '').trim();
+        try {
+          const [fsResp, knownResp] = await Promise.all([
+            fetch('/v1/fs/suggest?prefix=' + encodeURIComponent(q)).catch(() => null),
+            fetch('/v1/projects/known').catch(() => null),
+          ]);
+          const fsList = fsResp && fsResp.ok ? (await fsResp.json()).candidates || [] : [];
+          const knownList = knownResp && knownResp.ok ? (await knownResp.json()).items || [] : [];
+          const lower = q.toLowerCase();
+          const out = [];
+          for (const it of knownList) {
+            if (!lower || it.project_key.toLowerCase().includes(lower)) {
+              out.push({
+                kind: 'project',
+                value: it.project_key,
+                meta: `${it.node_count} node${it.node_count === 1 ? '' : 's'}`,
+              });
+            }
+          }
+          for (const p of fsList) {
+            out.push({ kind: 'fs', value: p });
+          }
+          this.chipSuggestions = out.slice(0, 12);
+          this.chipSuggestOpen = this.chipSuggestions.length > 0;
+          this.chipActiveIdx = -1;
+        } catch (_) {
+          this.chipSuggestions = [];
+          this.chipSuggestOpen = false;
+        }
+      },
+
+      closeChipSuggestions() {
+        this.chipSuggestOpen = false;
+        this.chipActiveIdx = -1;
+      },
+
+      moveChipSuggestion(delta) {
+        if (!this.chipSuggestions.length) return;
+        const n = this.chipSuggestions.length;
+        this.chipActiveIdx = (this.chipActiveIdx + delta + n) % n;
+      },
+
+      async pickChipSuggestion(entry) {
+        if (!entry) return;
+        if (entry.kind === 'project') {
+          this.addChip(entry.value);
+        } else if (entry.kind === 'fs') {
+          // Resolve the path to a canonical project_key so the chip
+          // matches what retrieval will match against. The daemon's
+          // resolver is the single source of truth.
+          try {
+            const r = await fetch('/v1/projects/resolve', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ path: entry.value }),
+            });
+            if (r.ok) {
+              const data = await r.json();
+              this.addChip(data.project_key);
+            } else {
+              // Fallback: use the raw path so the user is never blocked.
+              this.addChip(entry.value);
+            }
+          } catch (_) {
+            this.addChip(entry.value);
+          }
+        }
+        this.chipInput = '';
+        this.closeChipSuggestions();
+      },
+
+      async submitChipInput() {
+        const raw = (this.chipInput || '').trim();
+        if (!raw) return;
+        // Heuristic: if the value looks like an absolute path
+        // (Windows drive letter or POSIX /), try /v1/projects/resolve.
+        // Otherwise treat it as a literal project_key.
+        const looksLikePath = /^([A-Za-z]:[\\/]|\/)/.test(raw);
+        if (looksLikePath) {
+          try {
+            const r = await fetch('/v1/projects/resolve', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ path: raw }),
+            });
+            if (r.ok) {
+              const data = await r.json();
+              this.addChip(data.project_key);
+              this.chipInput = '';
+              this.closeChipSuggestions();
+              return;
+            }
+          } catch (_) { /* fall through */ }
+        }
+        this.addChip(raw);
+        this.chipInput = '';
+        this.closeChipSuggestions();
+      },
+
+      addChip(value) {
+        const v = (value || '').trim();
+        if (!v) return;
+        if (!this.chips.includes(v)) this.chips.push(v);
+      },
+
+      removeChip(idx) {
+        if (idx < 0 || idx >= this.chips.length) return;
+        this.chips.splice(idx, 1);
+      },
+
+      resetChips(initial = []) {
+        this.chips = Array.isArray(initial) ? [...initial] : [];
+        this.chipInput = '';
+        this.closeChipSuggestions();
+      },
+    };
+  }
+
   window.workspaceSwitcher = function () {
     return {
+      ..._wsChipMixin(),
       // --- State -------------------------------------------------------
       workspaces: [],
       active: null,
       open: false,
       showNewModal: false,
       newName: '',
-      newProjectKeysInput: '',
       busy: false,
       error: null,
       capWarning: null,
@@ -493,10 +630,7 @@
         this.busy = true;
         this.error = null;
         try {
-          const project_keys = (this.newProjectKeysInput || '')
-            .split(',')
-            .map((s) => s.trim())
-            .filter(Boolean);
+          const project_keys = [...this.chips];
           const resp = await fetch('/v1/workspaces', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -512,7 +646,7 @@
           // -> auto-activate" UX.
           await this.activate(ws.id);
           this.newName = '';
-          this.newProjectKeysInput = '';
+          this.resetChips();
           this.showNewModal = false;
         } finally {
           this.busy = false;
@@ -555,13 +689,13 @@
   // ------------------------------------------------------------------
   window.workspacesPage = function () {
     return {
+      ..._wsChipMixin(),
       workspaces: [],
       active: null,
       busy: false,
       error: null,
       showNew: false,
       newName: '',
-      newProjectKeysInput: '',
       _eventSource: null,
 
       init() {
@@ -670,10 +804,7 @@
         this.busy = true;
         this.error = null;
         try {
-          const project_keys = (this.newProjectKeysInput || '')
-            .split(',')
-            .map((s) => s.trim())
-            .filter(Boolean);
+          const project_keys = [...this.chips];
           const resp = await fetch('/v1/workspaces', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -687,7 +818,7 @@
           const ws = await resp.json();
           await this.activate(ws.id);
           this.newName = '';
-          this.newProjectKeysInput = '';
+          this.resetChips();
           this.showNew = false;
         } finally {
           this.busy = false;

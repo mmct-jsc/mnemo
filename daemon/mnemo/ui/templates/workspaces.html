@@ -29,12 +29,48 @@
                placeholder="e.g. ai-edge work">
       </label>
       <label>
-        <span>Project keys (comma-separated)</span>
-        <input type="text" x-model="newProjectKeysInput"
-               autocomplete="off" spellcheck="false"
-               placeholder="D--Repository-edge-device, D--Repository-knowledge-base">
+        <span>Projects</span>
+        <div class="ws-chips"
+             @click.outside="closeChipSuggestions()"
+             @keydown.escape="closeChipSuggestions()">
+          <template x-for="(chip, idx) in chips" :key="chip">
+            <span class="ws-chip">
+              <span class="ws-chip-label" x-text="chip"></span>
+              <button type="button"
+                      class="ws-chip-remove"
+                      @click="removeChip(idx)"
+                      aria-label="Remove">&times;</button>
+            </span>
+          </template>
+          <input type="text"
+                 class="ws-chip-input"
+                 x-model="chipInput"
+                 autocomplete="off" spellcheck="false"
+                 placeholder="type path or project key"
+                 @focus="refreshChipSuggestions(chipInput)"
+                 @input.debounce.180ms="refreshChipSuggestions(chipInput)"
+                 @keydown.down.prevent="moveChipSuggestion(1)"
+                 @keydown.up.prevent="moveChipSuggestion(-1)"
+                 @keydown.enter.prevent="chipActiveIdx >= 0 ? pickChipSuggestion(chipSuggestions[chipActiveIdx]) : submitChipInput()"
+                 @keydown.backspace="if (!chipInput && chips.length) removeChip(chips.length - 1)">
+          <div class="ws-chip-suggest" x-show="chipSuggestOpen" x-cloak>
+            <template x-for="(s, i) in chipSuggestions" :key="s.kind + ':' + s.value">
+              <button type="button"
+                      class="ws-chip-suggest-item"
+                      :class="{ active: i === chipActiveIdx }"
+                      @mousedown.prevent="pickChipSuggestion(s)"
+                      @mouseenter="chipActiveIdx = i">
+                <span class="ws-chip-suggest-kind"
+                      :class="'kind-' + s.kind"
+                      x-text="s.kind"></span>
+                <span class="ws-chip-suggest-value" x-text="s.value"></span>
+                <span class="ws-chip-suggest-meta" x-show="s.meta" x-cloak x-text="s.meta"></span>
+              </button>
+            </template>
+          </div>
+        </div>
       </label>
-      <p class="hint">Empty project_keys = BASE-only workspace.</p>
+      <p class="hint">Empty projects = BASE-only workspace.</p>
       <div class="ws-card-actions">
         <button class="primary" @click="createWorkspace()"
                 :disabled="busy || !newName.trim()">Create &amp; activate</button>
