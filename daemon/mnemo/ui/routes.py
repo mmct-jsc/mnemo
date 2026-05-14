@@ -707,6 +707,15 @@ def mount_ui(
         # below sets this to the pre-cap size; other paths leave it
         # at zero (no banner).
         total_in_scope_total: int = 0
+        # v2.6.0 polish: every in-scope code_module returned UNBOUNDED
+        # so the Nebula left-panel file tree shows the full project
+        # layout even when the canvas is cap'd. The tree is the
+        # navigation surface -- truncating it would hide modules
+        # entirely. tree_modules is a flat list of {id, name,
+        # source_path, type, project} dicts; the client builds the
+        # tree from this side-channel instead of from the canvas
+        # elements.
+        tree_modules: list[dict[str, Any]] = []
 
         # v2.6.0 polish: tighten scope semantics for workspaces. Two
         # passes:
@@ -812,18 +821,32 @@ def mount_ui(
             if keys_set is not None:
                 seen_ids: set[str] = set()
                 collected: list[Node] = []
+                # v2.6.0 polish: keep a separate unbounded list of every
+                # code_module in scope so the file-tree shows the full
+                # repo structure. This is the navigation surface; the
+                # canvas cap below doesn't apply here.
                 for key in keys_set:
                     for n in s.list_nodes(
                         project_key=key,
-                        limit=GRAPH_NODE_CAP * 4,  # oversample so prioritization has room
+                        limit=100_000,  # unbounded for tree purposes
                         include_base=False,
                     ):
                         if n.id not in seen_ids:
                             seen_ids.add(n.id)
                             collected.append(n)
+                        if n.type == "code_module" and n.source_path:
+                            tree_modules.append(
+                                {
+                                    "id": n.id,
+                                    "name": n.name,
+                                    "source_path": n.source_path,
+                                    "type": n.type,
+                                    "project": n.project_key,
+                                }
+                            )
                 # BASE-flagged nodes apply to every workspace -- list them
                 # once and dedupe.
-                for n in s.list_nodes(limit=GRAPH_NODE_CAP * 4):
+                for n in s.list_nodes(limit=100_000):
                     if n.base and n.id not in seen_ids:
                         seen_ids.add(n.id)
                         collected.append(n)
@@ -865,6 +888,21 @@ def mount_ui(
                 nodes = s.list_nodes(limit=GRAPH_NODE_CAP)
                 in_scope = [n for n in nodes if _passes_scope_strict(n)]
                 in_scope_ids = {n.id for n in in_scope}
+                # Populate tree_modules from in_scope (single-project
+                # path doesn't need unbounded lookup -- list_nodes is
+                # capped here for the canvas path, and the same set
+                # feeds the tree).
+                tree_modules.extend(
+                    {
+                        "id": n.id,
+                        "name": n.name,
+                        "source_path": n.source_path,
+                        "type": n.type,
+                        "project": n.project_key,
+                    }
+                    for n in in_scope
+                    if n.type == "code_module" and n.source_path
+                )
                 boundary = []
                 if not base_only:
                     null_candidates = [
@@ -961,5 +999,10 @@ def mount_ui(
                 "shown_node_count": shown_count,
                 "total_in_scope": total_in_scope_total,
                 "truncated": truncated,
+                # v2.6.0 polish: unbounded module list for the
+                # left-panel file tree. Lets the user navigate to a
+                # module that's outside the canvas cap (click triggers
+                # an ego-network fetch via ?node=).
+                "tree_modules": tree_modules,
             }
         )
