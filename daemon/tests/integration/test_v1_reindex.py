@@ -69,21 +69,26 @@ def test_reindex_status_idle_when_no_run_in_flight(client: TestClient) -> None:
 def test_reindex_status_reports_running_mid_flight(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Patch ingest.reindex to block on an event so we can observe the
-    running state from a second request before the first one returns."""
+    """Patch ingest.reindex_events to block on an event so we can
+    observe the running state from a second request before the first
+    one returns.
+
+    v2.6: server now drives reindex_events directly (was: ingest.reindex
+    wrapper) so the slow stub must be a generator.
+    """
     started = threading.Event()
     release = threading.Event()
 
-    original = ingest_module.reindex
+    original = ingest_module.reindex_events
 
-    def slow_reindex(*args: object, **kwargs: object) -> object:
+    def slow_reindex_events(*args: object, **kwargs: object):
         started.set()
         # Wait until the test releases us, then run the real thing.
         if not release.wait(timeout=5):
             pytest.fail("test did not release the slow reindex within 5 s")
-        return original(*args, **kwargs)
+        yield from original(*args, **kwargs)
 
-    monkeypatch.setattr(ingest_module, "reindex", slow_reindex)
+    monkeypatch.setattr(ingest_module, "reindex_events", slow_reindex_events)
 
     # Kick off the slow reindex in a background thread.
     result: dict[str, object] = {}
@@ -128,15 +133,15 @@ def test_concurrent_reindex_returns_409_with_started_at(
     with a detail payload the UI can use to show "running since HH:MM"."""
     started = threading.Event()
     release = threading.Event()
-    original = ingest_module.reindex
+    original = ingest_module.reindex_events
 
-    def slow_reindex(*args: object, **kwargs: object) -> object:
+    def slow_reindex_events(*args: object, **kwargs: object):
         started.set()
         if not release.wait(timeout=5):
             pytest.fail("test did not release the slow reindex within 5 s")
-        return original(*args, **kwargs)
+        yield from original(*args, **kwargs)
 
-    monkeypatch.setattr(ingest_module, "reindex", slow_reindex)
+    monkeypatch.setattr(ingest_module, "reindex_events", slow_reindex_events)
 
     first_result: dict[str, object] = {}
 
@@ -180,7 +185,7 @@ def test_reindex_lock_released_on_error(
     def boom(*args: object, **kwargs: object) -> object:
         raise RuntimeError("intentional test failure")
 
-    monkeypatch.setattr(ingest_module, "reindex", boom)
+    monkeypatch.setattr(ingest_module, "reindex_events", boom)
 
     # The endpoint surfaces the error as a 500; the lock should be free
     # afterward.
