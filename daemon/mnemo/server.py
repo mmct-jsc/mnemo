@@ -56,10 +56,13 @@ from mnemo.api_schemas import (
     QueryIn,
     QueryOut,
     ReindexReportOut,
+    ReindexReportSectionsOut,
     RetuneIn,
     RetuneReportOut,
     SourceIn,
     SourceOut,
+    SourceOverrideBatchIn,
+    SourceOverrideOut,
     SourcePreviewBreakdownOut,
     SourcePreviewIn,
     SourcePreviewOut,
@@ -362,7 +365,43 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
             )
         try:
             state.reindex_started_at = int(time.time())
-            report = ingest.reindex(s, embedder=e if embed else None)
+            _broadcast_event(
+                state,
+                "reindex_started",
+                {"at": int(time.time() * 1000)},
+            )
+            # v2.6 phase 6: cache the three-section report into app.state.
+            # ingest.reindex returns the legacy aggregate; drain
+            # reindex_events here so we can intercept the report event.
+            from mnemo.ingest import ReindexReport
+
+            report = ReindexReport()
+            captured_report: dict | None = None
+            for name, payload in ingest.reindex_events(s, embedder=e if embed else None):
+                if name == "report":
+                    captured_report = payload
+                elif name == "done":
+                    report.added = payload["added"]
+                    report.updated = payload["updated"]
+                    report.unchanged = payload["unchanged"]
+                    report.removed = payload["removed"]
+                    report.errors = [(err["path"], err["error"]) for err in payload["errors"]]
+            if captured_report is not None:
+                state.last_reindex_report = {
+                    **captured_report,
+                    "finished_at": int(time.time() * 1000),
+                }
+            _broadcast_event(
+                state,
+                "reindex_done",
+                {
+                    "at": int(time.time() * 1000),
+                    "added": report.added,
+                    "updated": report.updated,
+                    "unchanged": report.unchanged,
+                    "removed": report.removed,
+                },
+            )
             return ReindexReportOut.from_report(report)
         finally:
             state.reindex_started_at = None
@@ -398,10 +437,33 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
                 return
             try:
                 state.reindex_started_at = int(time.time())
+                _broadcast_event(state, "reindex_started", {"at": int(time.time() * 1000)})
+                final_payload: dict | None = None
+                captured_report: dict | None = None
                 # ingest.reindex_events yields (name, payload) tuples.
                 # We encode each one as an SSE frame and flush.
                 for name, payload in ingest.reindex_events(s, embedder=e if embed else None):
+                    if name == "report":
+                        captured_report = payload
+                    elif name == "done":
+                        final_payload = payload
                     yield encode(name, payload)
+                if captured_report is not None:
+                    state.last_reindex_report = {
+                        **captured_report,
+                        "finished_at": int(time.time() * 1000),
+                    }
+                _broadcast_event(
+                    state,
+                    "reindex_done",
+                    {
+                        "at": int(time.time() * 1000),
+                        "added": (final_payload or {}).get("added", 0),
+                        "updated": (final_payload or {}).get("updated", 0),
+                        "unchanged": (final_payload or {}).get("unchanged", 0),
+                        "removed": (final_payload or {}).get("removed", 0),
+                    },
+                )
             finally:
                 state.reindex_started_at = None
                 state.reindex_lock.release()
@@ -596,6 +658,55 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
             total_nodes=total_nodes,
             soft_cap_exceeded=total_nodes > soft_cap_nodes,
         )
+
+    # --- v2.6 phase 6: source overrides + reindex report -----------------
+
+    @v1.get("/source_overrides", response_model=list[SourceOverrideOut])
+    def list_source_overrides_route(
+        s: Store = Depends(get_store),
+    ) -> list[SourceOverrideOut]:
+        return [SourceOverrideOut.from_override(ov) for ov in workspaces.list_source_overrides(s)]
+
+    @v1.post("/source_overrides", response_model=list[SourceOverrideOut])
+    def upsert_source_overrides_route(
+        body: SourceOverrideBatchIn,
+        s: Store = Depends(get_store),
+    ) -> list[SourceOverrideOut]:
+        """Batch upsert overrides. Returns the written rows.
+
+        Accepts ``always_skip`` / ``always_keep`` / ``retry`` decisions
+        (see :data:`mnemo.workspaces.ALLOWED_DECISIONS`). Unknown
+        decisions return 400.
+        """
+        try:
+            written = workspaces.batch_upsert_source_overrides(
+                s, [item.model_dump() for item in body.items]
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return [SourceOverrideOut.from_override(ov) for ov in written]
+
+    @v1.delete("/source_overrides")
+    def delete_source_override_route(
+        source_path: str,
+        s: Store = Depends(get_store),
+    ) -> JSONResponse:
+        ok = workspaces.delete_source_override(s, source_path)
+        if not ok:
+            raise HTTPException(status_code=404, detail="override not found")
+        return JSONResponse({"ok": True})
+
+    @v1.get("/reindex/report", response_model=ReindexReportSectionsOut)
+    def get_reindex_report_route() -> ReindexReportSectionsOut:
+        """Most recent reindex report (auto_skipped / malformed / suspicious).
+
+        Returns 404 if no reindex has run this daemon session. The report
+        is overwritten on every run.
+        """
+        rep = state.last_reindex_report
+        if rep is None:
+            raise HTTPException(status_code=404, detail="no reindex report yet")
+        return ReindexReportSectionsOut(**rep)
 
     # --- /v1/events SSE broadcast channel ---------------------------------
 
