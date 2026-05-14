@@ -184,6 +184,35 @@ def _broadcast_event(state: AppState, name: str, payload: dict) -> None:
             log.debug("dropping event %s for slow subscriber", name)
 
 
+def _resolve_query_project(store: Store, body: object) -> str | None:
+    """v2.6 phase 10.1: resolve the effective ``project_key`` for a query.
+
+    Precedence:
+
+    1. Explicit ``body.project_key`` (caller override)
+    2. Legacy ``body.active_project`` (pre-1.1 clients)
+    3. **Active workspace's first project_key** (v2.6 default)
+    4. Persisted ``active_project`` pointer (legacy CLI compat)
+
+    Returns ``None`` when no scope is set anywhere -- retrieval then
+    sees BASE-only nodes per the v2.6 BASE-only mode contract.
+
+    Accepts any object with ``project_key`` + ``active_project`` attrs;
+    ``QueryIn`` is the production shape but tests pass a stand-in.
+    """
+    explicit = getattr(body, "project_key", None)
+    if explicit:
+        return explicit
+    legacy_field = getattr(body, "active_project", None)
+    if legacy_field:
+        return legacy_field
+    ws = workspaces.get_active_workspace(store)
+    if ws is not None and ws.project_keys:
+        return ws.project_keys[0]
+    active = store.get_active_project()
+    return active.project_key if active is not None else None
+
+
 def _workspace_node_count(store: Store, project_keys: list[str]) -> int:
     """Sum the node count across all project_keys in a workspace.
 
@@ -944,13 +973,10 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
         s: Store = Depends(get_store),
         e: Embedder = Depends(get_embedder),
     ) -> QueryOut:
-        # v1.1 hybrid: explicit project_key in the request body wins, then
-        # legacy 'active_project' field, then the persisted active project.
-        proj = body.project_key or body.active_project
-        if proj is None:
-            active = s.get_active_project()
-            if active is not None:
-                proj = active.project_key
+        # v2.6 phase 10.1: workspaces drive retrieval scope. The resolver
+        # walks: explicit -> legacy field -> active workspace -> legacy
+        # active_project pointer. See _resolve_query_project.
+        proj = _resolve_query_project(s, body)
         result = retrieve.query(
             s,
             e,

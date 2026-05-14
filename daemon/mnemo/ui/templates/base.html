@@ -500,62 +500,12 @@
       <a href="/settings"     class="{% if page == 'settings' %}active{% endif %}">Settings</a>
     </nav>
 
-    <!-- Active-project switcher (v1.1). Compact pill shows the
-         current active project; click opens a small popover. -->
-    <div class="active-proj" x-data="activeProjectWidget()" @click.outside="popoverOpen = false">
-      <button class="active-proj-pill" @click="popoverOpen = !popoverOpen" :class="{ 'is-set': active }">
-        <span class="active-proj-dot" aria-hidden="true"></span>
-        <span class="active-proj-label" x-text="active ? active.project_key : 'no project'"></span>
-      </button>
-      <div class="active-proj-pop" x-show="popoverOpen" x-cloak>
-        <header>
-          <strong>Active project</strong>
-        </header>
-        <div class="body">
-          <p class="hint" x-show="active" x-cloak>
-            Path: <code x-text="active && active.path"></code><br>
-            Set: <time :data-ts="active && active.since" data-fmt="relative">…</time>
-          </p>
-          <p class="hint" x-show="!active" x-cloak>
-            No project active. Set one so retrieval boosts hits from your current workspace.
-          </p>
-          <label>Set / change to path</label>
-          {# v1.2: filesystem-aware autocomplete with shared recents. #}
-          <div class="ac-wrap"
-               @click.outside="pathAc.open = false"
-               @keydown.escape="pathAc.open = false">
-            <input type="text"
-                   x-model="newPath"
-                   autocomplete="off" spellcheck="false"
-                   placeholder="absolute path of your workspace"
-                   @focus="pathAc.show(newPath)"
-                   @input.debounce.180ms="pathAc.show(newPath)"
-                   @keydown.down.prevent="pathAc.show(newPath); pathAc.move(1)"
-                   @keydown.up.prevent="pathAc.show(newPath); pathAc.move(-1)"
-                   @keydown.enter.prevent="if (pathAc.activeIdx >= 0) { newPath = pathAc.entries[pathAc.activeIdx].value; pathAc.open = false; pathAc.recordRecent(newPath); } else { setActive(); }">
-            <div class="ac-pop" x-show="pathAc.open && pathAc.entries.length" x-cloak>
-              <template x-for="(e, i) in pathAc.entries" :key="e.kind + ':' + e.value">
-                <button type="button"
-                        class="ac-item"
-                        :class="{ active: i === pathAc.activeIdx }"
-                        @mousedown.prevent="newPath = e.value; pathAc.open = false; pathAc.recordRecent(e.value)"
-                        @mouseenter="pathAc.activeIdx = i">
-                  <span class="ac-item-kind" :class="'ac-kind-' + e.kind" x-text="e.kind === 'recent' ? 'recent' : 'fs'"></span>
-                  <span class="ac-item-value" x-text="e.value"></span>
-                </button>
-              </template>
-            </div>
-          </div>
-          <div class="active-proj-actions">
-            <button class="primary" @click="setActive()" :disabled="busy || !newPath">
-              <span x-show="!busy">Set active</span>
-              <span x-show="busy" x-cloak>setting...</span>
-            </button>
-            <button @click="clearActive()" x-show="active" x-cloak :disabled="busy">Clear</button>
-          </div>
-        </div>
-      </div>
-    </div>
+    <!-- v2.6 phase 10.1: active-project pill removed. Workspaces fully
+         own retrieval scope now -- see the workspace-switcher above.
+         /v1/projects/active endpoints stay alive for CLI back-compat;
+         the activeProjectWidget Alpine factory is kept too in case
+         a future surface wants it, but nothing in the topbar binds
+         to it. -->
 
     <!-- Notification bell + history dropdown -->
     <div class="bell-wrap" x-data="bellHistory()" @mnemo-toast.document="record($event.detail)" @click.outside="open = false">
