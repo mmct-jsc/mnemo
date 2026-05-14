@@ -447,12 +447,13 @@ function nebula() {
       this.buildTree();
       this.buildTypeFilters();
 
-      // If we came in with ?node=, pre-select it.
+      // If we came in with ?node=, pre-select it. The camera pan +
+      // zoom-up live inside selectFromCanvas now (v2.2.2), so this
+      // path no longer needs its own cy.animate call.
       if (this.contextNodeId && this.cy) {
         const target = this.cy.getElementById(this.contextNodeId);
         if (target && target.length) {
           this.selectFromCanvas(target);
-          this.cy.animate({ center: { eles: target }, zoom: 1.2 }, { duration: 300 });
         }
       }
     },
@@ -869,6 +870,26 @@ function nebula() {
       // Stop any prior pulse loop before we touch the canvas.
       this._stopPulse();
 
+      // v2.2.2: ALWAYS frame the selected node. Pre-v2.2.2 this
+      // only happened on the file-tree click path (via focusNode);
+      // direct canvas taps got no camera motion, so the selection
+      // had no visible feedback beyond the side-panel update -- the
+      // 6px ``_startPulse`` bloom on the node itself was too subtle
+      // to see at typical zoom + the node could be in a corner.
+      // Now every entry into selectFromCanvas frames the node:
+      //   - pan: center it (always)
+      //   - zoom: bump UP to 1.4 if currently lower, otherwise keep
+      //           the user's current zoom (don't yank them OUT when
+      //           they've zoomed in already).
+      // Duration 350ms matches the file-tree path so the feel is
+      // identical no matter how the click arrived.
+      const currentZoom = this.cy.zoom();
+      const targetZoom = Math.max(1.4, currentZoom);
+      this.cy.animate(
+        { center: { eles: node }, zoom: targetZoom },
+        { duration: 350, easing: 'ease-out' },
+      );
+
       // PERFORMANCE: batch class mutations so Cytoscape only
       // re-styles once. Without ``batch``, each ``.addClass`` on a
       // 1200-element graph forces a separate render pass.
@@ -915,6 +936,13 @@ function nebula() {
       this._startPulse(node);
     },
 
+    // v2.2.2: stronger, faster pulse so the "heart beat" is
+    // unmistakeable. Pre-v2.2.2:
+    //   peak: underlay-padding 20 (+6 from .hl), underlay-opacity 0.7 (+0.1)
+    //   period: 900ms each leg = 1.8s/cycle  -> too subtle, too slow
+    // Now:
+    //   peak: underlay-padding 28 (+14 from .hl), underlay-opacity 0.95 (+0.35)
+    //   period: 600ms each leg = 1.2s/cycle   -> reads as a clear heart beat
     _startPulse(node) {
       this._pulseNode = node;
       const cycle = () => {
@@ -927,15 +955,15 @@ function nebula() {
           return;
         }
         node.animate(
-          { style: { 'underlay-padding': 20, 'underlay-opacity': 0.7 } },
+          { style: { 'underlay-padding': 28, 'underlay-opacity': 0.95 } },
           {
-            duration: 900,
+            duration: 600,
             easing: 'ease-in-out',
             complete: () => {
               if (this._pulseNode !== node) return;
               node.animate(
                 { style: { 'underlay-padding': 14, 'underlay-opacity': 0.6 } },
-                { duration: 900, easing: 'ease-in-out', complete: cycle },
+                { duration: 600, easing: 'ease-in-out', complete: cycle },
               );
             },
           },
@@ -1053,7 +1081,8 @@ function nebula() {
         this.reload();
         return;
       }
-      this.cy.animate({ center: { eles: target }, zoom: 1.4 }, { duration: 350 });
+      // v2.2.2: selectFromCanvas now owns the camera pan+zoom for
+      // ALL entry paths -- this used to be duplicated here.
       this.selectFromCanvas(target);
     },
 
