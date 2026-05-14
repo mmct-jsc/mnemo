@@ -371,4 +371,178 @@
   // Expose the reduced-motion probe so call sites can branch their own
   // logic on it too (e.g. cy.animate durations).
   window.mnemoPrefersReducedMotion = prefersReducedMotion;
+
+  // ------------------------------------------------------------------
+  // v2.6 phase 7: Workspace switcher Alpine factory.
+  //
+  // Lives on window so x-data="workspaceSwitcher()" resolves on the
+  // top bar (see base.html). Named factory + NO double-init -- the
+  // Alpine.js auto-`init()` pattern is documented in
+  // feedback_alpine_double_init.md; pairing x-data with x-init="init()"
+  // is the anti-pattern this avoids.
+  //
+  // The switcher subscribes to /v1/events for workspace_activated /
+  // workspace_deleted / workspace_cleared so every open browser tab
+  // reflects activation changes without polling. Per pipeline 18
+  // (DOM-overlay over canvas-library effects) we use CSS class
+  // toggles for animations rather than imperative timeline work.
+  // ------------------------------------------------------------------
+  window.workspaceSwitcher = function () {
+    return {
+      // --- State -------------------------------------------------------
+      workspaces: [],
+      active: null,
+      open: false,
+      showNewModal: false,
+      newName: '',
+      newProjectKeysInput: '',
+      busy: false,
+      error: null,
+      capWarning: null,
+      _eventSource: null,
+
+      // --- Lifecycle ---------------------------------------------------
+      init() {
+        this.refresh();
+        this.subscribeToEvents();
+      },
+
+      destroy() {
+        if (this._eventSource) {
+          try { this._eventSource.close(); } catch (_) { /* ignore */ }
+          this._eventSource = null;
+        }
+      },
+
+      // --- Computed views ---------------------------------------------
+      get recent() {
+        const activeId = this.active && this.active.id;
+        return this.workspaces.filter((w) => w.id !== activeId);
+      },
+
+      get activeLabel() {
+        return this.active ? this.active.name : 'No workspace';
+      },
+
+      // --- Data fetchers ----------------------------------------------
+      async refresh() {
+        try {
+          const [list, active] = await Promise.all([
+            fetch('/v1/workspaces').then((r) => r.json()),
+            fetch('/v1/workspaces/active').then((r) => r.json()),
+          ]);
+          this.workspaces = Array.isArray(list) ? list : [];
+          this.active = (active && active.active) || null;
+          this.error = null;
+        } catch (e) {
+          this.error = `Failed to load workspaces: ${e}`;
+        }
+      },
+
+      // --- Activation -------------------------------------------------
+      async activate(workspaceId) {
+        this.busy = true;
+        this.error = null;
+        this.capWarning = null;
+        try {
+          const resp = await fetch(
+            `/v1/workspaces/${workspaceId}/activate`,
+            { method: 'POST' },
+          );
+          if (resp.status === 409) {
+            // Hard-cap refusal: surface the detail so the UI can show
+            // a "remove a project to activate" modal.
+            const body = await resp.json().catch(() => ({}));
+            const d = body.detail || {};
+            const msg = `Workspace too large: ${d.total_nodes} nodes over cap ${d.hard_cap}`;
+            this.error = msg;
+            return;
+          }
+          if (!resp.ok) {
+            const body = await resp.json().catch(() => ({}));
+            this.error = body.detail || `Activate failed (HTTP ${resp.status})`;
+            return;
+          }
+          const body = await resp.json();
+          if (body && body.soft_cap_exceeded) {
+            this.capWarning = `Large workspace -- retrieval may be slower (${body.total_nodes} nodes)`;
+          }
+          await this.refresh();
+          this.open = false;
+        } finally {
+          this.busy = false;
+        }
+      },
+
+      async clearActive() {
+        this.busy = true;
+        this.error = null;
+        try {
+          await fetch('/v1/workspaces/clear', { method: 'POST' });
+          await this.refresh();
+          this.open = false;
+        } finally {
+          this.busy = false;
+        }
+      },
+
+      // --- New workspace ----------------------------------------------
+      async createWorkspace() {
+        const name = (this.newName || '').trim();
+        if (!name) return;
+        this.busy = true;
+        this.error = null;
+        try {
+          const project_keys = (this.newProjectKeysInput || '')
+            .split(',')
+            .map((s) => s.trim())
+            .filter(Boolean);
+          const resp = await fetch('/v1/workspaces', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, project_keys }),
+          });
+          if (!resp.ok) {
+            const body = await resp.json().catch(() => ({}));
+            this.error = body.detail || `Create failed (HTTP ${resp.status})`;
+            return;
+          }
+          const ws = await resp.json();
+          // Auto-activate the new workspace -- matches the design's "create
+          // -> auto-activate" UX.
+          await this.activate(ws.id);
+          this.newName = '';
+          this.newProjectKeysInput = '';
+          this.showNewModal = false;
+        } finally {
+          this.busy = false;
+        }
+      },
+
+      // --- SSE plumbing -----------------------------------------------
+      subscribeToEvents() {
+        try {
+          const es = new EventSource('/v1/events');
+          this._eventSource = es;
+          const refreshOn = (name) => {
+            es.addEventListener(name, () => {
+              this.refresh();
+            });
+          };
+          refreshOn('workspace_activated');
+          refreshOn('workspace_deleted');
+          refreshOn('workspace_cleared');
+          // The bell history widget cares about reindex events too,
+          // but the switcher itself only refreshes on workspace ones.
+          es.onerror = () => {
+            // Browser auto-reconnects with backoff; nothing to do.
+          };
+        } catch (e) {
+          // EventSource not available -- silent fallback to manual refresh
+          // on every dropdown open.
+          this.error = null;
+        }
+      },
+    };
+  };
 })();

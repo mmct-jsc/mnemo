@@ -1268,6 +1268,182 @@ dl.meta dd { margin: 0; color: var(--fg); }
 }
 .active-proj-actions button { padding: 0.45rem 0.85rem; font-size: 0.85rem; }
 
+/* --- v2.6: Workspace switcher (topbar pill + dropdown) ----------- */
+/* Visual feel mirrors the active-project pill -- shared variables, same
+   panel + radius + spacing -- so the two read as siblings in the bar.
+   The dropdown opens left-anchored since it lives next to the brand
+   rather than the right edge.                                       */
+
+.workspace-switcher { position: relative; }
+.workspace-switcher-pill {
+  display: inline-flex; align-items: center; gap: 0.45rem;
+  padding: 0.35rem 0.75rem;
+  background: var(--panel-2);
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  color: var(--fg-muted);
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  cursor: pointer;
+  transition: var(--transition);
+  max-width: 280px;
+}
+.workspace-switcher-pill:hover {
+  border-color: var(--accent);
+  color: var(--fg);
+}
+.workspace-switcher-pill.is-set {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.workspace-switcher-pill.is-set .workspace-switcher-dot {
+  background: var(--accent);
+  box-shadow: 0 0 0 3px rgba(126, 231, 224, 0.18);
+}
+.workspace-switcher-pill.is-base-only .workspace-switcher-dot {
+  background: var(--fg-dim);
+}
+.workspace-switcher-dot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--fg-dim);
+  flex-shrink: 0;
+}
+.workspace-switcher-label {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  min-width: 0;
+}
+.workspace-switcher-caret { font-size: 0.7rem; color: var(--fg-dim); }
+.workspace-switcher-cap {
+  display: inline-grid; place-items: center;
+  width: 16px; height: 16px;
+  background: var(--warn); color: var(--bg);
+  border-radius: 50%;
+  font-size: 0.7rem; font-weight: 700;
+}
+
+.workspace-switcher-pop {
+  position: absolute; top: 110%; left: 0;
+  width: 340px; max-width: calc(100vw - 1.5rem);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  z-index: 60;
+  animation: bell-pop 140ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.workspace-switcher-pop > header {
+  padding: 0.7rem 1rem;
+  border-bottom: 1px solid var(--border-soft);
+}
+.workspace-switcher-pop > header strong { font-size: 0.88rem; color: var(--fg); }
+.workspace-switcher-pop .body { padding: 0.6rem 0.5rem 0.7rem; }
+
+.workspace-switcher-error,
+.workspace-switcher-warn {
+  margin: 0.4rem 0.5rem;
+  padding: 0.45rem 0.6rem;
+  font-size: 0.78rem;
+  border-radius: var(--radius);
+}
+.workspace-switcher-error {
+  background: rgba(217, 119, 87, 0.12);
+  color: var(--warn);
+  border: 1px solid rgba(217, 119, 87, 0.3);
+}
+.workspace-switcher-warn {
+  background: rgba(217, 119, 87, 0.10);
+  color: var(--fg-muted);
+  border: 1px solid rgba(217, 119, 87, 0.25);
+}
+
+.ws-section { padding: 0.45rem 0.5rem 0.5rem; }
+.ws-section + .ws-section { border-top: 1px solid var(--border-soft); margin-top: 0.2rem; }
+.ws-section-head {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--fg-dim);
+  margin: 0 0.4rem 0.3rem;
+}
+.ws-item {
+  display: flex; align-items: center; gap: 0.5rem;
+  width: 100%;
+  padding: 0.45rem 0.6rem;
+  border-radius: var(--radius);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--fg);
+  font-family: var(--sans);
+  font-size: 0.85rem;
+  text-align: left;
+  cursor: pointer;
+  transition: var(--transition);
+}
+.ws-item:hover:not(:disabled) {
+  background: var(--panel-2);
+  border-color: var(--border-soft);
+}
+.ws-item.is-active {
+  background: var(--accent-soft);
+  border-color: rgba(126, 231, 224, 0.25);
+  cursor: default;
+}
+.ws-item.is-active .ws-item-name { color: var(--accent); font-weight: 600; }
+.ws-item.is-empty { color: var(--fg-muted); cursor: default; }
+.ws-item-dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex-shrink: 0;
+}
+.ws-item-name { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.ws-item-meta { color: var(--fg-muted); font-size: 0.75rem; flex-shrink: 0; }
+
+.ws-actions { display: flex; flex-direction: column; gap: 0.1rem; }
+.ws-action {
+  display: block; width: 100%;
+  padding: 0.5rem 0.65rem;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--fg);
+  font-family: var(--sans);
+  font-size: 0.85rem;
+  text-align: left;
+  text-decoration: none;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: var(--transition);
+}
+.ws-action:hover { background: var(--panel-2); border-color: var(--border-soft); }
+.ws-action-clear { color: var(--fg-muted); }
+
+.ws-newform {
+  padding: 0.6rem 0.7rem 0.7rem;
+  margin: 0.4rem 0.5rem 0;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  background: var(--panel-2);
+}
+.ws-newform label {
+  display: block;
+  color: var(--fg-muted);
+  font-size: 0.78rem;
+  margin: 0.5rem 0 0;
+}
+.ws-newform label:first-child { margin-top: 0; }
+.ws-newform label input {
+  width: 100%; margin-top: 0.25rem;
+  padding: 0.4rem 0.55rem;
+  font-family: var(--mono);
+  font-size: 0.82rem;
+}
+.ws-newform-actions {
+  display: flex; gap: 0.5rem;
+  margin-top: 0.7rem;
+}
+.ws-newform-actions button { padding: 0.4rem 0.8rem; font-size: 0.82rem; }
+
 /* --- Notification bell ------------------------------------------ */
 
 .bell-wrap { position: relative; }

@@ -383,6 +383,113 @@
 <body>
   <header class="topbar">
     <a href="/" class="brand" aria-label="mnemo home">mnemo</a>
+
+    <!-- v2.6 phase 7: Workspace switcher. Named factory + NO double-init.
+         The dropdown lists active + recent workspaces and exposes
+         "+ New workspace", "Manage workspaces", and "No workspace
+         (BASE-only mode)" actions. The factory subscribes to
+         /v1/events so every open tab re-fetches on workspace_activated
+         / _deleted / _cleared. -->
+    <div class="workspace-switcher"
+         x-data="workspaceSwitcher()"
+         @click.outside="open = false; showNewModal = false">
+      <button class="workspace-switcher-pill"
+              @click="open = !open"
+              :class="{ 'is-set': active, 'is-base-only': !active }"
+              :title="active ? ('Workspace: ' + active.name) : 'No workspace (BASE-only mode)'">
+        <span class="workspace-switcher-dot" aria-hidden="true"></span>
+        <span class="workspace-switcher-label" x-text="active ? active.name : 'No workspace'"></span>
+        <span class="workspace-switcher-cap" x-show="capWarning" x-cloak x-text="'!'"
+              :title="capWarning"></span>
+        <span class="workspace-switcher-caret" aria-hidden="true">&#9662;</span>
+      </button>
+
+      <div class="workspace-switcher-pop" x-show="open" x-cloak>
+        <header>
+          <strong>Workspace</strong>
+        </header>
+
+        <div class="body">
+          <div class="workspace-switcher-error" x-show="error" x-cloak x-text="error"></div>
+          <div class="workspace-switcher-warn" x-show="capWarning" x-cloak x-text="capWarning"></div>
+
+          <!-- Active section -->
+          <div class="ws-section">
+            <div class="ws-section-head">Active</div>
+            <template x-if="active">
+              <div class="ws-item is-active">
+                <span class="ws-item-dot" aria-hidden="true"></span>
+                <span class="ws-item-name" x-text="active.name"></span>
+                <span class="ws-item-meta"
+                      x-text="(active.project_keys?.length || 0) + ' projects'"></span>
+              </div>
+            </template>
+            <template x-if="!active">
+              <div class="ws-item is-empty">
+                <span class="ws-item-name">No workspace</span>
+                <span class="ws-item-meta">(BASE-only mode)</span>
+              </div>
+            </template>
+          </div>
+
+          <!-- Recent section -->
+          <div class="ws-section" x-show="recent.length > 0" x-cloak>
+            <div class="ws-section-head">Recent</div>
+            <template x-for="w in recent" :key="w.id">
+              <button class="ws-item is-recent"
+                      type="button"
+                      @click="activate(w.id)"
+                      :disabled="busy">
+                <span class="ws-item-name" x-text="w.name"></span>
+                <span class="ws-item-meta"
+                      x-text="(w.project_keys?.length || 0) + ' projects'"></span>
+              </button>
+            </template>
+          </div>
+
+          <!-- New / Manage actions -->
+          <div class="ws-section ws-actions">
+            <button type="button"
+                    class="ws-action"
+                    @click="showNewModal = !showNewModal">+ New workspace</button>
+            <a class="ws-action" href="/workspaces">Manage workspaces&hellip;</a>
+            <button type="button"
+                    class="ws-action ws-action-clear"
+                    x-show="active" x-cloak
+                    @click="clearActive()"
+                    :disabled="busy">No workspace (BASE-only mode)</button>
+          </div>
+
+          <!-- New workspace modal-form (inline; keeps the chip self-contained) -->
+          <div class="ws-newform" x-show="showNewModal" x-cloak>
+            <label>
+              <span>Name</span>
+              <input type="text"
+                     x-model="newName"
+                     autocomplete="off" spellcheck="false"
+                     placeholder="e.g. ai-edge work"
+                     @keydown.enter.prevent="createWorkspace()">
+            </label>
+            <label>
+              <span>Project keys (comma-separated)</span>
+              <input type="text"
+                     x-model="newProjectKeysInput"
+                     autocomplete="off" spellcheck="false"
+                     placeholder="D--Repository-edge-device, D--Repository-knowledge-base">
+            </label>
+            <div class="ws-newform-actions">
+              <button type="button"
+                      class="primary"
+                      @click="createWorkspace()"
+                      :disabled="busy || !newName.trim()">Create &amp; activate</button>
+              <button type="button"
+                      @click="showNewModal = false">Cancel</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <nav>
       <a href="/"             class="{% if page == 'dashboard' %}active{% endif %}">Dashboard</a>
       <a href="/nodes-page"        class="{% if page == 'nodes' %}active{% endif %}">Nodes</a>
