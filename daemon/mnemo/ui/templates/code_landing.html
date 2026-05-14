@@ -65,14 +65,37 @@
   </div>
   {% else %}
   <div class="empty-state">
-    <h3>No code repos indexed yet</h3>
-    <p>
-      Register a code repository via
-      <code>mnemo source add &lt;path&gt; --kind code_repo</code>
-      or from the <a href="/sources-page">Sources page</a> (the
-      auto-router will propose <code>code_repo</code> when it sees a
-      <code>.git/</code> dir plus source files).
-    </p>
+    {# v2.6.0 polish: empty-state copy tells the user WHY -- is the
+       store empty, or is the workspace just scoped to non-code
+       projects? #}
+    {% if workspace_scope_mode == "workspace" %}
+      <h3>No code in workspace &ldquo;{{ workspace_scope_name }}&rdquo;</h3>
+      <p>
+        This workspace's project keys don't have any indexed
+        <code>code_module</code> / <code>code_function</code> nodes.
+        Switch to a workspace whose <code>project_keys</code> include
+        a <code>code_repo</code> source, or register a new code repo
+        from the <a href="/sources-page">Sources page</a> and add its
+        <code>project_key</code> to this workspace.
+      </p>
+    {% elif workspace_scope_mode == "base_only" %}
+      <h3>BASE-only mode</h3>
+      <p>
+        No workspace is active so the canvas is scoped to BASE-flagged
+        nodes only. Code nodes are always project-scoped (never BASE),
+        so this page is empty in BASE-only mode.
+        <a href="/workspaces">Pick a workspace</a> to surface its code.
+      </p>
+    {% else %}
+      <h3>No code repos indexed yet</h3>
+      <p>
+        Register a code repository via
+        <code>mnemo source add &lt;path&gt; --kind code_repo</code>
+        or from the <a href="/sources-page">Sources page</a> (the
+        auto-router will propose <code>code_repo</code> when it sees a
+        <code>.git/</code> dir plus source files).
+      </p>
+    {% endif %}
   </div>
   {% endif %}
 

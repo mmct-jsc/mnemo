@@ -30,6 +30,8 @@ script that wants to classify a path (e.g. ``mnemo source repair``).
 
 from __future__ import annotations
 
+import os
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -87,6 +89,11 @@ where the file count balloons but the contents aren't user-authored
 source. Users override via the per-source ``exclude`` field on
 ``Source``."""
 
+
+# v2.6 phase 4: extensions that count as "docs" for the dual-source
+# proposal. PDF + .rst are included alongside markdown since docs_dir
+# already accepts them (see ingest._default_include_for_kind).
+RECOGNIZED_DOC_EXTS = frozenset({".md", ".markdown", ".txt", ".pdf", ".rst"})
 
 RECOGNIZED_SOURCE_EXTS = frozenset(
     {
@@ -231,6 +238,33 @@ def _has_frontmatter_type(path: Path) -> bool:
     return False
 
 
+def _walk_with_prune(
+    root: Path,
+    *,
+    skip_dirs: frozenset[str],
+) -> Iterator[Path]:
+    """Walk ``root`` and yield every file path, pruning entire skip-dir
+    subtrees up front.
+
+    v2.6.0 polish: ``Path.rglob`` walks INSIDE skip-dir trees (it does
+    not support pre-pruning) which makes a propose / scan call on a
+    repo that ships ``node_modules`` take many seconds-to-minutes
+    even though every file is later discarded. ``os.walk`` is the
+    standard way to prune by mutating its yielded ``dirs`` list, which
+    short-circuits the deep traversal.
+    """
+    if not root.is_dir():
+        return
+    skip_lc = {d.lower() for d in skip_dirs}
+    for dirpath, dirs, files in os.walk(root):
+        # In-place mutation: os.walk re-reads ``dirs`` each iteration so
+        # removing entries prunes that subtree entirely.
+        dirs[:] = [d for d in dirs if d.lower() not in skip_lc]
+        base = Path(dirpath)
+        for name in files:
+            yield base / name
+
+
 def scan_path(
     path: Path | str,
     *,
@@ -261,18 +295,14 @@ def scan_path(
             has_git=False,
         )
 
-    for f in p.rglob("*"):
-        if not f.is_file():
-            continue
-        try:
-            rel = f.relative_to(p)
-        except ValueError:
-            continue
-        # Skip if any parent dir name is in the skip set. The file's own
-        # name is excluded (rel.parts[:-1]) so a file literally named
-        # ``.git`` -- unusual but legal -- doesn't get silently dropped.
-        if any(part in skip_dirs for part in rel.parts[:-1]):
-            continue
+    # v2.6.0 polish: prune skip-dirs at walk time so node_modules /
+    # __pycache__ / .git don't get traversed at all. ``Path.rglob``
+    # descends into them and discards files post-hoc -- death on a
+    # NestJS monorepo with 10 services each pulling node_modules.
+    for f in _walk_with_prune(p, skip_dirs=skip_dirs):
+        # _walk_with_prune yields files under ``p`` already; the rel
+        # computation that lived here is no longer needed (the prune
+        # has already handled skip-dir filtering).
         ext = f.suffix.lower()
         by_ext[ext] = by_ext.get(ext, 0) + 1
         if ext in (".md", ".markdown"):
@@ -319,4 +349,260 @@ def preview(path: Path | str, *, force: bool = False) -> PreviewResult:
         confidence=confidence,
         breakdown=breakdown,
         exceeds_safety_ceiling=exceeds,
+    )
+
+
+# --- v2.6 phase 4: dual-source proposal + .gitignore merge ----------------
+
+
+# Default threshold above which propose_source emits a 'large_project'
+# warning. The user can still register; the UI shows a yellow chip.
+DEFAULT_LARGE_PROJECT_THRESHOLD = 6_000
+
+# Minimum file counts that qualify a path for a proposal of the
+# corresponding kind. Below these the proposal is suppressed -- it
+# would be too small to warrant a separate source registration.
+MIN_DOCS_FOR_PROPOSAL = 3
+MIN_CODE_FOR_PROPOSAL = 10
+
+# How many sample file paths to include per proposal so the UI can
+# show "found these files" without paginating the full breakdown.
+SAMPLE_FILE_LIMIT = 10
+
+# Heuristic node-count multiplier for code repos. A typical file emits
+# the module node + ~1-2 declarations; round to 2.5 so the UI under-
+# promises rather than under-delivering.
+CODE_NODES_PER_FILE = 2.5
+
+
+@dataclass
+class SourceProposal:
+    """One half of a dual-source proposal -- either docs or code.
+
+    The UI shows the user N proposals; they pick which to register
+    (one, both, or neither). ``include_pattern`` becomes the
+    ``Source.include`` field on registration.
+    """
+
+    kind: str  # 'docs_dir' | 'code_repo'
+    include_pattern: str
+    include_count: int  # files that would match the include pattern
+    est_nodes: int  # rough projected node count (file*multiplier)
+    sample: list[str]  # up to SAMPLE_FILE_LIMIT example file paths
+
+
+@dataclass
+class DualProposalResult:
+    """Bundle of proposals + gitignore data + warnings.
+
+    Returned by :func:`propose_source` so the server endpoint (phase 5)
+    + the add-source UI (phase 8) can render the preview cleanly.
+    """
+
+    path: str
+    proposals: list[SourceProposal]
+    gitignore_excludes: list[str]
+    gitignore_files_found: list[str]
+    warnings: list[dict[str, str]]
+
+
+def _read_gitignore_lines(path: Path) -> list[str]:
+    """Read a .gitignore-shaped file. Strips comments + blank lines."""
+    try:
+        text = path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return []
+    patterns: list[str] = []
+    for line in text.splitlines():
+        s = line.strip()
+        if not s or s.startswith("#"):
+            continue
+        patterns.append(s)
+    return patterns
+
+
+def _gather_gitignores(
+    root: Path,
+    *,
+    skip_dirs: frozenset[str] = DEFAULT_SKIP_DIRS,
+) -> tuple[list[str], list[str]]:
+    """Find every .gitignore under ``root`` and merge into a flat pattern list.
+
+    Patterns in nested .gitignores are prefixed with the relative
+    directory so a ``build/`` in ``src/.gitignore`` becomes
+    ``src/build/`` in the merged list. Anchored ('/foo') and negated
+    ('!foo') patterns keep their leading character; the prefix is
+    inserted right after.
+
+    Returns ``(merged_patterns, gitignore_file_paths_relative_to_root)``.
+    """
+    if not root.is_dir():
+        return [], []
+
+    merged: list[str] = []
+    found: list[str] = []
+    # v2.6.0 polish: prune skip-dirs at walk time. Without this an
+    # rglob('.gitignore') call walks the entire node_modules tree on
+    # a NestJS monorepo and never returns.
+    gitignore_files = sorted(
+        f for f in _walk_with_prune(root, skip_dirs=skip_dirs) if f.name == ".gitignore"
+    )
+    for f in gitignore_files:
+        if not f.is_file():
+            continue
+        try:
+            rel_dir = f.parent.relative_to(root)
+        except ValueError:
+            continue
+        if any(part in skip_dirs for part in rel_dir.parts):
+            continue
+        rel_path = f.relative_to(root).as_posix()
+        found.append(rel_path)
+        prefix = rel_dir.as_posix()
+        # The root .gitignore has rel_dir = Path('.') -> as_posix() = '.'.
+        # Drop the dot so we get bare patterns at root.
+        if prefix == ".":
+            prefix = ""
+        for pat in _read_gitignore_lines(f):
+            if not prefix:
+                merged.append(pat)
+                continue
+            # Preserve leading '!' (negation) and '/' (anchored-to-root)
+            if pat.startswith("!"):
+                merged.append("!" + prefix + "/" + pat[1:].lstrip("/"))
+            elif pat.startswith("/"):
+                merged.append(prefix + pat)
+            else:
+                merged.append(prefix + "/" + pat)
+    return merged, found
+
+
+def merge_gitignore_into_exclude(
+    *,
+    gitignore_patterns: list[str],
+    user_exclude: str | None,
+) -> list[str]:
+    """Combine .gitignore-derived patterns with a user-supplied exclude string.
+
+    Returns a flat list of patterns. Gitignore patterns come first so
+    they win on conflicts (a user negation would later be applied via
+    a separate "Refresh .gitignore" workflow on the source edit page).
+
+    Both sides preserve duplicates removal; whitespace is stripped.
+    """
+    merged: list[str] = []
+    seen: set[str] = set()
+    for pat in gitignore_patterns:
+        s = pat.strip()
+        if s and s not in seen:
+            merged.append(s)
+            seen.add(s)
+    if user_exclude:
+        for raw in user_exclude.split(","):
+            s = raw.strip()
+            if s and s not in seen:
+                merged.append(s)
+                seen.add(s)
+    return merged
+
+
+def propose_source(
+    path: Path | str,
+    *,
+    large_project_threshold: int = DEFAULT_LARGE_PROJECT_THRESHOLD,
+    skip_dirs: frozenset[str] = DEFAULT_SKIP_DIRS,
+) -> DualProposalResult:
+    """Dual-source proposal for the add-source UX.
+
+    Walks ``path`` once, counting code + doc files. Emits a docs_dir
+    proposal if >= :data:`MIN_DOCS_FOR_PROPOSAL` doc files are present,
+    and a code_repo proposal if >= :data:`MIN_CODE_FOR_PROPOSAL` source
+    files are present. BOTH proposals fire when both qualify (common
+    case: a code project with a ``docs/`` folder).
+
+    .gitignore files anywhere under ``path`` are read; their patterns
+    are prefixed with the relative directory + returned alongside
+    ``gitignore_files_found`` so the server can merge them into the
+    source's ``exclude`` field on registration.
+
+    Raises ``FileNotFoundError`` if ``path`` doesn't exist -- callers
+    surface that to the user as a clear error before any walk.
+    """
+    p = Path(path)
+    if not p.exists():
+        raise FileNotFoundError(f"path does not exist: {p}")
+
+    doc_files: list[Path] = []
+    code_files: list[Path] = []
+
+    if p.is_file():
+        # Single-file path is rare in this workflow but handle it
+        # gracefully (treat it as docs if its extension fits).
+        ext = p.suffix.lower()
+        if ext in RECOGNIZED_DOC_EXTS:
+            doc_files.append(p)
+        elif ext in RECOGNIZED_SOURCE_EXTS:
+            code_files.append(p)
+    else:
+        # v2.6.0 polish: prune skip-dirs at walk time -- see _walk_with_prune
+        # docstring for rationale.
+        for f in _walk_with_prune(p, skip_dirs=skip_dirs):
+            ext = f.suffix.lower()
+            if ext in RECOGNIZED_DOC_EXTS:
+                doc_files.append(f)
+            elif ext in RECOGNIZED_SOURCE_EXTS:
+                code_files.append(f)
+
+    proposals: list[SourceProposal] = []
+    if len(doc_files) >= MIN_DOCS_FOR_PROPOSAL:
+        # docs_dir's default include matches all markdown/txt/pdf;
+        # surface a representative pattern + a sample so the UI can
+        # render "I found N markdown files in docs/ + README.md".
+        proposals.append(
+            SourceProposal(
+                kind="docs_dir",
+                include_pattern="docs/**/*.md,*.md,*.markdown,*.txt,*.pdf,*.rst",
+                include_count=len(doc_files),
+                est_nodes=len(doc_files),
+                sample=[
+                    str(f.relative_to(p) if p.is_dir() else f.name)
+                    for f in doc_files[:SAMPLE_FILE_LIMIT]
+                ],
+            )
+        )
+    if len(code_files) >= MIN_CODE_FOR_PROPOSAL:
+        # code_repo carries its own default include via ingest; the
+        # pattern surfaced here documents intent and is parsed by the
+        # server when the user accepts the proposal.
+        proposals.append(
+            SourceProposal(
+                kind="code_repo",
+                include_pattern="src/**,!docs/**",
+                include_count=len(code_files),
+                est_nodes=int(len(code_files) * CODE_NODES_PER_FILE),
+                sample=[
+                    str(f.relative_to(p) if p.is_dir() else f.name)
+                    for f in code_files[:SAMPLE_FILE_LIMIT]
+                ],
+            )
+        )
+
+    gitignore_patterns, gitignore_files = _gather_gitignores(p, skip_dirs=skip_dirs)
+
+    warnings: list[dict[str, str]] = []
+    total_indexable = len(doc_files) + len(code_files)
+    if total_indexable > large_project_threshold:
+        warnings.append(
+            {
+                "kind": "large_project",
+                "message": (f"{total_indexable:,} indexable files -- may hit workspace cap"),
+            }
+        )
+
+    return DualProposalResult(
+        path=str(p),
+        proposals=proposals,
+        gitignore_excludes=gitignore_patterns,
+        gitignore_files_found=gitignore_files,
+        warnings=warnings,
     )

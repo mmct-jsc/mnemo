@@ -383,6 +383,7 @@
 <body>
   <header class="topbar">
     <a href="/" class="brand" aria-label="mnemo home">mnemo</a>
+
     <nav>
       <a href="/"             class="{% if page == 'dashboard' %}active{% endif %}">Dashboard</a>
       <a href="/nodes-page"        class="{% if page == 'nodes' %}active{% endif %}">Nodes</a>
@@ -393,58 +394,151 @@
       <a href="/settings"     class="{% if page == 'settings' %}active{% endif %}">Settings</a>
     </nav>
 
-    <!-- Active-project switcher (v1.1). Compact pill shows the
-         current active project; click opens a small popover. -->
-    <div class="active-proj" x-data="activeProjectWidget()" @click.outside="popoverOpen = false">
-      <button class="active-proj-pill" @click="popoverOpen = !popoverOpen" :class="{ 'is-set': active }">
-        <span class="active-proj-dot" aria-hidden="true"></span>
-        <span class="active-proj-label" x-text="active ? active.project_key : 'no project'"></span>
+    <!-- v2.6 phase 10.1: active-project pill removed. Workspaces fully
+         own retrieval scope now -- the workspace-switcher below sits
+         where the old pill used to live. /v1/projects/active endpoints
+         stay alive for CLI back-compat. -->
+
+    <!-- v2.6 phase 7 + 10.3: Workspace switcher. Named factory + NO
+         double-init. Right-aligned slot (where the old active-project
+         pill lived, after <nav>) so the "current scope" affordance
+         stays in the spot users already train their eyes on. The
+         dropdown lists active + recent workspaces and exposes
+         "+ New workspace", "Manage workspaces", and "No workspace
+         (BASE-only mode)" actions. The factory subscribes to
+         /v1/events so every open tab re-fetches on workspace_activated
+         / _deleted / _cleared. -->
+    <div class="workspace-switcher"
+         x-data="workspaceSwitcher()"
+         @click.outside="open = false; showNewModal = false">
+      <button class="workspace-switcher-pill"
+              @click="open = !open"
+              :class="{ 'is-set': active, 'is-base-only': !active }"
+              :title="active ? ('Workspace: ' + active.name) : 'No workspace (BASE-only mode)'">
+        <span class="workspace-switcher-dot" aria-hidden="true"></span>
+        <span class="workspace-switcher-label" x-text="active ? active.name : 'No workspace'"></span>
+        <span class="workspace-switcher-cap" x-show="capWarning" x-cloak x-text="'!'"
+              :title="capWarning"></span>
+        <span class="workspace-switcher-caret" aria-hidden="true">&#9662;</span>
       </button>
-      <div class="active-proj-pop" x-show="popoverOpen" x-cloak>
+
+      <div class="workspace-switcher-pop" x-show="open" x-cloak>
         <header>
-          <strong>Active project</strong>
+          <strong>Workspace</strong>
         </header>
+
         <div class="body">
-          <p class="hint" x-show="active" x-cloak>
-            Path: <code x-text="active && active.path"></code><br>
-            Set: <time :data-ts="active && active.since" data-fmt="relative">…</time>
-          </p>
-          <p class="hint" x-show="!active" x-cloak>
-            No project active. Set one so retrieval boosts hits from your current workspace.
-          </p>
-          <label>Set / change to path</label>
-          {# v1.2: filesystem-aware autocomplete with shared recents. #}
-          <div class="ac-wrap"
-               @click.outside="pathAc.open = false"
-               @keydown.escape="pathAc.open = false">
-            <input type="text"
-                   x-model="newPath"
-                   autocomplete="off" spellcheck="false"
-                   placeholder="absolute path of your workspace"
-                   @focus="pathAc.show(newPath)"
-                   @input.debounce.180ms="pathAc.show(newPath)"
-                   @keydown.down.prevent="pathAc.show(newPath); pathAc.move(1)"
-                   @keydown.up.prevent="pathAc.show(newPath); pathAc.move(-1)"
-                   @keydown.enter.prevent="if (pathAc.activeIdx >= 0) { newPath = pathAc.entries[pathAc.activeIdx].value; pathAc.open = false; pathAc.recordRecent(newPath); } else { setActive(); }">
-            <div class="ac-pop" x-show="pathAc.open && pathAc.entries.length" x-cloak>
-              <template x-for="(e, i) in pathAc.entries" :key="e.kind + ':' + e.value">
-                <button type="button"
-                        class="ac-item"
-                        :class="{ active: i === pathAc.activeIdx }"
-                        @mousedown.prevent="newPath = e.value; pathAc.open = false; pathAc.recordRecent(e.value)"
-                        @mouseenter="pathAc.activeIdx = i">
-                  <span class="ac-item-kind" :class="'ac-kind-' + e.kind" x-text="e.kind === 'recent' ? 'recent' : 'fs'"></span>
-                  <span class="ac-item-value" x-text="e.value"></span>
-                </button>
-              </template>
-            </div>
+          <div class="workspace-switcher-error" x-show="error" x-cloak x-text="error"></div>
+          <div class="workspace-switcher-warn" x-show="capWarning" x-cloak x-text="capWarning"></div>
+
+          <!-- Active section -->
+          <div class="ws-section">
+            <div class="ws-section-head">Active</div>
+            <template x-if="active">
+              <div class="ws-item is-active">
+                <span class="ws-item-dot" aria-hidden="true"></span>
+                <span class="ws-item-name" x-text="active.name"></span>
+                <span class="ws-item-meta"
+                      x-text="(active.project_keys?.length || 0) + ' projects'"></span>
+              </div>
+            </template>
+            <template x-if="!active">
+              <div class="ws-item is-empty">
+                <span class="ws-item-name">No workspace</span>
+                <span class="ws-item-meta">(BASE-only mode)</span>
+              </div>
+            </template>
           </div>
-          <div class="active-proj-actions">
-            <button class="primary" @click="setActive()" :disabled="busy || !newPath">
-              <span x-show="!busy">Set active</span>
-              <span x-show="busy" x-cloak>setting...</span>
-            </button>
-            <button @click="clearActive()" x-show="active" x-cloak :disabled="busy">Clear</button>
+
+          <!-- Recent section -->
+          <div class="ws-section" x-show="recent.length > 0" x-cloak>
+            <div class="ws-section-head">Recent</div>
+            <template x-for="w in recent" :key="w.id">
+              <button class="ws-item is-recent"
+                      type="button"
+                      @click="activate(w.id)"
+                      :disabled="busy">
+                <span class="ws-item-name" x-text="w.name"></span>
+                <span class="ws-item-meta"
+                      x-text="(w.project_keys?.length || 0) + ' projects'"></span>
+              </button>
+            </template>
+          </div>
+
+          <!-- New / Manage actions -->
+          <div class="ws-section ws-actions">
+            <button type="button"
+                    class="ws-action"
+                    @click="showNewModal = !showNewModal">+ New workspace</button>
+            <a class="ws-action" href="/workspaces">Manage workspaces&hellip;</a>
+            <button type="button"
+                    class="ws-action ws-action-clear"
+                    x-show="active" x-cloak
+                    @click="clearActive()"
+                    :disabled="busy">No workspace (BASE-only mode)</button>
+          </div>
+
+          <!-- New workspace modal-form (inline; keeps the chip self-contained) -->
+          <div class="ws-newform" x-show="showNewModal" x-cloak>
+            <label>
+              <span>Name</span>
+              <input type="text"
+                     x-model="newName"
+                     autocomplete="off" spellcheck="false"
+                     placeholder="e.g. ai-edge work"
+                     @keydown.enter.prevent="submitChipInput().catch(()=>{})">
+            </label>
+            <label>
+              <span>Projects</span>
+              <div class="ws-chips"
+                   @click.outside="closeChipSuggestions()"
+                   @keydown.escape="closeChipSuggestions()">
+                <template x-for="(chip, idx) in chips" :key="chip">
+                  <span class="ws-chip">
+                    <span class="ws-chip-label" x-text="chip"></span>
+                    <button type="button"
+                            class="ws-chip-remove"
+                            @click="removeChip(idx)"
+                            aria-label="Remove">&times;</button>
+                  </span>
+                </template>
+                <input type="text"
+                       class="ws-chip-input"
+                       x-model="chipInput"
+                       autocomplete="off" spellcheck="false"
+                       placeholder="type path or project key"
+                       @focus="refreshChipSuggestions(chipInput)"
+                       @input.debounce.180ms="refreshChipSuggestions(chipInput)"
+                       @keydown.down.prevent="moveChipSuggestion(1)"
+                       @keydown.up.prevent="moveChipSuggestion(-1)"
+                       @keydown.enter.prevent="chipActiveIdx >= 0 ? pickChipSuggestion(chipSuggestions[chipActiveIdx]) : submitChipInput()"
+                       @keydown.backspace="if (!chipInput && chips.length) removeChip(chips.length - 1)">
+                <div class="ws-chip-suggest" x-show="chipSuggestOpen" x-cloak>
+                  <template x-for="(s, i) in chipSuggestions" :key="s.kind + ':' + s.value">
+                    <button type="button"
+                            class="ws-chip-suggest-item"
+                            :class="{ active: i === chipActiveIdx }"
+                            @mousedown.prevent="pickChipSuggestion(s)"
+                            @mouseenter="chipActiveIdx = i">
+                      <span class="ws-chip-suggest-kind"
+                            :class="'kind-' + s.kind"
+                            x-text="s.kind"></span>
+                      <span class="ws-chip-suggest-value" x-text="s.value"></span>
+                      <span class="ws-chip-suggest-meta" x-show="s.meta" x-cloak x-text="s.meta"></span>
+                    </button>
+                  </template>
+                </div>
+              </div>
+            </label>
+            <p class="hint">Empty = BASE-only workspace.</p>
+            <div class="ws-newform-actions">
+              <button type="button"
+                      class="primary"
+                      @click="createWorkspace()"
+                      :disabled="busy || !newName.trim()">Create &amp; activate</button>
+              <button type="button"
+                      @click="showNewModal = false">Cancel</button>
+            </div>
           </div>
         </div>
       </div>

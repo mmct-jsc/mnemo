@@ -63,9 +63,32 @@
               <summary>Show hits</summary>
               <ul class="hits">
                 {% for nid in q.retrieved_ids %}
-                  <li>
-                    {% if nid in q.scores %}<span class="score">{{ '%.3f' % q.scores[nid] }}</span>{% endif %}
-                    <a href="/node/{{ nid }}">{{ nid[:12] }}</a>
+                  {# v2.6.0 polish: resolve nid -> name + description + type so
+                     the row shows what was actually returned, not just an
+                     opaque 12-char ID. Nodes removed by a reindex resolve to
+                     None and render as a struck-through "[removed]" badge so
+                     the row still reads. #}
+                  {% set meta = hit_meta.get(nid) if hit_meta is defined else None %}
+                  <li class="hit-row">
+                    {% if nid in q.scores %}
+                      <span class="score">{{ '%.3f' % q.scores[nid] }}</span>
+                    {% endif %}
+                    {% if meta and meta.name %}
+                      <a href="/node/{{ nid }}" class="hit-name">{{ meta.name }}</a>
+                      {% if meta.type %}
+                        <span class="badge hit-type type-{{ meta.type | replace('_','-') }}"
+                              style="--type-color: var(--type-{{ meta.type | replace('memory_','') | replace('code_','') | replace('project_','') | replace('plan_','') }}, var(--accent));">
+                          {{ meta.type | replace('_',' ') }}
+                        </span>
+                      {% endif %}
+                      {% if meta.description %}
+                        <span class="hit-desc">{{ meta.description }}</span>
+                      {% endif %}
+                      <code class="hit-id hint">{{ nid[:8] }}</code>
+                    {% else %}
+                      <span class="hit-removed">[removed]</span>
+                      <code class="hit-id hint">{{ nid[:12] }}</code>
+                    {% endif %}
                   </li>
                 {% endfor %}
               </ul>

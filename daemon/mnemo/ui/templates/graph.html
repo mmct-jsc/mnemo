@@ -22,89 +22,70 @@
         <span x-show="contextProject" x-cloak class="tree-title-scope"
               x-text="contextProject"></span>
       </h3>
-      <template x-if="treeRoot && Object.keys(treeRoot.children).length === 0">
+      {# v2.6.0 polish: context-aware empty-state copy + flat indented
+         tree renderer. The previous template only went 3 levels deep
+         which truncated trees like
+         D:/Repository/aibox-prod-all/backend/services/asset-service/src/...
+         to just the top three rungs. We now flatten the tree into
+         ``treeRows`` (each with a ``depth`` field) and let CSS pad-
+         left handle the visual indentation. Expansion state is
+         tracked in ``expandedPaths`` so any depth can collapse /
+         expand. #}
+      <template x-if="treeRows && treeRows.length === 0 && contextBaseOnly">
+        <p class="hint" style="padding:0.5rem;">
+          BASE-only view -- code is never BASE-flagged.
+          <a href="/workspaces">Pick a workspace</a> to see modules.
+        </p>
+      </template>
+      <template x-if="treeRows && treeRows.length === 0 && contextWorkspaceName && !contextBaseOnly">
+        <p class="hint" style="padding:0.5rem;">
+          No code modules in workspace
+          &ldquo;<span x-text="contextWorkspaceName"></span>&rdquo;.
+          <a href="/sources-page">Add a code_repo</a> whose project_key
+          is in this workspace.
+        </p>
+      </template>
+      <template x-if="treeRows && treeRows.length === 0 && !contextWorkspaceName && !contextBaseOnly">
         <p class="hint" style="padding:0.5rem;">
           No code modules in this view.
           <a href="/sources-page">Add a code_repo</a>?
         </p>
       </template>
-      <!-- Recursive renderer: emits a directory branch or a file row
-           based on the node shape. Indentation depth is passed in. -->
-      <template x-if="treeRoot">
+      <template x-if="treeRows && treeRows.length > 0">
         <ul class="vscode-tree">
-          <template x-for="(child, name) in treeRoot.children" :key="name">
-            <li x-data="{ child: child, name: name }">
-              <!-- Directory -->
-              <template x-if="child.isDir">
-                <details open>
-                  <summary class="vscode-dir"><span class="vscode-dir-row">
-                    <span class="vscode-chev" aria-hidden="true"></span>
+          <template x-for="row in visibleTreeRows" :key="row.path">
+            <li>
+              <template x-if="row.isDir">
+                <button type="button"
+                        class="vscode-dir vscode-dir-button"
+                        :style="'padding-left: ' + (8 + row.depth * 14) + 'px;'"
+                        @click="toggleTreeDir(row.path)">
+                  <span class="vscode-dir-row">
+                    <span class="vscode-chev"
+                          :class="{ 'is-open': expandedPaths[row.path] }"
+                          aria-hidden="true"></span>
                     <svg class="vscode-icon dir-icon" viewBox="0 0 16 16">
                       <path fill="#7eb6d6" d="M1.5 3.5A1.5 1.5 0 0 1 3 2h3l1.5 1.5H13A1.5 1.5 0 0 1 14.5 5v7A1.5 1.5 0 0 1 13 13.5H3A1.5 1.5 0 0 1 1.5 12V3.5Z"/>
                     </svg>
-                    <span class="vscode-dir-label" x-text="name"></span>
-                  </span></summary>
-                  <ul>
-                    <template x-for="(grand, gname) in child.children" :key="gname">
-                      <li>
-                        <template x-if="grand.isDir">
-                          <details>
-                            <summary class="vscode-dir"><span class="vscode-dir-row">
-                              <span class="vscode-chev" aria-hidden="true"></span>
-                              <svg class="vscode-icon dir-icon" viewBox="0 0 16 16">
-                                <path fill="#7eb6d6" d="M1.5 3.5A1.5 1.5 0 0 1 3 2h3l1.5 1.5H13A1.5 1.5 0 0 1 14.5 5v7A1.5 1.5 0 0 1 13 13.5H3A1.5 1.5 0 0 1 1.5 12V3.5Z"/>
-                              </svg>
-                              <span class="vscode-dir-label" x-text="gname"></span>
-                            </span></summary>
-                            <ul>
-                              <template x-for="leaf in grand.leaves" :key="leaf.id">
-                                <li>
-                                  <a href="#" class="tree-file vscode-file"
-                                     :class="[
-                                       { active: selected && selected.id === leaf.id },
-                                       'ext-' + fileExt(leaf.label),
-                                     ]"
-                                     :title="leaf.label"
-                                     @click.prevent="focusNode(leaf.id)">
-                                    <span class="vscode-file-icon" x-html="fileIcon(leaf.label)"></span>
-                                    <span class="vscode-file-name" x-text="leaf.label"></span>
-                                    <span class="vscode-file-meta" x-text="leaf.childCount"></span>
-                                  </a>
-                                </li>
-                              </template>
-                            </ul>
-                          </details>
-                        </template>
-                        <template x-if="!grand.isDir">
-                          <a href="#" class="tree-file vscode-file"
-                             :class="[
-                               { active: selected && selected.id === grand.id },
-                               'ext-' + fileExt(gname),
-                             ]"
-                             :title="gname"
-                             @click.prevent="focusNode(grand.id)">
-                            <span class="vscode-file-icon" x-html="fileIcon(gname)"></span>
-                            <span class="vscode-file-name" x-text="gname"></span>
-                            <span class="vscode-file-meta" x-text="grand.childCount"></span>
-                          </a>
-                        </template>
-                      </li>
-                    </template>
-                  </ul>
-                </details>
+                    <span class="vscode-dir-label" x-text="row.name"></span>
+                    <span class="vscode-dir-count"
+                          x-show="row.fileCount > 0" x-cloak
+                          x-text="row.fileCount"></span>
+                  </span>
+                </button>
               </template>
-              <!-- File at the top level (no directory wrapping) -->
-              <template x-if="!child.isDir">
+              <template x-if="!row.isDir">
                 <a href="#" class="tree-file vscode-file"
                    :class="[
-                     { active: selected && selected.id === child.id },
-                     'ext-' + fileExt(name),
+                     { active: selected && selected.id === row.id },
+                     'ext-' + fileExt(row.name),
                    ]"
-                   :title="name"
-                   @click.prevent="focusNode(child.id)">
-                  <span class="vscode-file-icon" x-html="fileIcon(name)"></span>
-                  <span class="vscode-file-name" x-text="name"></span>
-                  <span class="vscode-file-meta" x-text="child.childCount"></span>
+                   :style="'padding-left: ' + (8 + row.depth * 14) + 'px;'"
+                   :title="row.name"
+                   @click.prevent="focusNode(row.id)">
+                  <span class="vscode-file-icon" x-html="fileIcon(row.name)"></span>
+                  <span class="vscode-file-name" x-text="row.name"></span>
+                  <span class="vscode-file-meta" x-text="row.childCount"></span>
                 </a>
               </template>
             </li>
@@ -153,9 +134,39 @@
         scroll to zoom · drag to pan · click a node
       </div>
 
-      <div class="nebula-context" x-show="contextProject" x-cloak>
-        scope: <strong x-text="contextProject"></strong>
-        <a href="/graph">clear</a>
+      <!-- v2.6.0 polish: status chip in the lower-right. Shows the
+           current render size + workspace name without overlapping
+           the top-row hint / scope chip. Always visible (no
+           x-show) so the user can sanity-check completeness at a
+           glance. -->
+      <div class="nebula-status">
+        <span class="nebula-status-count"
+              x-text="shownNodeCount.toLocaleString() + ' nodes'"></span>
+        <span class="nebula-status-sep" x-show="contextWorkspaceName" x-cloak>·</span>
+        <span class="nebula-status-ws" x-show="contextWorkspaceName" x-cloak
+              x-text="contextWorkspaceName"></span>
+      </div>
+
+      <div class="nebula-context"
+           x-show="contextProject || contextWorkspaceName || contextBaseOnly"
+           x-cloak>
+        <template x-if="contextProject">
+          <span>
+            scope: <strong x-text="contextProject"></strong>
+            <a href="/graph">clear</a>
+          </span>
+        </template>
+        <template x-if="!contextProject && contextWorkspaceName">
+          <span>
+            workspace: <strong x-text="contextWorkspaceName"></strong>
+            <template x-if="contextProjectKeys && contextProjectKeys.length">
+              <span class="hint" x-text="'(' + contextProjectKeys.length + ' project' + (contextProjectKeys.length === 1 ? '' : 's') + ')'"></span>
+            </template>
+          </span>
+        </template>
+        <template x-if="!contextProject && !contextWorkspaceName && contextBaseOnly">
+          <span>scope: <strong>BASE-only</strong></span>
+        </template>
       </div>
     </div>
 
@@ -350,14 +361,25 @@ function nebula() {
     selected: null,
     neighbors: [],
     treeRoot: null,
+    treeRows: [],                 // v2.6.0: flat indented rows for arbitrary depth
+    expandedPaths: {},            // v2.6.0: { 'D:/Repository': true, ... }
+    visibleTreeRows: [],          // v2.6.0 perf: memoized; recomputed only when treeRows / expandedPaths change
     nodeTypes: [],
     typeFilters: {},
     filterText: '',
     minConfidence: 0,
     hops: 2,
     dragging: null,
-    contextProject: null,
+    contextProject: null,        // legacy ?project=<key> deep-link single key
+    contextProjectKeys: null,    // v2.6.0: array from active workspace.project_keys
+    contextBaseOnly: false,      // v2.6.0: true when no workspace is active
+    contextWorkspaceName: null,  // v2.6.0: shown in the scope chip
     contextNodeId: null,
+    truncated: false,            // v2.6.0: deprecated -- always false after we removed the cap
+    totalInScope: 0,             // v2.6.0: total nodes the workspace covers (== shown for status chip)
+    shownNodeCount: 0,           // v2.6.0: nodes painted on canvas
+    treeModules: [],             // v2.6.0: unbounded module list for left-panel tree
+    _eventSource: null,
     stats: '',
     rawElements: [],
     currentLayout: 'fcose',
@@ -518,6 +540,15 @@ function nebula() {
       this.contextNodeId = params.get('node') || null;
       if (params.get('hops')) this.hops = parseInt(params.get('hops'), 10) || 2;
 
+      // v2.6.0 polish: when no explicit ?project= deep-link is set,
+      // mirror the active workspace's scope on /ui/graph-data. If no
+      // workspace is active, drop into BASE-only mode (matches the
+      // rest of the UI). The workspace pointer wins over an explicit
+      // deep-link only when the deep-link is absent.
+      if (!this.contextProject) {
+        await this._loadWorkspaceScope();
+      }
+
       // Restore panel widths from localStorage.
       const left = localStorage.getItem('nebula.left');
       const right = localStorage.getItem('nebula.right');
@@ -536,6 +567,74 @@ function nebula() {
         cytoscape.use(cytoscapeFcose);
       }
       await this.reload();
+
+      // v2.6.0 polish: keep the canvas in sync across tabs. When the
+      // user switches workspaces from any open browser tab, /v1/events
+      // pushes a workspace_* frame and we re-fetch the scope + the
+      // graph data. The deep-link ?project= path skips this -- we
+      // assume the user wants the explicit scope they URL'd in.
+      if (!this.contextProject) {
+        this._subscribeWorkspaceEvents();
+      }
+    },
+
+    async _loadWorkspaceScope() {
+      try {
+        const r = await fetch('/v1/workspaces/active');
+        if (!r.ok) return;
+        const data = await r.json();
+        const ws = data && data.active;
+        if (ws && Array.isArray(ws.project_keys) && ws.project_keys.length > 0) {
+          this.contextProjectKeys = [...ws.project_keys];
+          this.contextBaseOnly = false;
+          this.contextWorkspaceName = ws.name;
+        } else if (ws) {
+          // Empty-project workspace -- treat as BASE-only.
+          this.contextProjectKeys = null;
+          this.contextBaseOnly = true;
+          this.contextWorkspaceName = ws.name;
+        } else {
+          // No active workspace at all -- BASE-only mode.
+          this.contextProjectKeys = null;
+          this.contextBaseOnly = true;
+          this.contextWorkspaceName = null;
+        }
+      } catch (_) { /* daemon offline -- keep defaults */ }
+    },
+
+    _subscribeWorkspaceEvents() {
+      try {
+        const es = new EventSource('/v1/events');
+        this._eventSource = es;
+        const refresh = async () => {
+          // v2.6.0 polish: clear any focused node + DOM-overlay pulse
+          // before re-fetching. Without this the old selected node
+          // pulses on top of the new (post-switch) canvas even after
+          // its underlying cytoscape node is gone -- the pulse anchor
+          // is a DOM div whose x-show is governed by ``selected``;
+          // clearing both ``selected`` + ``_pulseNode`` collapses the
+          // overlay before reload() rebuilds the graph.
+          this._stopPulse();
+          this.selected = null;
+          this.neighbors = [];
+          if (this.cy) {
+            this.cy.elements().stop(true, false);
+            this.cy.batch(() => this.cy.elements().removeClass('hl dim'));
+          }
+          await this._loadWorkspaceScope();
+          await this.reload();
+        };
+        es.addEventListener('workspace_activated', refresh);
+        es.addEventListener('workspace_cleared', refresh);
+        es.addEventListener('workspace_deleted', refresh);
+      } catch (_) { /* EventSource unavailable -- next page load picks up the new scope */ }
+    },
+
+    destroy() {
+      if (this._eventSource) {
+        try { this._eventSource.close(); } catch (_) { /* ignore */ }
+        this._eventSource = null;
+      }
     },
 
     // v2.2.4: persistence boundary. ``_loadPersistedState`` runs
@@ -580,7 +679,17 @@ function nebula() {
 
     async reload() {
       const qs = new URLSearchParams();
-      if (this.contextProject) qs.set('project', this.contextProject);
+      // Scope precedence:
+      //   1. explicit ?project= deep-link (legacy /code -> Nebula path)
+      //   2. workspace project_keys CSV
+      //   3. base_only=1 when no workspace is active
+      if (this.contextProject) {
+        qs.set('project', this.contextProject);
+      } else if (this.contextProjectKeys && this.contextProjectKeys.length > 0) {
+        qs.set('project_keys', this.contextProjectKeys.join(','));
+      } else if (this.contextBaseOnly) {
+        qs.set('base_only', '1');
+      }
       if (this.contextNodeId) {
         qs.set('node', this.contextNodeId);
         qs.set('hops', String(this.hops));
@@ -588,6 +697,18 @@ function nebula() {
       const r = await fetch('/ui/graph-data?' + qs.toString());
       const data = await r.json();
       this.rawElements = data.elements;
+      // v2.6.0 polish: when a workspace exceeds the canvas cap the
+      // response carries total_in_scope > shown_node_count + a
+      // truncated flag. The banner appears just above the canvas
+      // so the user knows to drill into a module for the full
+      // ego-network.
+      this.truncated = !!data.truncated;
+      this.totalInScope = data.total_in_scope || 0;
+      this.shownNodeCount = data.shown_node_count || 0;
+      // v2.6.0 polish: the unbounded module list for the file tree
+      // (independent of the canvas cap). The tree is the navigation
+      // surface -- ever module in the workspace must show up here.
+      this.treeModules = Array.isArray(data.tree_modules) ? data.tree_modules : [];
       this.renderCanvas();
       this.buildTree();
       this.buildTypeFilters();
@@ -633,6 +754,15 @@ function nebula() {
         return e;
       });
 
+      // v2.6.0 perf: when the graph is large, every per-node visual
+      // effect (motion blur, edge re-paint during pan, underlay
+      // glow) compounds into multi-second jank. Tune them down
+      // automatically above 3 000 nodes so the user sees a smooth
+      // canvas even at 10 k. The architecture is still all there --
+      // we just stop painting expensive composite layers per node.
+      const canvasNodeCount = els.filter(e => e.data.id !== undefined).length;
+      const heavyGraph = canvasNodeCount > 3_000;
+
       if (this.cy) this.cy.destroy();
       this.cy = cytoscape({
         container: document.getElementById('cy-nebula'),
@@ -643,20 +773,17 @@ function nebula() {
         // as a texture during pan/zoom so we don't redraw every edge
         // every frame. Render labels only at moderate zoom.
         textureOnViewport: true,
-        // v2.2.3: edges stay visible during pan/drag. The pop-out
-        // behavior of hideEdgesOnViewport felt jarring -- the user
-        // saw the graph "collapse" into bare nodes mid-drag, then
-        // snap back into shape on release. Labels still hide
-        // during fast viewport changes because they're cheap to
-        // re-render and the busy-text effect was a real
-        // distraction during pans.
-        hideEdgesOnViewport: false,
+        // v2.6.0 perf: on big graphs the edges are the single most
+        // expensive thing to repaint during pan. Hide them while
+        // the viewport is moving; cytoscape pops them back on release.
+        // The "graph collapses to bare nodes mid-drag" feel is a worth-
+        // it trade vs 5-second pan stalls on a 15 k-edge canvas.
+        hideEdgesOnViewport: heavyGraph,
         hideLabelsOnViewport: true,
         pixelRatio: 1.0,
         wheelSensitivity: 0.18,  // slow, silky scroll-zoom
-        // Motion blur smooths fast pans -- the trail decays over a
-        // few frames so the canvas never looks jagged during drag.
-        motionBlur: true,
+        // Motion blur: nice on small graphs, expensive on big ones.
+        motionBlur: !heavyGraph,
         motionBlurOpacity: 0.18,
         // Damped pan: cytoscape eases to a stop when the user
         // releases the mouse rather than locking instantly.
@@ -675,9 +802,14 @@ function nebula() {
               // Inner glow / halo: ``underlay`` paints BEHIND the node
               // so the color bleeds outward like a star -- the
               // "nebula" feel the design asked for.
+              // v2.6.0 perf: the underlay composite layer is the
+              // single most expensive per-node style on big graphs.
+              // Skip it above 3 000 nodes; the user still gets color
+              // + size; the glow is the polish we trade for fluid
+              // pan/zoom.
               'underlay-color': (n) => TYPE_COLORS[n.data('type')] || TYPE_COLOR_FALLBACK,
-              'underlay-opacity': 0.32,
-              'underlay-padding': 8,
+              'underlay-opacity': heavyGraph ? 0 : 0.32,
+              'underlay-padding': heavyGraph ? 0 : 8,
               'underlay-shape': 'ellipse',
               'border-width': 1,
               'border-color': '#0a0d14',
@@ -777,25 +909,47 @@ function nebula() {
           { selector: 'edge.edges-off', style: { display: 'none' }},
           { selector: 'node.labels-off', style: { 'text-opacity': 0 }},
         ],
-        // Initial layout: NO animation, NO randomization. fcose
-        // converges in ~50-100 quick iterations and renders once.
-        // Subsequent user-triggered relayouts animate via relayout().
-        layout: {
-          name: 'fcose',
-          animate: false,
-          randomize: true,
-          quality: 'default',
-          nodeRepulsion: 8000,
-          idealEdgeLength: 80,
-          edgeElasticity: 0.45,
-          gravity: 0.25,
-          padding: 50,
-          fit: true,
-          // tile: false -- let fcose spread components organically;
-          // packing them with tile=true produces a linear / diagonal
-          // arrangement on graphs with many small clusters.
-        },
+        // v2.6.0 polish: graceful initial layout for large workspaces.
+        // fcose default fights the main thread above ~3 000 nodes;
+        // for 10 k+ (the aibox + edge case) it freezes the tab for
+        // 5-30 s. The initial layout falls back to concentric for
+        // big graphs; ``currentLayout`` is synced so the toolbar's
+        // active button reflects what's actually on the canvas.
+        // ``relayout('fcose')`` runs in DRAFT quality for big graphs
+        // (fewer iterations, no animation) so the button stays
+        // functional without freezing the tab.
+        layout: (heavyGraph
+          ? {
+              name: 'concentric',
+              concentric: (n) => n.data('deg') || 0,
+              levelWidth: () => 1,
+              minNodeSpacing: 4,
+              animate: false,
+              fit: true,
+              padding: 30,
+            }
+          : {
+              name: 'fcose',
+              animate: false,
+              randomize: true,
+              quality: 'default',
+              nodeRepulsion: 8000,
+              idealEdgeLength: 80,
+              edgeElasticity: 0.45,
+              gravity: 0.25,
+              padding: 50,
+              fit: true,
+            }),
       });
+
+      // v2.6.0 polish: sync the active-layout toolbar button with
+      // the layout that actually ran. Without this, the "force"
+      // button stays highlighted while the canvas shows concentric
+      // (the big-graph fallback) -- the user thinks they're looking
+      // at force-directed layout when they aren't.
+      if (heavyGraph) {
+        this.currentLayout = 'concentric';
+      }
 
       this.cy.on('tap', 'node', (evt) => {
         // Suppress the canvas-tap that fires alongside a node-tap on
@@ -979,23 +1133,41 @@ function nebula() {
     },
 
     buildTree() {
-      // Same source-presence trick as buildStats() -- detect nodes by
-      // the ABSENCE of ``source`` so Cytoscape's auto-assigned edge ids
-      // don't pollute the tree.
-      const nodes = this.rawElements.filter(e => e.data.source === undefined && e.data.source_path);
-      const root = { children: {}, isDir: true };
-      // Modules only -- declarations are folded under their module.
-      const modules = nodes.filter(n => n.data.type === 'code_module');
+      // v2.6.0 polish: tree builds from the UNBOUNDED ``treeModules``
+      // side-channel, not from ``rawElements``. The canvas may cap
+      // at 3 000 + drop isolates, but the tree must surface EVERY
+      // in-scope module so navigation isn't hidden. Clicking a tree
+      // entry whose id is missing from the canvas triggers an ego-
+      // network fetch via ?node=.
+      //
+      // ``declCounts`` still comes from rawElements -- it counts the
+      // function/class/method declarations whose module is in the
+      // rendered set. Missing declarations just leave the count at 0
+      // until the user drills into the ego-network.
+      const renderedNodes = this.rawElements.filter(
+        e => e.data.source === undefined && e.data.source_path,
+      );
       const declCounts = {};
-      for (const n of nodes) {
+      for (const n of renderedNodes) {
         if (n.data.type !== 'code_module' && n.data.source_path) {
           // Strip the line-range suffix to find the owning module path.
           const filePath = n.data.source_path.replace(/:\d+-\d+(#.+)?$/, '');
           declCounts[filePath] = (declCounts[filePath] || 0) + 1;
         }
       }
-      for (const m of modules) {
-        const path = (m.data.source_path || m.data.name).replace(/\\/g, '/');
+      const root = { children: {}, isDir: true };
+      // Modules from the unbounded tree side-channel.
+      const moduleList = (this.treeModules && this.treeModules.length)
+        ? this.treeModules
+        : renderedNodes.filter(n => n.data.type === 'code_module').map(n => ({
+            id: n.data.id,
+            name: n.data.name,
+            source_path: n.data.source_path,
+            type: n.data.type,
+            project: n.data.project,
+          }));
+      for (const m of moduleList) {
+        const path = (m.source_path || m.name).replace(/\\/g, '/');
         const parts = path.split('/').filter(Boolean);
         let cur = root;
         for (let i = 0; i < parts.length - 1; i++) {
@@ -1006,7 +1178,7 @@ function nebula() {
         const leafName = parts[parts.length - 1];
         cur.children[leafName] = {
           isDir: false,
-          id: m.data.id,
+          id: m.id,
           label: leafName,
           childCount: declCounts[path] || 0,
         };
@@ -1018,6 +1190,106 @@ function nebula() {
       // the template can iterate its files in one pass.
       this._annotateLeaves(root);
       this.treeRoot = root;
+      // v2.6.0 polish: flatten to indented rows so arbitrary-depth
+      // trees render in a single x-for loop. Previous nested-template
+      // approach capped at 3 levels deep -- aibox-prod-all's
+      // backend/services/asset-service/src/... path was invisible.
+      this.treeRows = this._flattenTreeRows(root);
+      // v2.6.0 polish + perf: auto-expand the top 3 levels of
+      // directories so the user sees projects + their top-level
+      // packages on first paint, without forcing 3 000+ rows into
+      // the initial DOM (which lagged interaction for ~2 seconds).
+      // Power users click to drill deeper; the tree side-channel
+      // carries every module so a deeper click resolves locally
+      // without an extra fetch.
+      const auto = {};
+      for (const row of this.treeRows) {
+        if (row.isDir && row.depth < 3) auto[row.path] = true;
+      }
+      this.expandedPaths = auto;
+      this.visibleTreeRows = this._computeVisibleTreeRows();
+    },
+
+    _flattenTreeRows(root) {
+      // Walk the tree depth-first, emitting flat rows. Each row
+      // carries an ``ancestors`` array of every parent directory's
+      // ``path`` so visibleTreeRows can check "every ancestor must be
+      // expanded" without splitting strings -- _collapseTree may have
+      // produced names like "D:/Repository/aibox-prod-all/.tmp" that
+      // contain the separator character and break naive split logic.
+      const rows = [];
+      const walk = (node, depth, parentPath, ancestors) => {
+        if (!node.children) return;
+        const entries = Object.entries(node.children);
+        // Sort: directories first, then files; both alphabetical.
+        entries.sort((a, b) => {
+          const [an, av] = a;
+          const [bn, bv] = b;
+          if (av.isDir !== bv.isDir) return av.isDir ? -1 : 1;
+          return an.localeCompare(bn);
+        });
+        for (const [name, child] of entries) {
+          const path = parentPath ? (parentPath + '/' + name) : name;
+          if (child.isDir) {
+            const fc = this._countLeaves(child);
+            rows.push({
+              depth, isDir: true, name, path,
+              ancestors: [...ancestors],
+              fileCount: fc,
+            });
+            walk(child, depth + 1, path, [...ancestors, path]);
+          } else {
+            rows.push({
+              depth, isDir: false, name, path,
+              ancestors: [...ancestors],
+              id: child.id,
+              childCount: child.childCount,
+            });
+          }
+        }
+      };
+      walk(root, 0, '', []);
+      return rows;
+    },
+
+    _countLeaves(node) {
+      if (!node.isDir) return 1;
+      let total = 0;
+      for (const child of Object.values(node.children)) {
+        total += this._countLeaves(child);
+      }
+      return total;
+    },
+
+    // v2.6.0 perf: ``visibleTreeRows`` is a plain memoized field,
+    // not a getter. Alpine re-evaluates expressions in x-for / x-if
+    // on every reactivity tick (selection change, hover, etc.). With
+    // 3 000+ tree rows the getter was running the full filter loop
+    // hundreds of times per second -- the single biggest source of
+    // ``laggy`` interactions on the aibox + edge workspace. The
+    // computed snapshot is updated only when the source changes
+    // (buildTree, toggleTreeDir).
+    _computeVisibleTreeRows() {
+      const out = [];
+      for (const row of this.treeRows) {
+        let allOpen = true;
+        for (const ancestor of row.ancestors) {
+          if (!this.expandedPaths[ancestor]) {
+            allOpen = false;
+            break;
+          }
+        }
+        if (allOpen) out.push(row);
+      }
+      return out;
+    },
+
+    toggleTreeDir(path) {
+      this.expandedPaths = {
+        ...this.expandedPaths,
+        [path]: !this.expandedPaths[path],
+      };
+      this.visibleTreeRows = this._computeVisibleTreeRows();
     },
 
     _collapseTree(node) {
