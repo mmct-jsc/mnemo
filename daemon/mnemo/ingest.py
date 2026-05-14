@@ -29,7 +29,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from mnemo import auto_router, parsers
+from mnemo import auto_router, git_log, parsers
 from mnemo.parsers import code as code_parser
 from mnemo.parsers import scope as scope_resolver
 from mnemo.parsers import tree_sitter as ts_loader
@@ -585,6 +585,34 @@ def reindex_events(
         # counts, not edge counts).
         scope_resolver.resolve_calls(store, touched_code_node_ids)
 
+    # v2.3.0 phase 9: git-log ingestion + provenance edges. Each
+    # code_repo source gains a commit-history sub-ingest that:
+    #   1. Walks ``git log --max-count=<limit>`` (newest first).
+    #   2. Upserts one ``commit`` node per commit (idempotent on
+    #      source_path = ``<repo_path>@<full_sha>``).
+    #   3. Wires ``references_function`` edges from each commit to
+    #      the code_function / code_method / code_module nodes
+    #      whose [start, end] line range overlaps the commit's
+    #      post-image diff hunks. Confidence proportional to the
+    #      fraction of the function's lines the commit changed.
+    #   4. Wires ``closed_by`` edges from memory nodes named in
+    #      ``Fixes:`` / ``Closes:`` / ``Refs:`` trailers to the
+    #      commit that resolved them (confidence 1.0).
+    #   5. Wires ``motivated_by`` edges from each commit to memory
+    #      nodes whose name appears in the commit body (confidence
+    #      0.9). The co-temporal embedding heuristic from the
+    #      design § 6 is deferred to a later release.
+    # Wrapped in a try/except so a malformed repo can't kill the
+    # whole reindex.
+    if src_list:
+        for src in src_list:
+            if src.kind != "code_repo":
+                continue
+            try:
+                _ingest_git_log_for_source(store, src, seen_source_paths)
+            except Exception as exc:  # pragma: no cover - defensive
+                log.warning("git-log ingest failed for %s: %s", src.path, exc)
+
     # Deletions: any node whose source_path falls under a scanned source
     # but wasn't seen this run.
     if src_list:
@@ -768,6 +796,134 @@ def _resolve_endpoint_edges(store: Store, node_ids: list[str]) -> None:
             )
             store.upsert_node(endpoint)
         store.add_edge(node.id, endpoint.id, "at_endpoint", confidence=0.9)
+
+
+def _ingest_git_log_for_source(
+    store: Store,
+    src: Source,
+    seen_source_paths: set[str],
+) -> None:
+    """v2.3.0 phase 9: walk ``git log`` for a ``code_repo`` source and
+    upsert ``commit`` nodes + decision-provenance edges.
+
+    Steps:
+
+    1. Walk ``git log --max-count=<limit>`` (newest first).
+    2. For each commit:
+       a. Upsert a ``commit`` node (idempotent on
+          ``source_path = "<repo_path>@<full_sha>"``).
+       b. Record its source_path in ``seen_source_paths`` so the
+          deletion sweep doesn't garbage-collect it.
+       c. Parse the commit's diff (``git show --unified=0
+          --no-prefix``) and emit ``references_function`` edges to
+          any code_function / code_method / code_module whose
+          [start, end] line range overlaps a touched range.
+       d. Parse ``Fixes:`` / ``Closes:`` / ``Refs:`` trailers and
+          emit ``closed_by`` edges from referenced memory nodes
+          (looked up by exact name) to the commit.
+       e. Find word-bounded memory-node-name mentions in the
+          commit body and emit ``motivated_by`` edges from commit
+          to each matched memory node (confidence 0.9).
+
+    Errors during diff fetch / edge resolution are logged but
+    don't kill the whole walk; one bad commit shouldn't lose us
+    the rest of the history.
+    """
+    repo_path = Path(src.path)
+    # Source.frontmatter_json / Source.commit_limit don't exist yet;
+    # fall back to the module default. A future ``mnemo source patch
+    # <path> --commit-limit N`` CLI lands the per-source override.
+    limit = git_log.DEFAULT_COMMIT_LIMIT
+
+    # Pre-fetch the joins we'll do per commit. Building these once is
+    # O(N) over the whole code graph + memory graph; doing them per
+    # commit would be O(N * commits).
+    code_nodes_in_file: dict[str, list[tuple[str, int, int]]] = {}
+    for code_type in ("code_function", "code_method", "code_module"):
+        for node in store.list_nodes(type=code_type, limit=1_000_000):
+            sp = node.source_path or ""
+            # Code node source_paths carry a ``:start-end`` suffix
+            # appended by the code parser. Pull the line range out.
+            range_match = re.search(r":(\d+)-(\d+)(?:#.*)?$", sp)
+            if not range_match:
+                continue
+            file_part = sp[: range_match.start()]
+            # The path stored is repo-relative + posix. We compare
+            # against the diff's per-file paths which are also
+            # repo-relative posix (git show --no-prefix gives us that).
+            # If the stored path starts with the repo path, strip it.
+            try:
+                file_rel = str(Path(file_part).relative_to(repo_path)).replace("\\", "/")
+            except ValueError:
+                # Not under this repo; skip.
+                continue
+            start = int(range_match.group(1))
+            end = int(range_match.group(2))
+            code_nodes_in_file.setdefault(file_rel, []).append((node.id, start, end))
+
+    memory_nodes_by_name: dict[str, str] = {}
+    for memory_type in (
+        "memory_feedback",
+        "memory_project",
+        "memory_reference",
+        "memory_user",
+        "plan_doc",
+        "project_doc",
+        "session_summary",
+    ):
+        for node in store.list_nodes(type=memory_type, limit=1_000_000):
+            if node.name and node.name not in memory_nodes_by_name:
+                memory_nodes_by_name[node.name] = node.id
+
+    for entry in git_log.walk_commits(repo_path, limit=limit):
+        commit_source_path = f"{repo_path}@{entry.sha}"
+        seen_source_paths.add(commit_source_path)
+        # Idempotency: re-running reindex against the same repo should
+        # NOT create duplicate commit nodes. Look up by source_path.
+        existing = store.get_node_by_source(commit_source_path)
+        if existing is not None:
+            commit_node_id = existing.id
+        else:
+            new_node = git_log.commit_to_node(
+                entry,
+                repo_path=str(repo_path),
+                project_key=src.project_key,
+            )
+            store.upsert_node(new_node)
+            commit_node_id = new_node.id
+
+        # references_function edges: parse the commit's diff once
+        # and join touched ranges to code-node ranges in the same file.
+        try:
+            diff_text = git_log.show_commit_diff(repo_path, entry.sha)
+        except Exception as exc:  # pragma: no cover - defensive
+            log.warning("git show %s failed: %s", entry.sha, exc)
+            diff_text = ""
+        diff_lines = git_log.parse_diff_hunks(diff_text) if diff_text else {}
+        for src_id, dst_id, confidence in git_log.compute_references_function_edges(
+            commit_node_id,
+            diff_lines,
+            code_nodes_in_file,
+        ):
+            store.add_edge(src_id, dst_id, "references_function", confidence=confidence)
+
+        # closed_by edges (trailer -> doc -> this commit). Confidence
+        # 1.0 because the commit author explicitly declared it.
+        trailer_targets = git_log.parse_closed_by_trailers(entry.body)
+        for memory_id, c_id in git_log.find_closed_by_from_trailers(
+            commit_node_id, trailer_targets, memory_nodes_by_name
+        ):
+            store.add_edge(memory_id, c_id, "closed_by", confidence=1.0)
+
+        # motivated_by edges (this commit -> doc whose name appears
+        # in the body). Confidence 0.9 because the name match is
+        # explicit but not via a formal trailer.
+        for c_id, memory_id in git_log.find_motivated_by_explicit_match(
+            commit_node_id,
+            entry.body,
+            memory_nodes_by_name,
+        ):
+            store.add_edge(c_id, memory_id, "motivated_by", confidence=0.9)
 
 
 def register_default_sources(store: Store, claude_home: Path) -> int:

@@ -2,6 +2,79 @@
 
 All notable changes to mnemo are documented here.
 
+## [2.3.0] - 2026-05-14
+
+**Phase 9: git-log ingestion + decision-provenance edges.** The
+v2.0 design's headline differentiator finally lands: every
+``code_repo`` source now walks its git history and creates one
+``commit`` node per commit, plus three families of provenance
+edges that auto-link memory + code + commits.
+
+### Added (commit-history ingestion)
+
+New module ``daemon/mnemo/git_log.py`` walks ``git log`` per
+``code_repo`` source (capped at most-recent 10k commits per repo
+via ``git_log.DEFAULT_COMMIT_LIMIT``). For each commit it emits a
+``commit`` node carrying:
+
+  - ``name``  = ``<short_sha> <subject>``
+  - ``description`` = author + ts + subject
+  - ``body``  = subject + full body
+  - ``source_path`` = ``<repo_path>@<full_sha>`` (idempotency key)
+  - ``frontmatter`` JSON = ``{ sha, short_sha, author_email, ts,
+    files_changed }`` for downstream sort + filter queries.
+
+A new post-pass in ``ingest.reindex_events`` calls
+``_ingest_git_log_for_source`` AFTER the existing code-edge
+resolver so the freshly-upserted code_function / code_method /
+code_module nodes are available to join against.
+
+### Added (decision-provenance edges)
+
+Three edge families wire from commits to the rest of the graph:
+
+| Edge | From | To | Confidence | How |
+|---|---|---|---|---|
+| ``references_function`` | commit | code_function / code_method / code_module | proportional, clamped [0.3, 1.0] | per-commit diff hunks (``git show --unified=0 --no-prefix``) joined against each code node's [start, end] line range. Even a one-line typo fix carries 0.3 weight; a full rewrite caps at 1.0. |
+| ``closed_by`` | memory_feedback / plan_doc / memory_project | commit | 1.0 | ``Fixes:`` / ``Closes:`` / ``Refs:`` trailers in the commit body, looked up by exact memory node name. |
+| ``motivated_by`` | commit | memory_feedback / plan_doc / memory_project | 0.9 | word-bounded memory-node-name match in the commit body (explicit reference without a formal trailer). |
+
+The schema for these three relations was reserved in v2.0 phase 1
+(see ``store.EDGE_RELATIONS``); v2.3.0 is the producer.
+
+### Deferred (not in this release)
+
+The design § 6 lists a SECOND ``motivated_by`` heuristic (commit
+ts within 24h of a doc's ``updated_at`` AND embedding cosine >=
+0.78, confidence 0.6). It needs the embedder threaded through
+the git-log module and adds an O(commits * docs) cosine scan to
+every reindex; deferring it keeps v2.3.0 tractable. Will land
+either as v2.3.1 or alongside the v2.6 ``mnemo:why-is-this-here``
+skill.
+
+### Robustness
+
+- Non-git directories (extracted tarballs, vendored sources)
+  silently no-op rather than blowing up reindex.
+- Each commit's git-show call is independently try/except'd so
+  one bad commit doesn't lose us the rest of the history.
+- Windows-safe: the subprocess field separators use ``\x1f``
+  (ASCII Unit Separator) instead of ``\x00`` NUL bytes which
+  Windows ``CreateProcess`` rejects.
+
+### Tests
+
+- ``daemon/tests/unit/test_git_log.py`` (13 cases): CommitEntry
+  shape, diff-hunk parsing, trailer parsing, overlap-confidence
+  computation, word-boundary motivated_by matching, closed_by
+  edge direction, commit-to-Node lifting.
+- ``daemon/tests/integration/test_git_log_integration.py``
+  (4 cases): full path against a tmp ``git init`` repo with
+  three commits, asserts commit nodes + references_function +
+  closed_by edges materialize; idempotency on re-run; non-git
+  directory no-ops; frontmatter provenance fields present.
+- Total daemon suite: 678 passing (was 661 + 17 new).
+
 ## [2.2.7] - 2026-05-14
 
 **Nebula side panel body preview: type-aware rendering** -- markdown
