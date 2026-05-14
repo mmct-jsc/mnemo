@@ -13,6 +13,7 @@ from mnemo.compress import CompressedHit
 from mnemo.ingest import ReindexReport
 from mnemo.retrieve import RetrievalResult
 from mnemo.store import ActiveProject, FeedbackEvent, Node, Query, Source
+from mnemo.workspaces import SourceOverride, Workspace
 
 # --- Nodes ----------------------------------------------------------------
 
@@ -447,3 +448,135 @@ class FsSuggestOut(BaseModel):
     """
 
     candidates: list[str]
+
+
+# --- v2.6 phase 5: workspaces + source overrides + propose -----------------
+
+
+class WorkspaceOut(BaseModel):
+    """One workspace row, serialized for the HTTP API.
+
+    Time columns are epoch milliseconds (matching the schema); the UI
+    consumes them via ``new Date(ms)`` directly.
+    """
+
+    id: str
+    name: str
+    project_keys: list[str]
+    filter_prefs: dict | None = None
+    page_state: dict | None = None
+    created_at: int
+    updated_at: int
+    last_activated_at: int | None = None
+
+    @classmethod
+    def from_workspace(cls, w: Workspace) -> WorkspaceOut:
+        return cls(
+            id=w.id,
+            name=w.name,
+            project_keys=list(w.project_keys),
+            filter_prefs=w.filter_prefs,
+            page_state=w.page_state,
+            created_at=w.created_at,
+            updated_at=w.updated_at,
+            last_activated_at=w.last_activated_at,
+        )
+
+
+class WorkspaceCreateIn(BaseModel):
+    name: str = Field(min_length=1)
+    project_keys: list[str] = Field(default_factory=list)
+    filter_prefs: dict | None = None
+    page_state: dict | None = None
+
+
+class WorkspaceUpdateIn(BaseModel):
+    """PATCH body. Any unset field is left alone."""
+
+    name: str | None = None
+    project_keys: list[str] | None = None
+    filter_prefs: dict | None = None
+    page_state: dict | None = None
+
+
+class ActiveWorkspaceOut(BaseModel):
+    """``GET /v1/workspaces/active`` body. ``active`` is None when no
+    workspace is active (BASE-only UI mode)."""
+
+    active: WorkspaceOut | None
+
+
+class ActivateWorkspaceOut(BaseModel):
+    """``POST /v1/workspaces/<id>/activate`` body on 200.
+
+    Carries the updated workspace plus the total node count + soft-cap
+    flag so the UI can render the yellow "large workspace" chip without
+    re-fetching.
+    """
+
+    workspace: WorkspaceOut
+    total_nodes: int
+    soft_cap_exceeded: bool = False
+
+
+class SourceOverrideOut(BaseModel):
+    source_path: str
+    decision: str
+    reason: str | None = None
+    decided_at: int
+
+    @classmethod
+    def from_override(cls, ov: SourceOverride) -> SourceOverrideOut:
+        return cls(
+            source_path=ov.source_path,
+            decision=ov.decision,
+            reason=ov.reason,
+            decided_at=ov.decided_at,
+        )
+
+
+class SourceOverrideItemIn(BaseModel):
+    source_path: str = Field(min_length=1)
+    decision: str = Field(min_length=1)
+    reason: str | None = None
+
+
+class SourceOverrideBatchIn(BaseModel):
+    """Body for ``POST /v1/source_overrides``. Items applied in order."""
+
+    items: list[SourceOverrideItemIn]
+
+
+class SourceProposalOut(BaseModel):
+    kind: str
+    include_pattern: str
+    include_count: int
+    est_nodes: int
+    sample: list[str]
+
+
+class SourceProposeIn(BaseModel):
+    path: str = Field(min_length=1)
+
+
+class SourceProposeOut(BaseModel):
+    """``POST /v1/sources/propose`` body. Dual-source proposal + gitignore
+    + warnings, ready for the add-source UI."""
+
+    path: str
+    proposals: list[SourceProposalOut]
+    gitignore_excludes: list[str]
+    gitignore_files_found: list[str]
+    warnings: list[dict]
+
+
+class ReindexReportSectionsOut(BaseModel):
+    """``GET /v1/reindex/report`` body. Most recent report; 404 if no
+    reindex has run yet this daemon session."""
+
+    auto_skipped: list[dict]
+    malformed: list[dict]
+    suspicious: list[dict]
+    indexed_count: int
+    duration_ms: int
+    finished_at: int  # epoch ms when the report event was emitted

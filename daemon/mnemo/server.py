@@ -19,8 +19,10 @@ The OpenAPI schema is filtered to v1-only paths and exposed at both
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
+import queue
 import sqlite3
 import threading
 import time
@@ -33,9 +35,11 @@ from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from mnemo import __version__, auto_router, config, ingest, paths, retrieve
+from mnemo import __version__, auto_router, config, ingest, paths, retrieve, workspaces
 from mnemo.api_schemas import (
+    ActivateWorkspaceOut,
     ActiveProjectOut,
+    ActiveWorkspaceOut,
     FeedbackIn,
     FeedbackOut,
     FsSuggestOut,
@@ -59,7 +63,13 @@ from mnemo.api_schemas import (
     SourcePreviewBreakdownOut,
     SourcePreviewIn,
     SourcePreviewOut,
+    SourceProposalOut,
+    SourceProposeIn,
+    SourceProposeOut,
     SourceUpdateIn,
+    WorkspaceCreateIn,
+    WorkspaceOut,
+    WorkspaceUpdateIn,
 )
 from mnemo.embed import Embedder
 from mnemo.store import FEEDBACK_REASONS, Node, Store, signal_for_reason
@@ -135,6 +145,59 @@ class AppState:
     # an independent lock.
     reindex_lock: threading.Lock = field(default_factory=threading.Lock)
     reindex_started_at: int | None = None
+    # v2.6 phase 3+6: the most recent ReindexReportSectionsOut payload
+    # cached in memory so GET /v1/reindex/report returns the three-
+    # section bucket from the last run. None until the first reindex
+    # completes this daemon session. Replaced on every run.
+    last_reindex_report: dict | None = None
+    # v2.6 phase 5: subscriber queues for the SSE broadcast channel on
+    # /v1/events. Each connected client gets a Queue; broadcast_event
+    # fan-outs to every queue. Slow consumers drop frames (Full).
+    event_subscribers: list[queue.Queue] = field(default_factory=list)
+    event_subscribers_lock: threading.Lock = field(default_factory=threading.Lock)
+
+
+# v2.6 phase 5: workspace activation caps.
+# - soft: warn the UI (yellow chip) but allow activation.
+# - hard: refuse activation with 409 WorkspaceTooLarge.
+# Tests override via query params; production defaults match the v2.6
+# Settings.workspaces section.
+DEFAULT_SOFT_CAP_NODES = 75_000
+DEFAULT_HARD_CAP_NODES = 200_000
+
+
+def _broadcast_event(state: AppState, name: str, payload: dict) -> None:
+    """Push an SSE frame to every /v1/events subscriber.
+
+    Drops the frame for slow consumers (queue full). Frame format
+    mirrors the reindex_events SSE shape: ``event: <name>\\ndata: <json>``.
+    """
+    with state.event_subscribers_lock:
+        subscribers = list(state.event_subscribers)
+    for q in subscribers:
+        try:
+            q.put_nowait((name, payload))
+        except queue.Full:
+            log.debug("dropping event %s for slow subscriber", name)
+
+
+def _workspace_node_count(store: Store, project_keys: list[str]) -> int:
+    """Sum the node count across all project_keys in a workspace.
+
+    BASE-flagged nodes are included via count_nodes(include_base=True)
+    which mirrors the retrieval contract: BASE knowledge applies to
+    every workspace.
+    """
+    if not project_keys:
+        # Empty workspaces only ever see BASE-flagged nodes. Walk every
+        # node once and count just the BASE ones -- count_nodes can't
+        # filter on the base flag directly.
+        return sum(1 for n in store.list_nodes(limit=1_000_000) if n.base)
+    total = 0
+    for key in project_keys:
+        per = store.count_nodes(project_key=key, include_base=True)
+        total += sum(per.values())
+    return total
 
 
 def create_app(*, store: Store | None = None, embedder: Embedder | None = None) -> FastAPI:
@@ -369,6 +432,220 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
                 "running": running,
                 "started_at": state.reindex_started_at if running else None,
             }
+        )
+
+    # --- v2.6 phase 4 + 5: dual-source proposal + workspaces --------------
+
+    @v1.post("/sources/propose", response_model=SourceProposeOut)
+    def propose_source_route(body: SourceProposeIn) -> SourceProposeOut:
+        """Dual-source proposal for the add-source UI.
+
+        See :func:`mnemo.auto_router.propose_source`. Returns docs_dir +
+        code_repo proposals (each, both, or neither), parsed .gitignore
+        patterns, plus any safeguard warnings.
+        """
+        try:
+            result = auto_router.propose_source(body.path)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return SourceProposeOut(
+            path=result.path,
+            proposals=[
+                SourceProposalOut(
+                    kind=p.kind,
+                    include_pattern=p.include_pattern,
+                    include_count=p.include_count,
+                    est_nodes=p.est_nodes,
+                    sample=p.sample,
+                )
+                for p in result.proposals
+            ],
+            gitignore_excludes=result.gitignore_excludes,
+            gitignore_files_found=result.gitignore_files_found,
+            warnings=result.warnings,
+        )
+
+    # --- Workspaces -------------------------------------------------------
+
+    @v1.get("/workspaces", response_model=list[WorkspaceOut])
+    def list_workspaces_route(s: Store = Depends(get_store)) -> list[WorkspaceOut]:
+        return [WorkspaceOut.from_workspace(w) for w in workspaces.list_workspaces(s)]
+
+    @v1.post("/workspaces", response_model=WorkspaceOut)
+    def create_workspace_route(
+        body: WorkspaceCreateIn, s: Store = Depends(get_store)
+    ) -> WorkspaceOut:
+        try:
+            ws = workspaces.create_workspace(
+                s,
+                name=body.name,
+                project_keys=body.project_keys,
+                filter_prefs=body.filter_prefs,
+                page_state=body.page_state,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return WorkspaceOut.from_workspace(ws)
+
+    @v1.get("/workspaces/active", response_model=ActiveWorkspaceOut)
+    def get_active_workspace_route(s: Store = Depends(get_store)) -> ActiveWorkspaceOut:
+        ws = workspaces.get_active_workspace(s)
+        return ActiveWorkspaceOut(
+            active=WorkspaceOut.from_workspace(ws) if ws is not None else None
+        )
+
+    @v1.post("/workspaces/clear")
+    def clear_active_workspace_route(s: Store = Depends(get_store)) -> JSONResponse:
+        workspaces.clear_active_workspace(s)
+        _broadcast_event(state, "workspace_cleared", {"at": int(time.time() * 1000)})
+        return JSONResponse({"ok": True})
+
+    @v1.get("/workspaces/{workspace_id}", response_model=WorkspaceOut)
+    def get_workspace_route(workspace_id: str, s: Store = Depends(get_store)) -> WorkspaceOut:
+        ws = workspaces.get_workspace(s, workspace_id)
+        if ws is None:
+            raise HTTPException(status_code=404, detail="workspace not found")
+        return WorkspaceOut.from_workspace(ws)
+
+    @v1.patch("/workspaces/{workspace_id}", response_model=WorkspaceOut)
+    def patch_workspace_route(
+        workspace_id: str,
+        body: WorkspaceUpdateIn,
+        s: Store = Depends(get_store),
+    ) -> WorkspaceOut:
+        patch = body.model_dump(exclude_unset=True)
+        kwargs: dict[str, object] = {}
+        if "name" in patch:
+            kwargs["name"] = patch["name"]
+        if "project_keys" in patch:
+            kwargs["project_keys"] = patch["project_keys"]
+        if "filter_prefs" in patch:
+            kwargs["filter_prefs"] = patch["filter_prefs"]
+        if "page_state" in patch:
+            kwargs["page_state"] = patch["page_state"]
+        try:
+            ws = workspaces.update_workspace(s, workspace_id, **kwargs)  # type: ignore[arg-type]
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if ws is None:
+            raise HTTPException(status_code=404, detail="workspace not found")
+        return WorkspaceOut.from_workspace(ws)
+
+    @v1.delete("/workspaces/{workspace_id}")
+    def delete_workspace_route(workspace_id: str, s: Store = Depends(get_store)) -> JSONResponse:
+        ok = workspaces.delete_workspace(s, workspace_id)
+        if not ok:
+            raise HTTPException(status_code=404, detail="workspace not found")
+        _broadcast_event(
+            state, "workspace_deleted", {"id": workspace_id, "at": int(time.time() * 1000)}
+        )
+        return JSONResponse({"ok": True})
+
+    @v1.post("/workspaces/{workspace_id}/activate", response_model=ActivateWorkspaceOut)
+    def activate_workspace_route(
+        workspace_id: str,
+        soft_cap_nodes: int = DEFAULT_SOFT_CAP_NODES,
+        hard_cap_nodes: int = DEFAULT_HARD_CAP_NODES,
+        s: Store = Depends(get_store),
+    ) -> ActivateWorkspaceOut:
+        """Activate a workspace, enforcing soft + hard node-count caps.
+
+        Returns 409 ``workspace_too_large`` if the total node count
+        across the workspace's project_keys exceeds the hard cap. The
+        soft cap surfaces as ``soft_cap_exceeded: True`` on a 200
+        response so the UI shows a yellow chip without blocking the
+        switch.
+        """
+        ws = workspaces.get_workspace(s, workspace_id)
+        if ws is None:
+            raise HTTPException(status_code=404, detail="workspace not found")
+        total_nodes = _workspace_node_count(s, ws.project_keys)
+        if total_nodes > hard_cap_nodes:
+            per_project = {
+                key: sum(s.count_nodes(project_key=key, include_base=False).values())
+                for key in ws.project_keys
+            }
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "workspace_too_large",
+                    "total_nodes": total_nodes,
+                    "hard_cap": hard_cap_nodes,
+                    "projects": [{"key": k, "nodes": v} for (k, v) in per_project.items()],
+                },
+            )
+        try:
+            workspaces.set_active_workspace(s, workspace_id)
+        except workspaces.WorkspaceNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="workspace not found") from exc
+        updated = workspaces.get_workspace(s, workspace_id)
+        assert updated is not None
+        _broadcast_event(
+            state,
+            "workspace_activated",
+            {
+                "id": workspace_id,
+                "name": updated.name,
+                "project_keys": updated.project_keys,
+                "total_nodes": total_nodes,
+                "at": int(time.time() * 1000),
+            },
+        )
+        return ActivateWorkspaceOut(
+            workspace=WorkspaceOut.from_workspace(updated),
+            total_nodes=total_nodes,
+            soft_cap_exceeded=total_nodes > soft_cap_nodes,
+        )
+
+    # --- /v1/events SSE broadcast channel ---------------------------------
+
+    @v1.get("/events")
+    def events_stream() -> StreamingResponse:
+        """Server-Sent Events channel for daemon-wide notifications.
+
+        Frame types:
+        - ``workspace_activated`` / ``workspace_deleted`` /
+          ``workspace_cleared`` -- from the workspace routes
+        - ``reindex_started`` / ``reindex_done`` -- from the reindex
+          generator (wired in phase 6)
+        - ``heartbeat`` -- every ~15s to keep proxies from disconnecting
+        """
+        # Per-client bounded queue. 64 frames is plenty for a UI that
+        # only consumes a handful per minute; slow consumers drop the
+        # oldest frames via the put_nowait path in _broadcast_event.
+        q: queue.Queue = queue.Queue(maxsize=64)
+        with state.event_subscribers_lock:
+            state.event_subscribers.append(q)
+
+        def encode(name: str, payload: dict) -> bytes:
+            return f"event: {name}\ndata: {json.dumps(payload)}\n\n".encode()
+
+        def stream() -> Iterator[bytes]:
+            # Initial hello so the client knows the connection is live
+            # (avoids hanging the iter_lines() loop in tests that activate
+            # before the first frame arrives).
+            yield encode("hello", {"version": __version__, "at": int(time.time() * 1000)})
+            try:
+                while True:
+                    try:
+                        # Short timeout so we periodically emit a heartbeat
+                        # (SSE comment line) to keep proxies happy.
+                        name, payload = q.get(timeout=15.0)
+                    except queue.Empty:
+                        yield b": heartbeat\n\n"
+                        continue
+                    yield encode(name, payload)
+            finally:
+                with state.event_subscribers_lock, contextlib.suppress(ValueError):
+                    state.event_subscribers.remove(q)
+
+        return StreamingResponse(
+            stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-store",
+                "X-Accel-Buffering": "no",
+            },
         )
 
     # --- Nodes ------------------------------------------------------------
