@@ -218,4 +218,11 @@ def test_graph_data_returns_elements(client: TestClient, tmp_path: Path) -> None
 def test_graph_data_empty_store(client: TestClient) -> None:
     r = client.get("/ui/graph-data")
     assert r.status_code == 200
-    assert r.json() == {"elements": []}
+    # v2.6.0: response carries elements + truncation metadata so the
+    # canvas can render a "showing X of Y" banner. Empty store -> all
+    # counts are zero.
+    body = r.json()
+    assert body["elements"] == []
+    assert body["truncated"] is False
+    assert body["shown_node_count"] == 0
+    assert body["total_in_scope"] == 0

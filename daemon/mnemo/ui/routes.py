@@ -702,6 +702,11 @@ def mount_ui(
         keys_set: set[str] | None = None
         if project_keys:
             keys_set = {k.strip() for k in project_keys.split(",") if k.strip()}
+        # v2.6.0 polish: surfaced in the response so the UI can render
+        # a "showing X of Y" truncation banner. The workspace path
+        # below sets this to the pre-cap size; other paths leave it
+        # at zero (no banner).
+        total_in_scope_total: int = 0
 
         # v2.6.0 polish: tighten scope semantics for workspaces. Two
         # passes:
@@ -766,11 +771,100 @@ def mount_ui(
                         boundary = [n for n in null_candidates if n.id in connected]
                 nodes = in_scope + boundary
         else:
-            nodes = s.list_nodes(limit=2000)
-            if base_only or keys_set is not None or project:
+            # v2.6.0 polish: when a workspace project_keys scope is set,
+            # query per-key (uses the project_key index) so the canvas
+            # gets every in-scope node up to ``GRAPH_NODE_CAP``. The
+            # global ``list_nodes(limit=2000)`` path used to truncate
+            # large workspaces silently -- a 10 k-node monorepo would
+            # show as a disconnected grid because most of the
+            # candidate set was discarded BEFORE the scope filter ran.
+            #
+            # 3 000 is the practical fcose limit on a modern browser;
+            # workspaces above this cap surface a "truncated" banner
+            # in the response so the UI can prompt drill-down via
+            # ?node= ego-network.
+            GRAPH_NODE_CAP = 3_000
+
+            # v2.6.0 polish: type priority -- when the in-scope set
+            # exceeds GRAPH_NODE_CAP, keep the most-skeletal nodes
+            # first so the user sees the architecture before the
+            # implementation noise. Modules / classes / routes /
+            # endpoints / components anchor the graph; functions +
+            # methods fill remaining capacity.
+            _TYPE_PRIORITY: dict[str, int] = {
+                "code_module": 0,
+                "code_class": 1,
+                "code_route": 2,
+                "code_endpoint": 3,
+                "code_component": 4,
+                "memory_reference": 5,
+                "memory_project": 6,
+                "memory_feedback": 7,
+                "memory_user": 8,
+                "session_summary": 9,
+                "project_doc": 10,
+                "plan_doc": 11,
+                "code_function": 12,
+                "code_method": 13,
+                "commit": 14,
+            }
+
+            if keys_set is not None:
+                seen_ids: set[str] = set()
+                collected: list[Node] = []
+                for key in keys_set:
+                    for n in s.list_nodes(
+                        project_key=key,
+                        limit=GRAPH_NODE_CAP * 4,  # oversample so prioritization has room
+                        include_base=False,
+                    ):
+                        if n.id not in seen_ids:
+                            seen_ids.add(n.id)
+                            collected.append(n)
+                # BASE-flagged nodes apply to every workspace -- list them
+                # once and dedupe.
+                for n in s.list_nodes(limit=GRAPH_NODE_CAP * 4):
+                    if n.base and n.id not in seen_ids:
+                        seen_ids.add(n.id)
+                        collected.append(n)
+                total_in_scope_total = len(collected)
+                # Apply type priority then cap at GRAPH_NODE_CAP so the
+                # canvas can render. Stable sort -- ties keep
+                # updated_at-desc order from list_nodes.
+                collected.sort(key=lambda n: (_TYPE_PRIORITY.get(n.type, 99), -n.updated_at))
+                in_scope = collected[:GRAPH_NODE_CAP]
+                in_scope_ids = {n.id for n in in_scope}
+                # pass 2: NULL-project boundary nodes EDGE-connected to
+                # in-scope. Pull NULL-project candidates directly via
+                # type-agnostic query, then keep only the edge-connected
+                # ones.
+                boundary: list[Node] = []
+                if in_scope_ids:
+                    # Walk every node once to find NULL-project candidates.
+                    # This is the one O(N) scan we can't avoid because
+                    # list_nodes(project_key=None) doesn't exist as a
+                    # filter today. Still cheap -- one pass over the
+                    # store.
+                    null_candidates = [
+                        n for n in s.list_nodes(limit=GRAPH_NODE_CAP)
+                        if n.project_key is None and not n.base and n.id not in in_scope_ids
+                    ]
+                    if null_candidates:
+                        edge_set = s.get_edges_for_nodes(
+                            [n.id for n in null_candidates] + list(in_scope_ids)
+                        )
+                        connected: set[str] = set()
+                        for e in edge_set:
+                            if e.src_id in in_scope_ids and e.dst_id not in in_scope_ids:
+                                connected.add(e.dst_id)
+                            elif e.dst_id in in_scope_ids and e.src_id not in in_scope_ids:
+                                connected.add(e.src_id)
+                        boundary = [n for n in null_candidates if n.id in connected]
+                nodes = in_scope + boundary
+            elif base_only or project:
+                nodes = s.list_nodes(limit=GRAPH_NODE_CAP)
                 in_scope = [n for n in nodes if _passes_scope_strict(n)]
                 in_scope_ids = {n.id for n in in_scope}
-                # pass 2: NULL-project boundary nodes EDGE-connected to in-scope.
                 boundary = []
                 if not base_only:
                     null_candidates = [
@@ -789,10 +883,41 @@ def mount_ui(
                                 connected.add(e.src_id)
                         boundary = [n for n in null_candidates if n.id in connected]
                 nodes = in_scope + boundary
+            else:
+                # No scope param at all -- legacy behavior, cap at 2000
+                # to protect canvas rendering across the entire store.
+                nodes = s.list_nodes(limit=2000)
+
+        # v2.6.0 polish: when the candidate set was truncated by the
+        # workspace path's type-priority cap, drop nodes that have no
+        # edge to any other rendered node. The cap kept modules +
+        # classes but dropped functions; orphan modules whose only
+        # ``defines`` edges point at filtered-out functions show up as
+        # disconnected grid cells in fcose layout, which is visually
+        # noisy + the user's "no connections" complaint. Keep the
+        # connected core; the file-tree on the left still surfaces
+        # every project + module by source_path so nothing is hidden
+        # from navigation.
+        drop_isolates = total_in_scope_total > 0 and total_in_scope_total > len(nodes)
 
         elements: list[dict[str, Any]] = []
+        candidate_ids: set[str] = {n.id for n in nodes}
+        edges_for_render: list[Any] = []
+        if candidate_ids:
+            for edge in s.get_edges_for_nodes(list(candidate_ids)):
+                if edge.dst_id in candidate_ids and edge.src_id in candidate_ids:
+                    edges_for_render.append(edge)
+
+        # Compute degree per candidate to identify isolates.
+        degree: dict[str, int] = {}
+        for edge in edges_for_render:
+            degree[edge.src_id] = degree.get(edge.src_id, 0) + 1
+            degree[edge.dst_id] = degree.get(edge.dst_id, 0) + 1
+
         node_ids: set[str] = set()
         for n in nodes:
+            if drop_isolates and degree.get(n.id, 0) == 0:
+                continue
             elements.append(
                 {
                     "data": {
@@ -809,19 +934,32 @@ def mount_ui(
             node_ids.add(n.id)
 
         # Step 2: edges. Only between nodes we surfaced.
-        if node_ids:
-            edges = s.get_edges_for_nodes(list(node_ids))
-            for edge in edges:
-                if edge.dst_id in node_ids and edge.src_id in node_ids:
-                    elements.append(
-                        {
-                            "data": {
-                                "source": edge.src_id,
-                                "target": edge.dst_id,
-                                "relation": edge.relation,
-                                "weight": edge.weight,
-                                "confidence": getattr(edge, "confidence", 1.0),
-                            }
+        for edge in edges_for_render:
+            if edge.dst_id in node_ids and edge.src_id in node_ids:
+                elements.append(
+                    {
+                        "data": {
+                            "source": edge.src_id,
+                            "target": edge.dst_id,
+                            "relation": edge.relation,
+                            "weight": edge.weight,
+                            "confidence": getattr(edge, "confidence", 1.0),
                         }
-                    )
-        return JSONResponse({"elements": elements})
+                    }
+                )
+        # v2.6.0 polish: expose how many nodes were available vs how
+        # many we returned so the canvas can show a "showing X of Y --
+        # drill into a module for the full ego-network" banner.
+        # ``total_in_scope`` is set inside the keys_set branch where
+        # priority-cap may have truncated; other branches leave it at 0
+        # which the client treats as "no truncation".
+        shown_count = len(node_ids)
+        truncated = total_in_scope_total > shown_count
+        return JSONResponse(
+            {
+                "elements": elements,
+                "shown_node_count": shown_count,
+                "total_in_scope": total_in_scope_total,
+                "truncated": truncated,
+            }
+        )
