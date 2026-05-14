@@ -1632,7 +1632,25 @@ dl.meta dd { margin: 0; color: var(--fg); }
   margin-top: 1rem;
 }
 
-.ws-card { position: relative; }
+/* v2.6.0 polish: equalize card height + bottom-pin the actions row.
+   Grid auto-rows used to leave the actions floating mid-card on the
+   workspace whose chip strip was empty; the dash-card body now lays
+   out as a flex column so the actions row pushes to the bottom. The
+   .dash-card-head's heading also picks up an extra top-shift so the
+   default 1.25rem dash-card padding doesn't feel oversized for the
+   compact ws-card shape.                                            */
+.ws-card {
+  position: relative;
+  padding-top: 0.85rem;       /* was 1.25rem via .dash-card */
+  display: flex;
+  flex-direction: column;
+}
+.ws-card .dash-card-head { margin-bottom: 0.5rem; }
+.ws-card .dash-card-body {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+}
 .ws-card.is-active {
   border-color: var(--accent);
   box-shadow: 0 0 0 1px var(--accent-soft);
@@ -1648,7 +1666,9 @@ dl.meta dd { margin: 0; color: var(--fg); }
 }
 .ws-card-projects {
   display: flex; flex-wrap: wrap; gap: 0.3rem;
-  margin: 0.5rem 0 0.7rem;
+  margin: 0.25rem 0 0.65rem;
+  min-height: 1.8rem;          /* hold a row's worth of space even when empty */
+  align-items: center;
 }
 .ws-card-empty {
   color: var(--fg-muted);
@@ -1657,14 +1677,15 @@ dl.meta dd { margin: 0; color: var(--fg); }
 }
 .ws-card-meta {
   display: flex; flex-direction: column; gap: 0.2rem;
-  margin: 0.5rem 0 0.8rem;
+  margin: 0 0 0.7rem;
   font-size: 0.8rem;
   color: var(--fg-muted);
 }
 .ws-card-meta-label { color: var(--fg-dim); margin-right: 0.4rem; }
 .ws-card-actions {
   display: flex; flex-wrap: wrap; gap: 0.4rem;
-  margin-top: 0.5rem;
+  margin-top: auto;            /* push actions to the bottom of the body */
+  padding-top: 0.5rem;
 }
 .ws-card-actions button { padding: 0.4rem 0.8rem; font-size: 0.85rem; }
 .ws-card-actions .danger {
