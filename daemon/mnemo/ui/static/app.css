@@ -874,6 +874,77 @@ dl.meta dd { margin: 0; color: var(--fg); }
 .sources header h2 { margin: 0; flex: 1; }
 .sources .msg { color: var(--fg-muted); font-size: 0.85rem; font-family: var(--mono); }
 
+/* v2.2 phase 3 streaming reindex progress.
+   The block uses the palette-driven .bar-fill primitive -- inline
+   ``style="--type-color: ..."`` on the row sets accent (in progress)
+   or red (errors). When ``progress.done`` flips true, ``.reindex-done``
+   tweens the panel toward muted so the user reads "I'm finished" at
+   a glance. */
+.reindex-progress {
+  margin: 0.75rem 0 1.5rem;
+  padding: 0.75rem 1rem;
+  background: var(--panel);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  transition: opacity 220ms ease-out, border-color 220ms ease-out;
+}
+.reindex-progress.reindex-done {
+  border-color: var(--border);
+}
+.reindex-progress-row {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  margin-bottom: 0.5rem;
+  font-family: var(--mono);
+  font-size: 0.82rem;
+}
+.reindex-counter {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--fg);
+  font-weight: 600;
+  min-width: 6em;
+}
+.reindex-counter .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.reindex-progress:not(.reindex-done) .reindex-counter .dot.pulse {
+  animation: mnemo-pulse 1.1s ease-in-out infinite;
+}
+@keyframes mnemo-pulse {
+  0%, 100% { opacity: 0.4; transform: scale(1.0); }
+  50%      { opacity: 1.0; transform: scale(1.25); }
+}
+.reindex-current {
+  flex: 1;
+  color: var(--fg-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.reindex-progress .bar-track {
+  height: 4px;
+}
+.reindex-summary {
+  margin: 0.55rem 0 0;
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  color: var(--fg-muted);
+}
+.reindex-summary .err { color: var(--warn); }
+
+/* prefers-reduced-motion: stop the pulse, keep everything readable. */
+@media (prefers-reduced-motion: reduce) {
+  .reindex-progress .reindex-counter .dot.pulse { animation: none; }
+  .reindex-progress { transition: none; }
+}
+
 /* --- Audit page --------------------------------------------------- */
 
 .audit { /* full-width: drives split-2 dash-row + summary aside */ }
