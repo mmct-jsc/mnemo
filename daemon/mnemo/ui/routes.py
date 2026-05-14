@@ -20,7 +20,7 @@ from fastapi.templating import Jinja2Templates
 
 from mnemo import config, retrieve
 from mnemo.embed import Embedder
-from mnemo.store import Store
+from mnemo.store import Node, Store
 
 UI_DIR = Path(__file__).parent
 TEMPLATES_DIR = UI_DIR / "templates"
@@ -607,6 +607,8 @@ def mount_ui(
     @app.get("/ui/graph-data")
     def graph_data(
         project: str | None = None,
+        project_keys: str | None = None,
+        base_only: bool = False,
         node: str | None = None,
         hops: int = 2,
         s: Store = Depends(get_store),
@@ -614,14 +616,21 @@ def mount_ui(
         """v2.1 Nebula graph data feed.
 
         Backwards-compatible: no query string returns the full graph
-        (same shape the v1 page consumed). Optional scoping:
+        (same shape the v1 page consumed). Scoping params (v2.6.0
+        polish so Nebula mirrors the active workspace):
 
-        - ``?project=<key>``: only return nodes with that
-          ``project_key`` plus any cross-cutting BASE / NULL nodes
-          they connect to.
-        - ``?node=<id>&hops=<n>``: return the ego-network of
-          ``<id>`` out to ``n`` hops (default 2). Combine with
-          ``?project=`` to constrain the expansion to one project.
+        - ``?project=<key>``: legacy single-project filter (used by
+          /code deep-links). Nodes with that ``project_key`` plus
+          BASE / NULL nodes that connect to them.
+        - ``?project_keys=k1,k2,...``: workspace multi-project filter.
+          Returns nodes whose ``project_key`` is in the comma-separated
+          set OR is NULL (global) OR has ``base=True``.
+        - ``?base_only=1``: no-workspace UI mode. Returns ONLY nodes
+          with ``base=True``. The Nebula page lands here when no
+          workspace is active.
+        - ``?node=<id>&hops=<n>``: ego-network of ``<id>`` out to
+          ``n`` hops (default 2). Combine with any of the above
+          scope params to constrain the expansion.
 
         Each node carries ``type`` / ``project`` / ``source_path``
         / ``description`` so the file-tree panel can group and the
@@ -630,6 +639,30 @@ def mount_ui(
         Each edge carries ``relation`` + ``weight`` + ``confidence``
         so the canvas can encode uncertainty in line style.
         """
+        # Parse the new project_keys CSV up front so the seed-by-node
+        # and global-scan branches share the same filter set.
+        keys_set: set[str] | None = None
+        if project_keys:
+            keys_set = {k.strip() for k in project_keys.split(",") if k.strip()}
+
+        # v2.6.0 polish: tighten scope semantics for workspaces. Two
+        # passes:
+        #   pass 1 (strict)   -- accept nodes whose project_key is IN
+        #                        the scope set OR who are BASE-flagged.
+        #                        NULL-project nodes do NOT pass in pass 1.
+        #   pass 2 (boundary) -- accept NULL-project nodes that share
+        #                        an edge with any pass-1 node. This is
+        #                        the "cross-cutting NULL nodes they
+        #                        connect to" contract from the docstring.
+        def _passes_scope_strict(node_obj: Node) -> bool:
+            if base_only:
+                return bool(node_obj.base)
+            if keys_set is not None:
+                return node_obj.project_key in keys_set or node_obj.base
+            if project:
+                return node_obj.project_key == project or node_obj.base
+            return True
+
         # Step 1: collect the seed node set.
         if node:
             seed = s.get_node(node)
@@ -650,12 +683,54 @@ def mount_ui(
                             next_frontier.add(nid)
                 frontier = next_frontier
             nodes = list(s.get_nodes_by_ids(list(seed_ids)).values())
+            # Scope filter only when a scope is set. Ego-network deep-links
+            # without scope return the entire BFS (matches pre-v2.6 contract).
+            if base_only or keys_set is not None or project:
+                in_scope = [n for n in nodes if _passes_scope_strict(n)]
+                in_scope_ids = {n.id for n in in_scope}
+                # pass 2: NULL-project boundary nodes EDGE-connected to in-scope.
+                boundary: list[Node] = []
+                if not base_only:
+                    null_candidates = [
+                        n for n in nodes
+                        if n.project_key is None and not n.base and n.id not in in_scope_ids
+                    ]
+                    if null_candidates and in_scope_ids:
+                        edge_set = s.get_edges_for_nodes(
+                            [n.id for n in null_candidates] + list(in_scope_ids)
+                        )
+                        connected: set[str] = set()
+                        for e in edge_set:
+                            if e.src_id in in_scope_ids and e.dst_id not in in_scope_ids:
+                                connected.add(e.dst_id)
+                            elif e.dst_id in in_scope_ids and e.src_id not in in_scope_ids:
+                                connected.add(e.src_id)
+                        boundary = [n for n in null_candidates if n.id in connected]
+                nodes = in_scope + boundary
         else:
             nodes = s.list_nodes(limit=2000)
-            if project:
-                nodes = [
-                    n for n in nodes if n.project_key == project or n.project_key is None or n.base
-                ]
+            if base_only or keys_set is not None or project:
+                in_scope = [n for n in nodes if _passes_scope_strict(n)]
+                in_scope_ids = {n.id for n in in_scope}
+                # pass 2: NULL-project boundary nodes EDGE-connected to in-scope.
+                boundary = []
+                if not base_only:
+                    null_candidates = [
+                        n for n in nodes
+                        if n.project_key is None and not n.base and n.id not in in_scope_ids
+                    ]
+                    if null_candidates and in_scope_ids:
+                        edge_set = s.get_edges_for_nodes(
+                            [n.id for n in null_candidates] + list(in_scope_ids)
+                        )
+                        connected = set()
+                        for e in edge_set:
+                            if e.src_id in in_scope_ids and e.dst_id not in in_scope_ids:
+                                connected.add(e.dst_id)
+                            elif e.dst_id in in_scope_ids and e.src_id not in in_scope_ids:
+                                connected.add(e.src_id)
+                        boundary = [n for n in null_candidates if n.id in connected]
+                nodes = in_scope + boundary
 
         elements: list[dict[str, Any]] = []
         node_ids: set[str] = set()

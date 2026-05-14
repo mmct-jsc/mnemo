@@ -153,9 +153,26 @@
         scroll to zoom · drag to pan · click a node
       </div>
 
-      <div class="nebula-context" x-show="contextProject" x-cloak>
-        scope: <strong x-text="contextProject"></strong>
-        <a href="/graph">clear</a>
+      <div class="nebula-context"
+           x-show="contextProject || contextWorkspaceName || contextBaseOnly"
+           x-cloak>
+        <template x-if="contextProject">
+          <span>
+            scope: <strong x-text="contextProject"></strong>
+            <a href="/graph">clear</a>
+          </span>
+        </template>
+        <template x-if="!contextProject && contextWorkspaceName">
+          <span>
+            workspace: <strong x-text="contextWorkspaceName"></strong>
+            <template x-if="contextProjectKeys && contextProjectKeys.length">
+              <span class="hint" x-text="'(' + contextProjectKeys.length + ' project' + (contextProjectKeys.length === 1 ? '' : 's') + ')'"></span>
+            </template>
+          </span>
+        </template>
+        <template x-if="!contextProject && !contextWorkspaceName && contextBaseOnly">
+          <span>scope: <strong>BASE-only</strong></span>
+        </template>
       </div>
     </div>
 
@@ -356,8 +373,12 @@ function nebula() {
     minConfidence: 0,
     hops: 2,
     dragging: null,
-    contextProject: null,
+    contextProject: null,        // legacy ?project=<key> deep-link single key
+    contextProjectKeys: null,    // v2.6.0: array from active workspace.project_keys
+    contextBaseOnly: false,      // v2.6.0: true when no workspace is active
+    contextWorkspaceName: null,  // v2.6.0: shown in the scope chip
     contextNodeId: null,
+    _eventSource: null,
     stats: '',
     rawElements: [],
     currentLayout: 'fcose',
@@ -518,6 +539,15 @@ function nebula() {
       this.contextNodeId = params.get('node') || null;
       if (params.get('hops')) this.hops = parseInt(params.get('hops'), 10) || 2;
 
+      // v2.6.0 polish: when no explicit ?project= deep-link is set,
+      // mirror the active workspace's scope on /ui/graph-data. If no
+      // workspace is active, drop into BASE-only mode (matches the
+      // rest of the UI). The workspace pointer wins over an explicit
+      // deep-link only when the deep-link is absent.
+      if (!this.contextProject) {
+        await this._loadWorkspaceScope();
+      }
+
       // Restore panel widths from localStorage.
       const left = localStorage.getItem('nebula.left');
       const right = localStorage.getItem('nebula.right');
@@ -536,6 +566,60 @@ function nebula() {
         cytoscape.use(cytoscapeFcose);
       }
       await this.reload();
+
+      // v2.6.0 polish: keep the canvas in sync across tabs. When the
+      // user switches workspaces from any open browser tab, /v1/events
+      // pushes a workspace_* frame and we re-fetch the scope + the
+      // graph data. The deep-link ?project= path skips this -- we
+      // assume the user wants the explicit scope they URL'd in.
+      if (!this.contextProject) {
+        this._subscribeWorkspaceEvents();
+      }
+    },
+
+    async _loadWorkspaceScope() {
+      try {
+        const r = await fetch('/v1/workspaces/active');
+        if (!r.ok) return;
+        const data = await r.json();
+        const ws = data && data.active;
+        if (ws && Array.isArray(ws.project_keys) && ws.project_keys.length > 0) {
+          this.contextProjectKeys = [...ws.project_keys];
+          this.contextBaseOnly = false;
+          this.contextWorkspaceName = ws.name;
+        } else if (ws) {
+          // Empty-project workspace -- treat as BASE-only.
+          this.contextProjectKeys = null;
+          this.contextBaseOnly = true;
+          this.contextWorkspaceName = ws.name;
+        } else {
+          // No active workspace at all -- BASE-only mode.
+          this.contextProjectKeys = null;
+          this.contextBaseOnly = true;
+          this.contextWorkspaceName = null;
+        }
+      } catch (_) { /* daemon offline -- keep defaults */ }
+    },
+
+    _subscribeWorkspaceEvents() {
+      try {
+        const es = new EventSource('/v1/events');
+        this._eventSource = es;
+        const refresh = async () => {
+          await this._loadWorkspaceScope();
+          await this.reload();
+        };
+        es.addEventListener('workspace_activated', refresh);
+        es.addEventListener('workspace_cleared', refresh);
+        es.addEventListener('workspace_deleted', refresh);
+      } catch (_) { /* EventSource unavailable -- next page load picks up the new scope */ }
+    },
+
+    destroy() {
+      if (this._eventSource) {
+        try { this._eventSource.close(); } catch (_) { /* ignore */ }
+        this._eventSource = null;
+      }
     },
 
     // v2.2.4: persistence boundary. ``_loadPersistedState`` runs
@@ -580,7 +664,17 @@ function nebula() {
 
     async reload() {
       const qs = new URLSearchParams();
-      if (this.contextProject) qs.set('project', this.contextProject);
+      // Scope precedence:
+      //   1. explicit ?project= deep-link (legacy /code -> Nebula path)
+      //   2. workspace project_keys CSV
+      //   3. base_only=1 when no workspace is active
+      if (this.contextProject) {
+        qs.set('project', this.contextProject);
+      } else if (this.contextProjectKeys && this.contextProjectKeys.length > 0) {
+        qs.set('project_keys', this.contextProjectKeys.join(','));
+      } else if (this.contextBaseOnly) {
+        qs.set('base_only', '1');
+      }
       if (this.contextNodeId) {
         qs.set('node', this.contextNodeId);
         qs.set('hops', String(this.hops));
