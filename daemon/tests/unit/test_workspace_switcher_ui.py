@@ -62,9 +62,12 @@ def test_base_html_renders_active_workspace_label(base_html: str) -> None:
 def test_base_html_includes_new_workspace_form(base_html: str) -> None:
     """The dropdown must surface a 'New workspace' affordance + form."""
     assert "New workspace" in base_html
-    # Form fields the factory binds to.
+    # Form fields the factory binds to (v2.6.0 phase 10.2: chips replaced
+    # the comma-separated input; the name field stays + a chip array
+    # holds the project_keys).
     assert "newName" in base_html
-    assert "newProjectKeysInput" in base_html or "newProjectKeys" in base_html
+    assert "ws-chips" in base_html
+    assert "chips" in base_html
 
 
 def test_base_html_links_to_workspaces_management_page(base_html: str) -> None:
