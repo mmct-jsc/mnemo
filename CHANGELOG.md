@@ -2,6 +2,94 @@
 
 All notable changes to mnemo are documented here.
 
+## [2.2.4] - 2026-05-14
+
+**DOM-overlay pulse (architectural rewrite) + persisted filter /
+layout state.** Two changes -- one rebuilds the heart-beat pulse
+on a guaranteed-to-render foundation; the other makes user
+choices survive a reload.
+
+### Changed (pulse architecture)
+
+After three failed cy.animate-based fix attempts for "no pulse on
+canvas tap", the pulse moves off cytoscape's internal animation
+queue entirely. A new absolutely-positioned ``<div
+class="nebula-pulse-anchor">`` lives ABOVE the canvas; its
+``left`` / ``top`` / ``width`` / ``height`` track the selected
+node's ``renderedPosition()`` + ``renderedOuterWidth()`` via
+``cy.on('pan zoom render')`` and ``cy.on('position', 'node')``.
+The inner ``.nebula-pulse-ring`` is animated entirely by CSS
+``@keyframes`` -- a beat + a ripple. Two consequences:
+
+1. **The pulse renders the same in every browser regardless of
+   cytoscape's animation state.** CSS @keyframes are guaranteed
+   by the W3C spec to run; nothing in cytoscape's internal
+   queue can starve them. Both canvas-tap and file-tree-click
+   produce identical visuals because both paths feed the SAME
+   ``_updatePulseAnchor`` call.
+2. **Scalable.** When the future chat feature wants to highlight
+   N nodes at once (top hits for a prompt), the same anchor
+   pattern instantiates N rings -- no per-node cytoscape
+   animation queue management.
+
+Old ``_startPulse`` (cy.animate-based) and ``_stopPulse`` (style
+cleanup) are simplified: ``_startPulse`` now just sets
+``this._pulseNode`` and triggers an anchor update. ``_stopPulse``
+clears the anchor. The cytoscape underlay still pulses gently
+via the existing ``.hl`` class transitions, but the DRAMATIC
+beat (thick cyan ring + halo + double-beat ripple) lives in the
+DOM overlay.
+
+### Added (state persistence)
+
+Five fields now persist to localStorage under the ``nebula.``
+namespace; the user's last session is restored on every page
+load:
+
+  - ``nebula.layout``         layout choice (force/rings/tree/grid)
+  - ``nebula.typeFilters``    JSON ``{ [type]: bool }`` per chip
+  - ``nebula.minConfidence``  edge-confidence slider value
+  - ``nebula.edgesVisible``   toggle from v2.2.3
+  - ``nebula.labelsVisible``  toggle from v2.2.3
+
+``_loadPersistedState()`` runs once during ``init()`` (before
+``reload()``). ``_persistState()`` runs on every mutation site
+(typeFilters chip click, min-conf slider, layout button,
+toggleEdges / toggleLabels). Panel widths (``nebula.left`` /
+``nebula.right``) already persisted via the resize gutter
+handler; new fields slot into the same pattern.
+
+### Implementation notes
+
+- ``_persistedFilters`` is a transient field set by
+  ``_loadPersistedState`` -- consumed by ``buildTypeFilters``
+  the first time it runs (cytoscape isn't booted yet when load
+  happens). Anything not in the persisted set falls back to
+  default-on, so types added in future schema bumps don't get
+  silently hidden.
+- The pulse anchor uses ``transform: translate(-50%, -50%)`` so
+  ``left`` / ``top`` can be the node CENTER -- no center-offset
+  math in JS.
+- ``color-mix(in srgb, var(--accent) X%, transparent)`` powers
+  the bloom + ripple shadows. Chrome 111+, Safari 16.4+,
+  Firefox 113+ -- all baseline browsers we already require.
+- ``prefers-reduced-motion: reduce`` collapses the pulse beat
+  and ripple animations to ``none`` -- ring still appears (so
+  the user knows the node is selected) but doesn't pulse.
+
+### Tests
+
+545 unit tests pass. No new tests -- the pulse architecture is
+DOM + CSS so there's nothing testable without a headless
+browser (out of scope for this project's no-Node-toolchain
+constraint). Live smoke verified in preview:
+
+  - anchor positioned at node center, 38x38px scaled w/ node
+  - ``ring_animation: "nebula-pulse-beat"`` active
+  - ``ring_border_color: rgb(126, 231, 224)`` = palette accent
+  - pan +100x -> anchor moves 100px; zoom 2.0x -> width 38 -> 132
+  - localStorage writes confirmed for all 5 fields on mutation
+
 ## [2.2.3] - 2026-05-14
 
 **Nebula polish: visibility toggles + drag-stable edges + clean

@@ -4108,6 +4108,74 @@ dl.meta dd { margin: 0; color: var(--fg); }
 
 /* --- Canvas overlays --- */
 
+/* v2.2.4 DOM-overlay pulse ring. The anchor is positioned by
+   ``_updatePulseAnchor`` JS at the selected node's rendered
+   center; the inner ring is animated purely via CSS @keyframes.
+   This replaces the v2.2.3 cy.animate-based pulse which depended
+   on cytoscape's internal animation queue + transition-property
+   compatibility -- 3 prior fix attempts couldn't make it
+   reliable across click paths (canvas tap vs file-tree click).
+   CSS @keyframes are guaranteed by the spec to run in every
+   browser regardless of cytoscape's animation state. */
+.nebula-pulse-anchor {
+  position: absolute;
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+  z-index: 6;
+  will-change: transform;
+}
+.nebula-pulse-ring {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  border: 3px solid var(--accent);
+  box-shadow:
+    0 0 14px 3px color-mix(in srgb, var(--accent) 55%, transparent),
+    inset 0 0 14px color-mix(in srgb, var(--accent) 35%, transparent);
+  animation: nebula-pulse-beat 1.05s ease-in-out infinite;
+  /* The :before adds a SECOND ring slightly offset so the pulse
+     reads as a double-beat (heart). The outer ring scales bigger
+     but fades faster -- a "ripple" effect. */
+}
+.nebula-pulse-ring::before {
+  content: "";
+  position: absolute;
+  inset: -6px;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--accent) 70%, transparent);
+  animation: nebula-pulse-ripple 1.05s ease-out infinite;
+}
+@keyframes nebula-pulse-beat {
+  0%, 100% {
+    transform: scale(0.92);
+    opacity: 0.72;
+    box-shadow:
+      0 0 10px 2px color-mix(in srgb, var(--accent) 50%, transparent),
+      inset 0 0 10px color-mix(in srgb, var(--accent) 25%, transparent);
+  }
+  50% {
+    transform: scale(1.18);
+    opacity: 1.0;
+    box-shadow:
+      0 0 28px 8px color-mix(in srgb, var(--accent) 75%, transparent),
+      inset 0 0 18px color-mix(in srgb, var(--accent) 55%, transparent);
+  }
+}
+@keyframes nebula-pulse-ripple {
+  0% {
+    transform: scale(1.0);
+    opacity: 0.6;
+  }
+  100% {
+    transform: scale(1.35);
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .nebula-pulse-ring,
+  .nebula-pulse-ring::before { animation: none; }
+}
+
 .nebula-hint {
   position: absolute;
   top: 0.7rem;

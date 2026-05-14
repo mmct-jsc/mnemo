@@ -122,6 +122,21 @@
     <div class="nebula-canvas">
       <div id="cy-nebula"></div>
 
+      <!-- v2.2.4: DOM-overlay heart-beat ring. Replaces the
+           cy.animate-based pulse that depended on cytoscape's
+           internal animation queue (which was unreliable across
+           click paths). The anchor is positioned absolutely above
+           the canvas; its left/top/width/height track the selected
+           node's RENDERED position + size via cy.on('pan zoom')
+           and node.on('position'). The inner ring is a pure CSS
+           @keyframes animation -- guaranteed to render regardless
+           of cytoscape's animation state. -->
+      <div class="nebula-pulse-anchor" x-show="selected" x-cloak
+           x-ref="pulseAnchor"
+           :style="pulseAnchorStyle">
+        <div class="nebula-pulse-ring"></div>
+      </div>
+
       <div class="nebula-hint">
         scroll to zoom · drag to pan · click a node
       </div>
@@ -197,7 +212,7 @@
         <template x-for="t in nodeTypes" :key="t">
           <span class="nebula-chip"
                 :class="{ on: typeFilters[t], off: !typeFilters[t] }"
-                @click="typeFilters[t] = !typeFilters[t]; applyFilters()">
+                @click="typeFilters[t] = !typeFilters[t]; applyFilters(); _persistState()">
             <span class="swatch" :class="'swatch-' + t"
                   :style="'--type-color: ' + typeColor(t)"></span>
             <span x-text="t.replace('memory_','').replace('code_','')"></span>
@@ -209,7 +224,7 @@
         <span class="slider-wrap">
           <input type="range" min="0" max="100" step="1"
                  list="conf-ticks"
-                 x-model.number="minConfidence" @input.debounce.80ms="applyFilters()">
+                 x-model.number="minConfidence" @input.debounce.80ms="applyFilters(); _persistState()">
           <datalist id="conf-ticks">
             <option value="0"></option>
             <option value="50"></option>
@@ -229,7 +244,7 @@
         </span>
         <span class="slider-value" x-text="(minConfidence / 100).toFixed(2)"></span>
         <button type="button" class="slider-reset"
-                @click="minConfidence = 0; applyFilters()"
+                @click="minConfidence = 0; applyFilters(); _persistState()"
                 x-show="minConfidence > 0" x-cloak
                 title="reset to 0">×</button>
       </label>
@@ -333,6 +348,12 @@ function nebula() {
     // cytoscape selector inside a cy.batch so the redraw is one frame.
     edgesVisible: true,
     labelsVisible: true,
+    // v2.2.4: inline style for the DOM-overlay pulse anchor.
+    // ``_updatePulseAnchor`` recomputes this whenever the selected
+    // node's rendered position or size changes (pan, zoom, layout,
+    // initial select). When ``selected`` is null the anchor is
+    // ``x-show``-hidden anyway, so we can leave the style stale.
+    pulseAnchorStyle: '',
 
     // Single source of truth for ANY in-DOM type color (filter chips,
     // neighbor dots, detail-panel ntype pill). Reads from the same
@@ -353,6 +374,7 @@ function nebula() {
         if (this.edgesVisible) this.cy.edges().removeClass('edges-off');
         else this.cy.edges().addClass('edges-off');
       });
+      this._persistState();
     },
     toggleLabels() {
       this.labelsVisible = !this.labelsVisible;
@@ -361,6 +383,7 @@ function nebula() {
         if (this.labelsVisible) this.cy.nodes().removeClass('labels-off');
         else this.cy.nodes().addClass('labels-off');
       });
+      this._persistState();
     },
 
     // v2.2 phase 4: body streaming. Called from the x-effect on
@@ -475,10 +498,57 @@ function nebula() {
       if (left && shell)  shell.style.setProperty('--nebula-left', left);
       if (right && shell) shell.style.setProperty('--nebula-right', right);
 
+      // v2.2.4: restore filter / layout / toggle state from
+      // localStorage so user choices survive a reload. We do this
+      // BEFORE reload() so the cytoscape style is correct from
+      // first paint -- particularly important for edgesVisible /
+      // labelsVisible (no flash of edges before they're hidden).
+      this._loadPersistedState();
+
       if (window.cytoscape && window.cytoscapeFcose) {
         cytoscape.use(cytoscapeFcose);
       }
       await this.reload();
+    },
+
+    // v2.2.4: persistence boundary. ``_loadPersistedState`` runs
+    // ONCE at init() and pulls every "user choice" knob out of
+    // localStorage. ``_persistState`` runs whenever any of those
+    // knobs change and writes them back. Both centralize the
+    // set of persisted keys so adding a new one is a single-place
+    // edit. Keys live under the ``nebula.`` namespace.
+    _loadPersistedState() {
+      try {
+        const layout = localStorage.getItem('nebula.layout');
+        if (layout && ['fcose', 'concentric', 'breadthfirst', 'grid'].includes(layout)) {
+          this.currentLayout = layout;
+        }
+        const minConf = parseFloat(localStorage.getItem('nebula.minConfidence'));
+        if (!Number.isNaN(minConf)) this.minConfidence = Math.max(0, Math.min(1, minConf));
+        const edges = localStorage.getItem('nebula.edgesVisible');
+        if (edges === 'true' || edges === 'false') this.edgesVisible = edges === 'true';
+        const labels = localStorage.getItem('nebula.labelsVisible');
+        if (labels === 'true' || labels === 'false') this.labelsVisible = labels === 'true';
+        const filtersRaw = localStorage.getItem('nebula.typeFilters');
+        if (filtersRaw) {
+          const parsed = JSON.parse(filtersRaw);
+          if (parsed && typeof parsed === 'object') {
+            // Stored as { [type]: bool }. We can't merge with nodeTypes
+            // yet (cytoscape isn't booted) -- buildTypeFilters reads
+            // this._persistedFilters once it knows the node types.
+            this._persistedFilters = parsed;
+          }
+        }
+      } catch (_) { /* localStorage disabled / corrupted -- silently fall back to defaults */ }
+    },
+    _persistState() {
+      try {
+        localStorage.setItem('nebula.layout', this.currentLayout);
+        localStorage.setItem('nebula.minConfidence', String(this.minConfidence));
+        localStorage.setItem('nebula.edgesVisible', String(this.edgesVisible));
+        localStorage.setItem('nebula.labelsVisible', String(this.labelsVisible));
+        localStorage.setItem('nebula.typeFilters', JSON.stringify(this.typeFilters));
+      } catch (_) { /* quota / disabled -- fail silently */ }
     },
 
     async reload() {
@@ -494,6 +564,20 @@ function nebula() {
       this.renderCanvas();
       this.buildTree();
       this.buildTypeFilters();
+
+      // v2.2.4: apply the persisted edge / label visibility so the
+      // canvas matches the user's last session from first paint.
+      // Has to land AFTER renderCanvas because cy.batch needs cy.
+      if (this.cy) {
+        this.cy.batch(() => {
+          if (!this.edgesVisible) this.cy.edges().addClass('edges-off');
+          if (!this.labelsVisible) this.cy.nodes().addClass('labels-off');
+        });
+      }
+      // Restored filter chips also need to feed into the actual
+      // node hide/show -- applyFilters handles it but is otherwise
+      // only triggered by user interaction.
+      this.applyFilters();
 
       // If we came in with ?node=, pre-select it. The camera pan +
       // zoom-up live inside selectFromCanvas now (v2.2.2), so this
@@ -736,6 +820,24 @@ function nebula() {
         document.body.style.cursor = '';
       });
 
+      // v2.2.4: keep the pulse-ring overlay aligned with the
+      // selected node through every viewport change.
+      //   - 'pan zoom' fires while the user drags / scroll-zooms
+      //   - 'position' fires when a node's position changes
+      //     (e.g. fcose layout is still settling, or user drags
+      //     the selected node itself)
+      //   - 'render' is the catch-all that fires on every redraw,
+      //     useful for catching cytoscape-internal animations the
+      //     other events miss (camera-pan from selectFromCanvas).
+      this.cy.on('pan zoom render', () => {
+        if (this._pulseNode) this._updatePulseAnchor();
+      });
+      this.cy.on('position', 'node', (evt) => {
+        if (this._pulseNode && evt.target.id() === this._pulseNode.id()) {
+          this._updatePulseAnchor();
+        }
+      });
+
       // Detect edges by ``source`` presence -- Cytoscape auto-assigns
       // ``id`` to edges after init, so filtering by ``id !== undefined``
       // double-counts.
@@ -920,9 +1022,15 @@ function nebula() {
         if (e.data.source === undefined && e.data.type) types.add(e.data.type);
       }
       this.nodeTypes = Array.from(types).sort();
-      // Default: all on.
+      // v2.2.4: restore the user's per-type on/off preferences if
+      // they were persisted in a previous session. Anything NOT in
+      // the persisted set falls back to default "on" (so new types
+      // added later are visible by default).
+      const restored = this._persistedFilters || {};
       for (const t of this.nodeTypes) {
-        if (this.typeFilters[t] === undefined) this.typeFilters[t] = true;
+        if (this.typeFilters[t] === undefined) {
+          this.typeFilters[t] = restored[t] === undefined ? true : !!restored[t];
+        }
       }
     },
 
@@ -1024,82 +1132,59 @@ function nebula() {
       this._startPulse(node);
     },
 
-    // v2.2.3: pulse keeps escalating amplitude AND adds a
-    // ``queue: false`` hint so it starts IMMEDIATELY instead of
-    // queueing behind the just-applied .hl class transitions
-    // (which were eating the first 220ms of the pulse cycle).
+    // v2.2.4: DOM-overlay pulse. The previous cy.animate-based
+    // pulse went through cytoscape's internal animation queue and
+    // never reliably surfaced on direct canvas taps (3 fix
+    // attempts later). The new pulse is a CSS @keyframes
+    // animation on a div positioned above the canvas at the
+    // selected node's rendered center -- decoupled from
+    // cytoscape's animation state entirely.
     //
-    // Pre-v2.2.3 amplitudes were not visible to users who didn't
-    // also have the camera pan kicking in -- their report was
-    // "no pulse on canvas tap". The fix combines:
-    //   peak underlay-padding 14 -> 36 (+22) -- a wide halo bloom
-    //   peak underlay-opacity 0.6 -> 1.0    -- fully opaque ring
-    //   peak border-width      2 -> 5      -- thick bright stroke
-    //   period 500ms each leg = 1s/cycle    -- clear, urgent beat
-    //   queue: false                        -- runs from frame 0
-    //
-    // The border-width pulse is the headline change: ``border-width``
-    // IS in the base ``transition-property`` (v2.1.2 kept it for the
-    // .hl bloom feel), so it animates reliably via cy.animate.
+    // ``_startPulse`` now just remembers which node is "active"
+    // and triggers a position update. The CSS keyframe in
+    // app.css does the rest. ``_updatePulseAnchor`` is wired to
+    // cy.on('pan zoom render') and the node's position event so
+    // the overlay tracks the node through any viewport change.
     _startPulse(node) {
       this._pulseNode = node;
-      const peak = { style: {
-        'underlay-padding': 36,
-        'underlay-opacity': 1.0,
-        'border-width': 5,
-      }};
-      const rest = { style: {
-        'underlay-padding': 14,
-        'underlay-opacity': 0.6,
-        'border-width': 2,
-      }};
-      const opts = {
-        duration: 500,
-        easing: 'ease-in-out',
-        queue: false,
-      };
-      const cycle = () => {
-        if (
-          !this._pulseNode ||
-          this._pulseNode !== node ||
-          !this.selected ||
-          this.selected.id !== node.id()
-        ) {
-          return;
-        }
-        node.animate(peak, {
-          ...opts,
-          complete: () => {
-            if (this._pulseNode !== node) return;
-            node.animate(rest, { ...opts, complete: cycle });
-          },
-        });
-      };
-      cycle();
+      this._updatePulseAnchor();
     },
 
     _stopPulse() {
-      // Just unsetting the guard flag wasn't enough: the in-flight
-      // ``node.animate({...})`` tween kept running for up to 900ms and
-      // its ``complete`` callback chained the next half of the cycle
-      // before our flag check fired. The node would keep mutating
-      // underlay-padding + underlay-opacity well after deselect.
-      // ``node.stop(true, false)`` cancels the queued animations, and
-      // ``removeStyle`` clears the inline styles the pulse set so the
-      // base selector takes over again.
-      if (this._pulseNode) {
-        try {
-          this._pulseNode.stop(true, false);
-          // v2.2.3: also clear the border-width bypass added by
-          // the stronger pulse animation. Without this the
-          // de-selected node keeps a 5px border until the next
-          // .hl class change overwrites it.
-          this._pulseNode.removeStyle(
-            'underlay-padding underlay-opacity border-width'
-          );
-        } catch (_) { /* node may have been removed; ignore */ }
-      }
+      // No cy.animate to cancel; no inline styles to clean up.
+      // Just clear the anchor (CSS keyframes stop because the
+      // anchor goes x-show:false the moment selected becomes null).
       this._pulseNode = null;
+      this.pulseAnchorStyle = '';
+    },
+
+    // Recomputes the .nebula-pulse-anchor position + size so the
+    // CSS-animated ring tracks the selected node. Cytoscape's
+    // ``renderedPosition()`` returns canvas-space coordinates
+    // relative to the cy container's top-left, which is exactly
+    // what our absolutely-positioned anchor (inside the same
+    // ``.nebula-canvas`` parent) wants for ``left`` / ``top``.
+    // ``renderedOuterWidth()`` gives the on-screen pixel diameter
+    // including border + underlay; we add padding so the ring sits
+    // OUTSIDE the node halo.
+    _updatePulseAnchor() {
+      if (!this.cy || !this._pulseNode || !this.selected) {
+        this.pulseAnchorStyle = '';
+        return;
+      }
+      try {
+        const node = this._pulseNode;
+        const pos = node.renderedPosition();
+        const size = Math.max(node.renderedOuterWidth(), node.renderedOuterHeight());
+        const ringSize = size + 22; // 11px halo around node
+        this.pulseAnchorStyle =
+          'left: ' + pos.x + 'px;' +
+          'top: ' + pos.y + 'px;' +
+          'width: ' + ringSize + 'px;' +
+          'height: ' + ringSize + 'px;';
+      } catch (_) {
+        this.pulseAnchorStyle = '';
+      }
     },
 
     deselect() {
@@ -1201,6 +1286,7 @@ function nebula() {
     relayout(name) {
       if (!this.cy) return;
       this.currentLayout = name;
+      this._persistState();
       // Operate on visible elements only -- a layout run on hidden
       // nodes wastes work and produces a sparse result when most of
       // the graph is filtered out.
