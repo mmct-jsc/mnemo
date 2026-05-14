@@ -123,6 +123,12 @@ needs, ``prefers-reduced-motion`` honored on the modal backdrop.
   project_key (with explicit body / legacy field / persisted-active
   fallbacks for back-compat). The ``/v1/projects/active`` endpoints
   stay alive for CLI consumers.
+- **Workspace switcher right-aligned.** The pill moved from beside
+  the brand to after the nav links so the "current scope"
+  affordance lands in the same slot users already train their eyes
+  on (where the legacy active-project pill used to live). Dropdown
+  flipped to ``right: 0`` anchoring so it stays inside the viewport
+  on narrow windows.
 - **Workspace add UX** in both the switcher dropdown and the
   ``/workspaces`` page replaces the comma-separated text field with
   a chip-based picker. The single input auto-completes against
@@ -131,6 +137,21 @@ needs, ``prefers-reduced-motion`` honored on the modal backdrop.
   project_keys with node counts). Each pick lands as a removable
   chip; Backspace on empty input pops the last chip; Enter on a
   bare path round-trips through resolve.
+- **Audit page hit rows** now show score -> name -> type badge ->
+  description -> truncated ID instead of just the first 12 chars
+  of the bare node ID. Nodes removed by a reindex resolve to a
+  strike-through "[removed]" badge so the row still reads.
+- **Lexical scorer reads the body.** ``_lexical_score`` previously
+  walked only ``name + description``; a long handover whose BODY
+  contained every distinctive query term lost to a popular short
+  doc with zero keyword overlap because the graph-edge boost
+  dominated the small gap. The haystack now includes the first
+  32 KB of the body. Live verification: a query for the v2.6
+  handover terms now ranks the v2.6 handover docs first instead
+  of a tangential ``feedback-alpine-double-init`` hit.
+- **Workspace switcher: clear capWarning** when the active workspace
+  disappears (cleared, deleted, FK-SET-NULL'd). The "!" soft-cap
+  indicator no longer lies about a workspace that no longer exists.
 
 ### Test coverage
 
