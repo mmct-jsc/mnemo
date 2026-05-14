@@ -4176,6 +4176,40 @@ dl.meta dd { margin: 0; color: var(--fg); }
   .nebula-pulse-ring::before { animation: none; }
 }
 
+/* --- Layout-change veil (v2.2.6) ---------------------------------
+   When the user picks a different layout (rings / tree / grid /
+   force) we snap node positions synchronously and animate only
+   the camera. The veil hides the snap behind a translucent
+   overlay that CSS-fades in -> opaque, holds while the snap
+   happens, then fades back to transparent.
+
+   The PRIOR implementation cross-faded by calling
+   ``cy.elements().animate({ style: { opacity: 0.3 -> 1.0 } })``
+   which writes an INLINE BYPASS on every node. The bypass at
+   opacity:1.0 then overrode the .dim class's stylesheet
+   ``opacity: 0.12`` -- so changing layout while a node was
+   selected silently killed the blur-others focus effect. The
+   user reported "the focus on related nodes disappears and
+   also the blur-others effect" (2026-05-14). Pipeline 18:
+   move the visual to a DOM overlay so cytoscape's style cascade
+   keeps owning .hl / .dim opacity. ----------------------------- */
+.nebula-layout-veil {
+  position: absolute;
+  inset: 0;
+  background: var(--bg);
+  opacity: 0;
+  pointer-events: none;
+  z-index: 5;  /* above #cy-nebula, below .nebula-pulse-anchor (z:6) */
+  transition: opacity 140ms ease-in-out;
+}
+.nebula-layout-veil.on {
+  opacity: 0.55;
+}
+@media (prefers-reduced-motion: reduce) {
+  .nebula-layout-veil { transition: none; }
+  .nebula-layout-veil.on { opacity: 0; }
+}
+
 .nebula-hint {
   position: absolute;
   top: 0.7rem;
