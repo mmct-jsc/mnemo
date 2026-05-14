@@ -2,6 +2,63 @@
 
 All notable changes to mnemo are documented here.
 
+## [2.4.0] - 2026-05-14
+
+**Phase 8: Django framework extractor.** The last backend framework
+extractor from v2.0's Tier 3 batch lands. ``code_route`` nodes now
+appear for Django URL configurations alongside FastAPI / Flask /
+Express / Next.js.
+
+### Added (Django extractor)
+
+New module ``daemon/mnemo/extractors/django.py`` detects:
+
+- ``urlpatterns = [...]`` module-level assignments
+- ``path("url/", view, name="...")`` calls inside that list
+- ``re_path(r"^pattern$", view)`` regex variants
+- Class-based views: ``ClassName.as_view()`` -- the receiver
+  identifier is recorded as the handler name
+
+One ``code_route`` :class:`CodeUnit` is emitted per ``path()`` /
+``re_path()`` call. Method is recorded as ``*`` because Django views
+implement HTTP-method dispatch themselves rather than declaring it
+at the URL layer (unlike Flask / FastAPI).
+
+Anchoring on ``urlpatterns = [...]`` membership prevents false
+positives from helper modules that happen to call ``path()`` for
+non-routing purposes.
+
+### Registered in dispatch
+
+``daemon/mnemo/extractors/__init__.py`` adds ``_django.extract`` to
+``FRAMEWORK_EXTRACTORS["python"]`` alongside ``_fastapi.extract``
+and ``_flask.extract``. A single Python tree can legally match any
+or all three (mixed frameworks are rare but the dispatch supports
+them).
+
+### Cross-file handler resolution
+
+Django views typically live in a different file than ``urls.py``,
+so the same-file handler index inside the extractor is best-effort.
+The route's ``description`` carries the human-readable view name
+(``Django URL <pattern> -> <view_name>``); cross-file
+``handler_source_path`` resolution happens at the post-pass layer
+that already wires ``routes_to`` for FastAPI / Flask routes.
+
+### Tests
+
+- ``daemon/tests/unit/test_extractors.py`` -- 7 new cases for
+  Django:
+  - ``path()`` in ``urlpatterns`` emits a route (method = ``*``)
+  - ``re_path()`` regex pattern preserved in ``route_path``
+  - Class-based view ``X.as_view()`` records the class name
+  - Multiple paths in one list produce N routes
+  - ``path()`` outside ``urlpatterns`` is ignored
+  - Non-Django Python files emit no routes (no false positives)
+  - ``_django.extract`` is registered in
+    ``FRAMEWORK_EXTRACTORS["python"]``
+- Total daemon suite: 685 passing (was 678; +7 new).
+
 ## [2.3.0] - 2026-05-14
 
 **Phase 9: git-log ingestion + decision-provenance edges.** The
