@@ -2,6 +2,75 @@
 
 All notable changes to mnemo are documented here.
 
+## [2.2.1] - 2026-05-14
+
+**Phase 4 of the v2.2 progressive-UX rollout: Nebula goes
+progressive.** The initial graph paint now waves in by descending
+node degree, the detail-panel body streams in line- or word-by-
+line, and the neighbors list staggered-reveals. All three reuse
+the phase 1 primitives -- no new shared API.
+
+### Added
+
+- **Chunked initial Nebula paint.** After fcose finishes laying
+  out the graph, every node is tagged with the new ``.preload-hidden``
+  cytoscape class. ``_renderCanvasChunked()`` then reveals nodes in
+  batches of ``CHUNK = 50`` at an 80ms cadence, sorted by descending
+  degree -- so the densest cluster of the graph paints first, then
+  the rest of the components fade in waves. Total reveal ~720ms for
+  a ~480-node graph. Each chunk briefly carries ``.fade-in`` for
+  260ms so the per-chunk reveal animation fires.
+- **Body streaming in the Nebula side panel.** When a node is
+  selected and its body fetch resolves, the body content reveals
+  via ``window.mnemoStreamText`` -- word-by-word for prose, line-
+  by-line for code (with a single Prism pass after the stream
+  completes). The orchestrator (``streamBodyToCode``) cancels any
+  in-flight stream before starting a new one so rapid neighbor
+  clicks don't race.
+- **Neighbors list staggered reveal.** The detail panel's "Connections"
+  list is now rendered via ``window.mnemoStaggeredReveal`` --
+  30ms per item, 180ms fade. Each ``<li>`` carries the ``.reveal-item``
+  class while it transitions. The orchestrator
+  (``renderNeighborsList``) cancels any in-flight reveal before
+  starting a new one.
+
+### CSS
+
+- New cytoscape selector ``node.preload-hidden`` (opacity 0,
+  underlay-opacity 0) scoped to this class only so it can't
+  re-introduce the v2.1.2 dim/un-dim opacity-transition fanout
+  lag we previously fixed.
+
+### Accessibility
+
+- The chunked reveal honors ``prefers-reduced-motion: reduce``:
+  when the user prefers reduced motion, ``_renderCanvasChunked``
+  is a no-op and every node is visible on first paint. The
+  staggered-reveal + text-stream primitives already short-circuit
+  to instant display under the same preference.
+
+### Tests
+
+- ``tests/unit/test_nebula_progressive.py`` (8 cases) -- locks the
+  surface that the chunked reveal + body streaming + neighbors
+  stagger live behind. Verifies ``_renderCanvasChunked`` exists,
+  sorts by degree DESC, applies the ``.fade-in`` class, references
+  a chunk-size constant; that ``mnemoStreamText`` and
+  ``mnemoStaggeredReveal`` are called in graph.html; and that the
+  camera-pan ``cy.animate({ center })`` path is preserved.
+- 545 unit tests pass (was 537; +8 phase 4). Ruff lint + format
+  clean.
+
+### Live smoke verified
+
+- Chunked reveal: 0 hidden → 50 fade-in → 400 fade-in → 0 hidden
+  over ~700ms (eval-instrumented).
+- Neighbors: 17 items with ``.reveal-item`` class applied;
+  ``--type-color`` stamps preserve palette-driven dot colors.
+- Body streaming: 95-char Python function body renders correctly
+  via ``streamBodyToCode`` with ``unit: 'line'``; Prism re-highlight
+  fires on done.
+
 ## [2.2.0] - 2026-05-14
 
 **Streaming reindex + unified progressive-UX foundation.** First
