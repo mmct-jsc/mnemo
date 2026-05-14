@@ -4059,3 +4059,91 @@ dl.meta dd { margin: 0; color: var(--fg); }
   pointer-events: none;
   overflow: hidden;
 }
+
+/* --- Progressive UX primitives (v2.2 phase 1) --------------------
+   Three reveal classes used by daemon/mnemo/ui/static/app.js:
+
+     .skeleton      paints a shimmering placeholder for any UI shape.
+                    Sub-variants below (-list-row / -code-line / etc.)
+                    tune the box geometry per kind.
+
+     .reveal-item   the base class for items appended via
+                    mnemoStaggeredReveal. Starts at opacity 0; when
+                    the JS toggles .reveal-in on the next frame, the
+                    CSS transition fades it in over 180ms.
+
+     .fade-in       the per-chunk fade-in class used by Nebula's
+                    chunked initial paint (phase 4). The class is
+                    added to each chunk at insert time and removed
+                    260ms later -- the transition runs only during
+                    reveal, never during dim/un-dim (which is what
+                    caused the deselect lag fixed in v2.1.2).
+
+   ``prefers-reduced-motion: reduce`` short-circuits all animation
+   below so the final state is visible instantly.
+   ------------------------------------------------------------- */
+
+/* Shimmer placeholder. The 1.3s sweep is gentle enough to avoid
+   "loading flashing seizure" territory while still reading as
+   "something is coming". */
+.skeleton {
+  position: relative;
+  display: block;
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.04) 0%,
+    rgba(255, 255, 255, 0.10) 50%,
+    rgba(255, 255, 255, 0.04) 100%
+  );
+  background-size: 200% 100%;
+  background-position: -100% 0;
+  border-radius: 4px;
+  animation: mnemo-shimmer 1.3s linear infinite;
+}
+@keyframes mnemo-shimmer {
+  to { background-position: 200% 0; }
+}
+
+.skeleton-block {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.5rem 0;
+}
+.skeleton-list-row        { height: 1.8em; }
+.skeleton-code-line       { height: 1.1em; }
+.skeleton-paragraph-line  { height: 1.0em; }
+.skeleton-graph           { min-height: 240px; border-radius: var(--radius); }
+
+/* Staggered reveal item. The JS appends each item with
+   .reveal-item (opacity 0), then on the next frame adds .reveal-in
+   to trigger the transition to opacity 1. */
+.reveal-item {
+  opacity: 0;
+  transform: translateY(2px);
+  transition: opacity 180ms ease-out, transform 180ms ease-out;
+}
+.reveal-item.reveal-in {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* Per-chunk Nebula fade-in. Applied to Cytoscape elements via
+   .addClass('fade-in'); only the CSS-side reveal transition runs.
+   Cytoscape's own opacity is controlled separately in graph.html. */
+.fade-in {
+  animation: mnemo-chunk-fade-in 220ms ease-out 1;
+}
+@keyframes mnemo-chunk-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* Accessibility: honor prefers-reduced-motion. Skeletons stop
+   shimmering; reveals snap; chunk fades end immediately. */
+@media (prefers-reduced-motion: reduce) {
+  .skeleton                    { animation: none; }
+  .reveal-item,
+  .reveal-item.reveal-in       { opacity: 1; transform: none; transition: none; }
+  .fade-in                     { animation: none; }
+}
