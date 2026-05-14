@@ -158,30 +158,28 @@
              x-text="selected.source_path"></p>
           <p class="ndesc" x-show="selected.description" x-cloak
              x-text="selected.description"></p>
-          <!-- Code body with Prism syntax highlighting. The language
-               class is derived from the node's source_path suffix
-               at the time we populate the body. -->
+          <!-- v2.2 phase 4: body streams in word-by-word via
+               window.mnemoStreamText. Old x-text path is gone --
+               streamBodyToCode handles both fill + Prism highlight.
+               The x-effect re-runs whenever selected.body changes
+               (i.e. on every node click); streamBodyToCode cancels
+               any in-flight stream before starting the new one so
+               clicks during a reveal don't race. -->
           <pre x-show="selected.body" x-cloak
                class="line-numbers"
                :class="'language-' + bodyLanguage(selected.source_path)"><code
                x-ref="bodyCode"
                :class="'language-' + bodyLanguage(selected.source_path)"
-               x-text="selected.body"
-               x-effect="if (selected.body && window.Prism) requestAnimationFrame(() => Prism.highlightElement($refs.bodyCode))"></code></pre>
+               x-effect="streamBodyToCode($refs.bodyCode, selected.body, selected.source_path)"></code></pre>
 
           <h4 x-show="neighbors.length">Connections (<span x-text="neighbors.length"></span>)</h4>
-          <ul class="nlist">
-            <template x-for="nb in neighbors.slice(0, 20)" :key="nb.id + ':' + nb.rel">
-              <li>
-                <button @click="focusNode(nb.id)">
-                  <span class="dot" :class="'swatch-' + nb.type"
-                        :style="'--type-color: ' + typeColor(nb.type)"></span>
-                  <span class="label" x-text="nb.name"></span>
-                  <span class="rel" x-text="nb.rel + (nb.confidence < 1 ? ' (' + nb.confidence.toFixed(2) + ')' : '')"></span>
-                </button>
-              </li>
-            </template>
-          </ul>
+          <!-- v2.2 phase 4: neighbors render via mnemoStaggeredReveal
+               so items fade in paced (30ms between items, 180ms each)
+               instead of popping in together. The x-effect re-runs
+               when ``neighbors`` changes; renderNeighborsList cancels
+               any in-flight reveal before starting a new one. -->
+          <ul class="nlist" x-ref="nlist"
+              x-effect="renderNeighborsList($refs.nlist, neighbors)"></ul>
 
           <div class="nactions">
             <a class="primary" :href="'/node/' + selected.id">Open detail</a>
@@ -315,6 +313,103 @@ function nebula() {
     // palette.py updates BOTH at once.
     typeColor(t) {
       return TYPE_COLORS[t] || TYPE_COLOR_FALLBACK;
+    },
+
+    // v2.2 phase 4: body streaming. Called from the x-effect on
+    // <code x-ref="bodyCode">. Cancels any in-flight reveal (so
+    // clicks during a stream don't race) and starts a new
+    // mnemoStreamText with the body content. After the stream
+    // completes, Prism highlights the now-static <code>.
+    streamBodyToCode(codeEl, body, sourcePath) {
+      if (!codeEl) return;
+      if (this._bodyStream && this._bodyStream.cancel) {
+        try { this._bodyStream.cancel(); } catch (_) {}
+      }
+      this._bodyStream = null;
+      if (!body) {
+        codeEl.textContent = '';
+        return;
+      }
+      if (!window.mnemoStreamText) {
+        // Fallback: text-only fill, then highlight. Lets the page
+        // work even if app.js failed to load.
+        codeEl.textContent = body;
+        if (window.Prism) requestAnimationFrame(() => Prism.highlightElement(codeEl));
+        return;
+      }
+      // Pick per-language unit. Word-by-word for prose; line-by-line
+      // for code (cheaper highlight + reads as "code arriving line
+      // by line" rather than typing-effect).
+      const lang = this.bodyLanguage(sourcePath);
+      const isCode = lang !== 'none' && lang !== 'markdown';
+      this._bodyStream = window.mnemoStreamText(codeEl, body, {
+        unit: isCode ? 'line' : 'word',
+        // 5ms/word is fast enough that a 200-word memory body
+        // settles in ~1s; 8ms/line keeps even a 100-line code
+        // block visible in under a second.
+        perUnitDelayMs: isCode ? 8 : 5,
+      });
+      this._bodyStream.done.then(() => {
+        if (window.Prism) requestAnimationFrame(() => Prism.highlightElement(codeEl));
+      });
+    },
+
+    // v2.2 phase 4: neighbors list staggered reveal. Replaces the
+    // old <template x-for> path so items appear paced instead of
+    // popping in together. Cancellation prevents racing reveals
+    // when the user clicks several neighbors in quick succession.
+    renderNeighborsList(ul, items) {
+      if (!ul) return;
+      if (this._neighborReveal && this._neighborReveal.cancel) {
+        try { this._neighborReveal.cancel(); } catch (_) {}
+      }
+      this._neighborReveal = null;
+      // Always clear the list before re-rendering. Saves us from
+      // de-duping at insert time.
+      while (ul.firstChild) ul.removeChild(ul.firstChild);
+
+      const slice = (items || []).slice(0, 20);
+      if (slice.length === 0) return;
+
+      if (!window.mnemoStaggeredReveal) {
+        // Fallback: synchronous render. Keeps the panel functional
+        // when app.js hasn't loaded.
+        for (let i = 0; i < slice.length; i++) {
+          ul.appendChild(this._neighborItemEl(slice[i]));
+        }
+        return;
+      }
+      this._neighborReveal = window.mnemoStaggeredReveal(ul, slice, {
+        perItemDelayMs: 30,
+        fadeInMs: 180,
+        renderOne: (nb) => this._neighborItemEl(nb),
+      });
+    },
+
+    // Builds one <li> for the neighbor list. Pulled out so both
+    // the staggered + fallback paths share the markup -- they
+    // were diverging when inlined.
+    _neighborItemEl(nb) {
+      const li = document.createElement('li');
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.addEventListener('click', () => this.focusNode(nb.id));
+      const dot = document.createElement('span');
+      dot.className = 'dot swatch-' + nb.type;
+      dot.style.setProperty('--type-color', this.typeColor(nb.type));
+      btn.appendChild(dot);
+      const label = document.createElement('span');
+      label.className = 'label';
+      label.textContent = nb.name;
+      btn.appendChild(label);
+      const rel = document.createElement('span');
+      rel.className = 'rel';
+      rel.textContent = nb.rel + (
+        nb.confidence < 1 ? ' (' + nb.confidence.toFixed(2) + ')' : ''
+      );
+      btn.appendChild(rel);
+      li.appendChild(btn);
+      return li;
     },
 
     async init() {
@@ -456,6 +551,17 @@ function nebula() {
           }},
           { selector: 'node.dim',   style: { opacity: 0.12, 'underlay-opacity': 0.04 }},
           { selector: 'node.hide',  style: { display: 'none' }},
+          // v2.2 phase 4: chunked initial paint. Right after the
+          // fcose layout, every node gets ``.preload-hidden`` so the
+          // canvas reads as empty. ``_renderCanvasChunked`` then
+          // removes the class in batches of CHUNK_SIZE by descending
+          // degree, producing the "densest cluster appears first,
+          // rest fade in waves" effect. ``opacity: 0`` is scoped to
+          // this class only -- the base node selector still has the
+          // v2.1.2 transition-property list (border-width +
+          // underlay-padding only) so dim/un-dim later doesn't
+          // re-introduce the fanout lag we fixed there.
+          { selector: 'node.preload-hidden', style: { opacity: 0, 'underlay-opacity': 0 }},
 
           // Edges. Brighter base, gradient-ready, with arrow caps on
           // directional relations.
@@ -578,6 +684,80 @@ function nebula() {
         const p = n.position();
         this._forceSnapshot[n.id()] = { x: p.x, y: p.y };
       });
+
+      // v2.2 phase 4: chunked initial reveal. After the snapshot is
+      // captured (so positions are final), hide every node, then
+      // un-hide in batches of CHUNK_SIZE by descending degree. The
+      // user sees the densest cluster of the graph appear first,
+      // then the rest of the components fade in waves. Total reveal
+      // time ~600-900ms depending on node count; far easier to
+      // visually parse than "blank canvas -> 478 nodes at once".
+      this._renderCanvasChunked();
+    },
+
+    // CHUNK_SIZE = 50 nodes per batch. Tuned for ~480-node graphs:
+    // gives ~9 chunks at 80ms cadence = ~720ms full reveal, which
+    // reads as "smoothly fast" without batches blurring together.
+    // (See design doc § 4.)
+    _renderCanvasChunked() {
+      if (!this.cy) return;
+      const reduced = typeof window.mnemoPrefersReducedMotion === 'function'
+        && window.mnemoPrefersReducedMotion();
+      if (reduced) {
+        // Honor the a11y floor -- snap everything to visible at once.
+        return;
+      }
+
+      const CHUNK = 50;
+      const REVEAL_INTERVAL_MS = 80;
+      const FADE_IN_DURATION_MS = 260;
+
+      // Hide every node up front. Edges follow their endpoints in
+      // cytoscape (opacity:0 nodes draw their edges invisibly too,
+      // so we don't need to tag the edges explicitly).
+      this.cy.batch(() => {
+        this.cy.nodes().addClass('preload-hidden');
+      });
+
+      // Sort by degree DESC so the cluster center appears first.
+      const sorted = this.cy.nodes()
+        .toArray()
+        .sort((a, b) => b.degree() - a.degree());
+      const ids = sorted.map(n => n.id());
+
+      // Schedule each chunk on a setTimeout cadence. Each chunk does
+      // one cy.batch() so cytoscape only re-renders once per chunk.
+      // ``.fade-in`` (CSS class on cytoscape nodes via class API) is
+      // a no-op for the cytoscape canvas itself, but the layered
+      // .fade-in animation in app.css lights up any DOM overlay that
+      // mirrors these nodes (skeleton placeholders, future minimap).
+      for (let i = 0; i < ids.length; i += CHUNK) {
+        const slice = ids.slice(i, i + CHUNK);
+        const chunkIdx = i / CHUNK;
+        setTimeout(() => {
+          if (!this.cy) return; // panel disposed mid-reveal
+          this.cy.batch(() => {
+            for (const id of slice) {
+              const node = this.cy.getElementById(id);
+              if (node && node.length) {
+                node.removeClass('preload-hidden').addClass('fade-in');
+              }
+            }
+          });
+          // After the fade-in transition is "done", strip the class
+          // so subsequent .dim/.hl class changes can't re-trigger an
+          // opacity transition we don't want (the v2.1.2 lag fix).
+          setTimeout(() => {
+            if (!this.cy) return;
+            this.cy.batch(() => {
+              for (const id of slice) {
+                const node = this.cy.getElementById(id);
+                if (node && node.length) node.removeClass('fade-in');
+              }
+            });
+          }, FADE_IN_DURATION_MS);
+        }, chunkIdx * REVEAL_INTERVAL_MS);
+      }
     },
 
     buildTree() {
