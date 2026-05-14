@@ -121,8 +121,30 @@
     //   2. source_path ends in .md OR no type info -> marked markdown
     //   3. type === "commit" -> escaped plain <pre>
     // Returns the rendering path taken ("code" / "markdown" / "plain").
+    //
+    // Phase 5 of the v2.2 progressive-UX rollout (v2.2.5): every branch
+    // routes its reveal through ``window.mnemoStreamText`` so the body
+    // fills in progressively instead of popping in one tick. The branch
+    // table:
+    //   code_*    -> line-by-line, Prism re-highlights every ~80ms
+    //   commit    -> line-by-line into a plain <pre>
+    //   markdown  -> word-by-word over each text node of the marked HTML
+    // ``targetEl._mnemoStreamCancel`` is set on every call (replaces any
+    // prior handle); a future coordinator (chat panel, neighbor click)
+    // can call it to abort an in-flight reveal cleanly.
+    // ``window.mnemoPrefersReducedMotion()`` short-circuits inside
+    // ``mnemoStreamText`` to instant fill -- no special-casing here.
     window.mnemoRenderBody = (targetEl, body, opts) => {
       if (!targetEl) return null;
+
+      // Cancel any prior reveal on this element before starting a new
+      // one. Without this, clicking a neighbor mid-stream races two
+      // streams into the same target and leaves mixed text.
+      if (typeof targetEl._mnemoStreamCancel === 'function') {
+        try { targetEl._mnemoStreamCancel(); } catch (_) { /* tolerate */ }
+        targetEl._mnemoStreamCancel = null;
+      }
+
       const text = body == null ? '' : String(body);
       const o = opts || {};
       const isCode = window.mnemoIsCodeType(o.type);
@@ -133,33 +155,140 @@
       const wantsCode = isCode && ext !== 'markdown' && ext !== 'none';
       const wantsPlain = o.type === 'commit';
 
+      // mnemoStreamText is defined in /static/app.js (loaded with defer)
+      // and may not exist yet on a cold initial render. When it's not
+      // ready we fall back to the prior one-shot innerHTML write so the
+      // user still sees content -- streaming will land on the next call.
+      const streamer = window.mnemoStreamText;
+
       if (wantsCode) {
         const lang = ext;
-        const escaped = text
-          .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
         targetEl.innerHTML =
           '<pre class="mnemo-code language-' + lang + '">' +
-          '<code class="language-' + lang + '">' + escaped + '</code></pre>';
-        if (window.Prism) {
-          const codeEl = targetEl.querySelector('code');
-          if (codeEl) {
-            requestAnimationFrame(() => window.Prism.highlightElement(codeEl));
+          '<code class="language-' + lang + '"></code></pre>';
+        const codeEl = targetEl.querySelector('code');
+        const reHighlight = () => {
+          if (!window.Prism || !codeEl) return;
+          try { window.Prism.highlightElement(codeEl); } catch (_) { /* tolerate */ }
+        };
+        if (streamer && codeEl) {
+          const handle = streamer(codeEl, text, {
+            unit: 'line', perUnitDelayMs: 8,
+          });
+          // Periodic re-highlight while the stream is in flight so the
+          // colors fill in chunks rather than all at the end.
+          let interval = null;
+          if (window.Prism) {
+            interval = setInterval(reHighlight, 80);
+          }
+          handle.done.then(() => {
+            if (interval) clearInterval(interval);
+            reHighlight();
+            if (targetEl._mnemoStreamCancel === wrappedCancel) {
+              targetEl._mnemoStreamCancel = null;
+            }
+          });
+          const wrappedCancel = () => {
+            if (interval) clearInterval(interval);
+            handle.cancel();
+            reHighlight();
+          };
+          targetEl._mnemoStreamCancel = wrappedCancel;
+        } else if (codeEl) {
+          // streamer missing -- one-shot escape + highlight.
+          const escaped = text
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+          codeEl.innerHTML = escaped;
+          if (window.Prism) {
+            requestAnimationFrame(reHighlight);
           }
         }
         return 'code';
       }
 
       if (wantsPlain) {
-        const escaped = text
-          .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-        targetEl.innerHTML = '<pre class="mnemo-plain">' + escaped + '</pre>';
+        targetEl.innerHTML = '<pre class="mnemo-plain"></pre>';
+        const pre = targetEl.querySelector('pre');
+        if (streamer && pre) {
+          const handle = streamer(pre, text, {
+            unit: 'line', perUnitDelayMs: 8,
+          });
+          const wrappedCancel = () => handle.cancel();
+          handle.done.then(() => {
+            if (targetEl._mnemoStreamCancel === wrappedCancel) {
+              targetEl._mnemoStreamCancel = null;
+            }
+          });
+          targetEl._mnemoStreamCancel = wrappedCancel;
+        } else if (pre) {
+          const escaped = text
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+          pre.innerHTML = escaped;
+        }
         return 'plain';
       }
 
-      // Markdown path (default). Falls back to escaped <pre> via mnemoMd
-      // if marked / DOMPurify haven't loaded yet.
-      targetEl.innerHTML = window.mnemoMd(text)
-        || '<p class="hint" style="margin:0;">Body is empty.</p>';
+      // Markdown path (default). Render the marked HTML first so layout
+      // is final, then walk text nodes and reveal word-by-word. Falls
+      // back to a hint when marked / DOMPurify haven't hydrated.
+      const html = window.mnemoMd(text);
+      if (!html) {
+        targetEl.innerHTML = '<p class="hint" style="margin:0;">Body is empty.</p>';
+        return 'markdown';
+      }
+      targetEl.innerHTML = html;
+
+      if (streamer) {
+        // Replace each non-whitespace text node with a wrapper span
+        // (text nodes don't have appendChild, but mnemoStreamText needs
+        // an Element target). Buckets stream sequentially so content
+        // fills top-to-bottom.
+        const walker = document.createTreeWalker(targetEl, NodeFilter.SHOW_TEXT);
+        const collected = [];
+        let n;
+        while ((n = walker.nextNode())) collected.push(n);
+        const buckets = [];
+        for (const node of collected) {
+          const original = node.nodeValue;
+          if (!original || !original.trim()) continue;
+          const span = document.createElement('span');
+          span.className = 'mnemo-stream-frag';
+          // Stream fills it; until then it's empty.
+          if (node.parentNode) {
+            node.parentNode.replaceChild(span, node);
+            buckets.push({ el: span, text: original });
+          }
+        }
+        let cancelled = false;
+        let currentHandle = null;
+        const runNext = (idx) => {
+          if (cancelled || idx >= buckets.length) {
+            if (targetEl._mnemoStreamCancel === wrappedCancel) {
+              targetEl._mnemoStreamCancel = null;
+            }
+            return;
+          }
+          const b = buckets[idx];
+          currentHandle = streamer(b.el, b.text, {
+            unit: 'word', perUnitDelayMs: 20,
+          });
+          currentHandle.done.then(() => runNext(idx + 1));
+        };
+        const wrappedCancel = () => {
+          cancelled = true;
+          if (currentHandle) {
+            try { currentHandle.cancel(); } catch (_) { /* tolerate */ }
+          }
+          // Flush remaining buckets so the user sees the full document.
+          for (const b of buckets) {
+            if (b.el.textContent !== b.text) {
+              b.el.textContent = b.text;
+            }
+          }
+        };
+        targetEl._mnemoStreamCancel = wrappedCancel;
+        runNext(0);
+      }
       return 'markdown';
     };
 
