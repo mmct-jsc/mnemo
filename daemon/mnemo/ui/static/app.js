@@ -571,6 +571,13 @@
           this.workspaces = Array.isArray(list) ? list : [];
           this.active = (active && active.active) || null;
           this.error = null;
+          // The soft-cap warning is workspace-scoped; if there's no
+          // active workspace anymore (cleared, deleted, FK SET NULL
+          // cascade), drop the lingering "!" indicator so the pill
+          // doesn't lie about a workspace that no longer exists.
+          if (this.active === null) {
+            this.capWarning = null;
+          }
         } catch (e) {
           this.error = `Failed to load workspaces: ${e}`;
         }
@@ -614,6 +621,7 @@
       async clearActive() {
         this.busy = true;
         this.error = null;
+        this.capWarning = null;
         try {
           await fetch('/v1/workspaces/clear', { method: 'POST' });
           await this.refresh();

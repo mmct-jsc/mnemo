@@ -993,6 +993,51 @@ dl.meta dd { margin: 0; color: var(--fg); }
   font-family: var(--mono); color: var(--ok); min-width: 3rem; text-align: right;
 }
 
+/* v2.6.0 polish: each audit hit row now carries name + type badge +
+   description + truncated ID. align cleanly across rows.            */
+.query details ul.hits li.hit-row {
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.6rem;
+}
+.hit-row .hit-name {
+  color: var(--fg);
+  font-weight: 500;
+  text-decoration: none;
+  transition: var(--transition);
+}
+.hit-row .hit-name:hover { color: var(--accent); }
+.hit-row .hit-type {
+  font-size: 0.7rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--type-color) 18%, transparent);
+  color: var(--type-color, var(--accent));
+  border: 1px solid color-mix(in srgb, var(--type-color) 35%, transparent);
+  white-space: nowrap;
+}
+.hit-row .hit-desc {
+  color: var(--fg-muted);
+  font-size: 0.78rem;
+  flex: 1 1 0;
+  min-width: 12rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hit-row .hit-id {
+  font-family: var(--mono);
+  color: var(--fg-dim);
+  font-size: 0.7rem;
+  white-space: nowrap;
+}
+.hit-row .hit-removed {
+  color: var(--fg-dim);
+  font-style: italic;
+  font-size: 0.78rem;
+  text-decoration: line-through;
+}
+
 .empty {
   background: var(--panel); border: 1px dashed var(--border);
   border-radius: var(--radius-lg);

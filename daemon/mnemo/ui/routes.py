@@ -504,6 +504,31 @@ def mount_ui(
         pg = _paginate(len(all_q), page, PAGE_SIZE_AUDIT)
         queries = all_q[pg["offset"] : pg["offset"] + pg["page_size"]]
 
+        # v2.6.0 polish: resolve hit IDs to {name, description, type}
+        # so the audit log shows what was actually returned instead of
+        # bare 12-char ID prefixes. Walks every hit ID across the
+        # rendered page, batches the lookup with get_nodes_by_ids
+        # (single SELECT), and exposes the map to the template as
+        # ``hit_meta``. Nodes that have since been removed by a
+        # reindex resolve to ``None`` and the template renders them
+        # as "[removed]" so the log row still makes sense.
+        all_hit_ids: set[str] = set()
+        for q in queries:
+            for nid in q.retrieved_ids or []:
+                all_hit_ids.add(nid)
+        hit_nodes = s.get_nodes_by_ids(list(all_hit_ids)) if all_hit_ids else {}
+        hit_meta: dict[str, dict[str, str | None]] = {}
+        for nid in all_hit_ids:
+            node = hit_nodes.get(nid)
+            if node is None:
+                hit_meta[nid] = {"name": None, "description": None, "type": None}
+            else:
+                hit_meta[nid] = {
+                    "name": node.name,
+                    "description": node.description or "",
+                    "type": node.type,
+                }
+
         # Summary stats over the FULL audit window so the side cards stay
         # stable across pagination.
         total_hits = sum(len(q.retrieved_ids) for q in all_q)
@@ -524,6 +549,7 @@ def mount_ui(
             _ctx(
                 page="audit",
                 queries=queries,
+                hit_meta=hit_meta,
                 pagination=pg,
                 pagination_qs=_pagination_qs(request),
                 total_hits=total_hits,
