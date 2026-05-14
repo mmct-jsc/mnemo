@@ -65,9 +65,7 @@ def test_code_landing_base_only_when_no_workspace(client: TestClient, store: Sto
     # P1 + P2 code cards should NOT render; the BASE-only empty state should.
     assert "BASE-only" in body or "Pick a workspace" in body
     # The big code-project card grid should not show non-BASE projects.
-    assert "code-project-card-link" not in body or (
-        "P1" not in body and "P2" not in body
-    )
+    assert "code-project-card-link" not in body or ("P1" not in body and "P2" not in body)
 
 
 def test_code_landing_filters_to_workspace_keys(client: TestClient, store: Store) -> None:

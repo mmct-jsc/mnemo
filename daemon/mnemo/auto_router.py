@@ -300,10 +300,9 @@ def scan_path(
     # descends into them and discards files post-hoc -- death on a
     # NestJS monorepo with 10 services each pulling node_modules.
     for f in _walk_with_prune(p, skip_dirs=skip_dirs):
-        try:
-            rel = f.relative_to(p)
-        except ValueError:
-            continue
+        # _walk_with_prune yields files under ``p`` already; the rel
+        # computation that lived here is no longer needed (the prune
+        # has already handled skip-dir filtering).
         ext = f.suffix.lower()
         by_ext[ext] = by_ext.get(ext, 0) + 1
         if ext in (".md", ".markdown"):

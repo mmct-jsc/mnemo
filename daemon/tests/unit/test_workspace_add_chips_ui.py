@@ -52,9 +52,7 @@ def test_workspaces_page_has_chip_state(app_js: str) -> None:
     # Both factories share the chip methods; we expect each to define
     # addChip + removeChip + chips.
     occurrences = app_js.count("addChip")
-    assert occurrences >= 2, (
-        "both workspaceSwitcher AND workspacesPage should expose addChip"
-    )
+    assert occurrences >= 2, "both workspaceSwitcher AND workspacesPage should expose addChip"
 
 
 def test_app_js_resolves_filesystem_path_to_project_key(app_js: str) -> None:
@@ -80,7 +78,7 @@ def test_switcher_dropdown_renders_chip_input(base_html: str) -> None:
     # shape.
     assert "ws-chips" in base_html
     # Chips render with an x-for over the chips array.
-    assert "x-for=\"chip" in base_html or "x-for=\"(chip" in base_html
+    assert 'x-for="chip' in base_html or 'x-for="(chip' in base_html
 
 
 def test_workspaces_page_renders_chip_input(workspaces_html: str) -> None:

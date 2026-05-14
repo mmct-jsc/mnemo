@@ -134,17 +134,17 @@
         scroll to zoom · drag to pan · click a node
       </div>
 
-      <!-- v2.6.0 polish: truncation banner. Large workspaces (e.g. a
-           10 k-node NestJS monorepo) get capped at 3 000 server-side
-           with type priority so architecture-shaping nodes (modules /
-           classes / routes / endpoints) win. The banner tells the
-           user to drill into a module for the full ego-network. -->
-      <div class="nebula-truncated-banner" x-show="truncated" x-cloak>
-        Showing
-        <strong x-text="shownNodeCount.toLocaleString()"></strong>
-        of <strong x-text="totalInScope.toLocaleString()"></strong> nodes
-        (architecture-priority).
-        Click a module to drill into its full ego-network.
+      <!-- v2.6.0 polish: status chip in the lower-right. Shows the
+           current render size + workspace name without overlapping
+           the top-row hint / scope chip. Always visible (no
+           x-show) so the user can sanity-check completeness at a
+           glance. -->
+      <div class="nebula-status">
+        <span class="nebula-status-count"
+              x-text="shownNodeCount.toLocaleString() + ' nodes'"></span>
+        <span class="nebula-status-sep" x-show="contextWorkspaceName" x-cloak>·</span>
+        <span class="nebula-status-ws" x-show="contextWorkspaceName" x-cloak
+              x-text="contextWorkspaceName"></span>
       </div>
 
       <div class="nebula-context"
@@ -363,6 +363,7 @@ function nebula() {
     treeRoot: null,
     treeRows: [],                 // v2.6.0: flat indented rows for arbitrary depth
     expandedPaths: {},            // v2.6.0: { 'D:/Repository': true, ... }
+    visibleTreeRows: [],          // v2.6.0 perf: memoized; recomputed only when treeRows / expandedPaths change
     nodeTypes: [],
     typeFilters: {},
     filterText: '',
@@ -374,8 +375,8 @@ function nebula() {
     contextBaseOnly: false,      // v2.6.0: true when no workspace is active
     contextWorkspaceName: null,  // v2.6.0: shown in the scope chip
     contextNodeId: null,
-    truncated: false,            // v2.6.0: server returned fewer nodes than scope
-    totalInScope: 0,             // v2.6.0: total nodes the workspace covers
+    truncated: false,            // v2.6.0: deprecated -- always false after we removed the cap
+    totalInScope: 0,             // v2.6.0: total nodes the workspace covers (== shown for status chip)
     shownNodeCount: 0,           // v2.6.0: nodes painted on canvas
     treeModules: [],             // v2.6.0: unbounded module list for left-panel tree
     _eventSource: null,
@@ -753,6 +754,15 @@ function nebula() {
         return e;
       });
 
+      // v2.6.0 perf: when the graph is large, every per-node visual
+      // effect (motion blur, edge re-paint during pan, underlay
+      // glow) compounds into multi-second jank. Tune them down
+      // automatically above 3 000 nodes so the user sees a smooth
+      // canvas even at 10 k. The architecture is still all there --
+      // we just stop painting expensive composite layers per node.
+      const canvasNodeCount = els.filter(e => e.data.id !== undefined).length;
+      const heavyGraph = canvasNodeCount > 3_000;
+
       if (this.cy) this.cy.destroy();
       this.cy = cytoscape({
         container: document.getElementById('cy-nebula'),
@@ -763,20 +773,17 @@ function nebula() {
         // as a texture during pan/zoom so we don't redraw every edge
         // every frame. Render labels only at moderate zoom.
         textureOnViewport: true,
-        // v2.2.3: edges stay visible during pan/drag. The pop-out
-        // behavior of hideEdgesOnViewport felt jarring -- the user
-        // saw the graph "collapse" into bare nodes mid-drag, then
-        // snap back into shape on release. Labels still hide
-        // during fast viewport changes because they're cheap to
-        // re-render and the busy-text effect was a real
-        // distraction during pans.
-        hideEdgesOnViewport: false,
+        // v2.6.0 perf: on big graphs the edges are the single most
+        // expensive thing to repaint during pan. Hide them while
+        // the viewport is moving; cytoscape pops them back on release.
+        // The "graph collapses to bare nodes mid-drag" feel is a worth-
+        // it trade vs 5-second pan stalls on a 15 k-edge canvas.
+        hideEdgesOnViewport: heavyGraph,
         hideLabelsOnViewport: true,
         pixelRatio: 1.0,
         wheelSensitivity: 0.18,  // slow, silky scroll-zoom
-        // Motion blur smooths fast pans -- the trail decays over a
-        // few frames so the canvas never looks jagged during drag.
-        motionBlur: true,
+        // Motion blur: nice on small graphs, expensive on big ones.
+        motionBlur: !heavyGraph,
         motionBlurOpacity: 0.18,
         // Damped pan: cytoscape eases to a stop when the user
         // releases the mouse rather than locking instantly.
@@ -795,9 +802,14 @@ function nebula() {
               // Inner glow / halo: ``underlay`` paints BEHIND the node
               // so the color bleeds outward like a star -- the
               // "nebula" feel the design asked for.
+              // v2.6.0 perf: the underlay composite layer is the
+              // single most expensive per-node style on big graphs.
+              // Skip it above 3 000 nodes; the user still gets color
+              // + size; the glow is the polish we trade for fluid
+              // pan/zoom.
               'underlay-color': (n) => TYPE_COLORS[n.data('type')] || TYPE_COLOR_FALLBACK,
-              'underlay-opacity': 0.32,
-              'underlay-padding': 8,
+              'underlay-opacity': heavyGraph ? 0 : 0.32,
+              'underlay-padding': heavyGraph ? 0 : 8,
               'underlay-shape': 'ellipse',
               'border-width': 1,
               'border-color': '#0a0d14',
@@ -897,25 +909,47 @@ function nebula() {
           { selector: 'edge.edges-off', style: { display: 'none' }},
           { selector: 'node.labels-off', style: { 'text-opacity': 0 }},
         ],
-        // Initial layout: NO animation, NO randomization. fcose
-        // converges in ~50-100 quick iterations and renders once.
-        // Subsequent user-triggered relayouts animate via relayout().
-        layout: {
-          name: 'fcose',
-          animate: false,
-          randomize: true,
-          quality: 'default',
-          nodeRepulsion: 8000,
-          idealEdgeLength: 80,
-          edgeElasticity: 0.45,
-          gravity: 0.25,
-          padding: 50,
-          fit: true,
-          // tile: false -- let fcose spread components organically;
-          // packing them with tile=true produces a linear / diagonal
-          // arrangement on graphs with many small clusters.
-        },
+        // v2.6.0 polish: graceful initial layout for large workspaces.
+        // fcose default fights the main thread above ~3 000 nodes;
+        // for 10 k+ (the aibox + edge case) it freezes the tab for
+        // 5-30 s. The initial layout falls back to concentric for
+        // big graphs; ``currentLayout`` is synced so the toolbar's
+        // active button reflects what's actually on the canvas.
+        // ``relayout('fcose')`` runs in DRAFT quality for big graphs
+        // (fewer iterations, no animation) so the button stays
+        // functional without freezing the tab.
+        layout: (heavyGraph
+          ? {
+              name: 'concentric',
+              concentric: (n) => n.data('deg') || 0,
+              levelWidth: () => 1,
+              minNodeSpacing: 4,
+              animate: false,
+              fit: true,
+              padding: 30,
+            }
+          : {
+              name: 'fcose',
+              animate: false,
+              randomize: true,
+              quality: 'default',
+              nodeRepulsion: 8000,
+              idealEdgeLength: 80,
+              edgeElasticity: 0.45,
+              gravity: 0.25,
+              padding: 50,
+              fit: true,
+            }),
       });
+
+      // v2.6.0 polish: sync the active-layout toolbar button with
+      // the layout that actually ran. Without this, the "force"
+      // button stays highlighted while the canvas shows concentric
+      // (the big-graph fallback) -- the user thinks they're looking
+      // at force-directed layout when they aren't.
+      if (heavyGraph) {
+        this.currentLayout = 'concentric';
+      }
 
       this.cy.on('tap', 'node', (evt) => {
         // Suppress the canvas-tap that fires alongside a node-tap on
@@ -1161,13 +1195,19 @@ function nebula() {
       // approach capped at 3 levels deep -- aibox-prod-all's
       // backend/services/asset-service/src/... path was invisible.
       this.treeRows = this._flattenTreeRows(root);
-      // Auto-expand the top two levels so the user sees structure
-      // without clicking. Below that, click-to-expand is the contract.
+      // v2.6.0 polish + perf: auto-expand the top 3 levels of
+      // directories so the user sees projects + their top-level
+      // packages on first paint, without forcing 3 000+ rows into
+      // the initial DOM (which lagged interaction for ~2 seconds).
+      // Power users click to drill deeper; the tree side-channel
+      // carries every module so a deeper click resolves locally
+      // without an extra fetch.
       const auto = {};
       for (const row of this.treeRows) {
-        if (row.isDir && row.depth < 2) auto[row.path] = true;
+        if (row.isDir && row.depth < 3) auto[row.path] = true;
       }
       this.expandedPaths = auto;
+      this.visibleTreeRows = this._computeVisibleTreeRows();
     },
 
     _flattenTreeRows(root) {
@@ -1221,10 +1261,15 @@ function nebula() {
       return total;
     },
 
-    get visibleTreeRows() {
-      // A row is visible iff EVERY ancestor directory is expanded.
-      // ``ancestors`` is the literal list of dir paths from root down
-      // to (but not including) the row -- no fragile string-split.
+    // v2.6.0 perf: ``visibleTreeRows`` is a plain memoized field,
+    // not a getter. Alpine re-evaluates expressions in x-for / x-if
+    // on every reactivity tick (selection change, hover, etc.). With
+    // 3 000+ tree rows the getter was running the full filter loop
+    // hundreds of times per second -- the single biggest source of
+    // ``laggy`` interactions on the aibox + edge workspace. The
+    // computed snapshot is updated only when the source changes
+    // (buildTree, toggleTreeDir).
+    _computeVisibleTreeRows() {
       const out = [];
       for (const row of this.treeRows) {
         let allOpen = true;
@@ -1244,6 +1289,7 @@ function nebula() {
         ...this.expandedPaths,
         [path]: !this.expandedPaths[path],
       };
+      this.visibleTreeRows = this._computeVisibleTreeRows();
     },
 
     _collapseTree(node) {
