@@ -185,6 +185,152 @@ def test_flask_blueprint_route_emits_route() -> None:
     assert routes[0].route_path == "/api/items"
 
 
+# --- Django extractor (v2.4.0 phase 8) -----------------------------------
+
+
+def test_django_path_call_in_urlpatterns_emits_route() -> None:
+    """The canonical Django shape: ``urlpatterns = [path("url/", view)]``
+    in a urls.py module. Emit one ``code_route`` per ``path()`` call,
+    method=``*`` because Django decides the HTTP verb at the view layer
+    (not the URL layer like Flask / FastAPI do).
+    """
+    from mnemo.parsers import code
+
+    src = (
+        b"from django.urls import path\n"
+        b"from . import views\n"
+        b"urlpatterns = [\n"
+        b'    path("users/", views.user_list, name="user-list"),\n'
+        b"]\n"
+    )
+    units = code.extract(Path("/repo/urls.py"), src, language="python")
+    routes = [u for u in units if u.type == "code_route"]
+    assert len(routes) == 1
+    r = routes[0]
+    assert r.framework == "django"
+    assert r.route_path == "users/"
+    # Django routes are method-agnostic at the URL layer.
+    assert r.route_method == "*"
+
+
+def test_django_re_path_in_urlpatterns_emits_route() -> None:
+    """``re_path(r"^url/$", view)`` is the regex variant; same shape
+    otherwise. The raw pattern is preserved as the route_path so
+    sitemap walks can show the original regex.
+    """
+    from mnemo.parsers import code
+
+    src = (
+        b"from django.urls import re_path\n"
+        b"from . import views\n"
+        b"urlpatterns = [\n"
+        b'    re_path(r"^archive/(?P<year>[0-9]{4})/$", views.archive_year),\n'
+        b"]\n"
+    )
+    units = code.extract(Path("/repo/urls.py"), src, language="python")
+    routes = [u for u in units if u.type == "code_route"]
+    assert len(routes) == 1
+    assert routes[0].route_path == "^archive/(?P<year>[0-9]{4})/$"
+    assert routes[0].framework == "django"
+
+
+def test_django_class_based_view_as_view_call() -> None:
+    """``path("u/", UserDetail.as_view())`` is the class-based-view
+    idiom. We record the class name as the handler -- the actual
+    handler-source-path resolution happens cross-file at post-pass
+    time (the class itself lives in views.py, not urls.py).
+    """
+    from mnemo.parsers import code
+
+    src = (
+        b"from django.urls import path\n"
+        b"from .views import UserDetail\n"
+        b"urlpatterns = [\n"
+        b'    path("users/<int:pk>/", UserDetail.as_view(), name="user-detail"),\n'
+        b"]\n"
+    )
+    units = code.extract(Path("/repo/urls.py"), src, language="python")
+    routes = [u for u in units if u.type == "code_route"]
+    assert len(routes) == 1
+    r = routes[0]
+    assert r.route_path == "users/<int:pk>/"
+    # The handler hint should be ``UserDetail`` (the class being
+    # mounted). Whether we wire a same-file source_path depends on
+    # whether the file is self-contained; the more general case is
+    # cross-file lookup, which the post-pass handles.
+    assert "UserDetail" in (r.description or "")
+
+
+def test_django_multiple_paths_in_one_urlpatterns_list() -> None:
+    """A single ``urlpatterns`` list with N entries produces N
+    routes.
+    """
+    from mnemo.parsers import code
+
+    src = (
+        b"from django.urls import path\n"
+        b"from . import views\n"
+        b"urlpatterns = [\n"
+        b'    path("users/", views.user_list),\n'
+        b'    path("groups/", views.group_list),\n'
+        b'    path("perms/", views.perm_list),\n'
+        b"]\n"
+    )
+    units = code.extract(Path("/repo/urls.py"), src, language="python")
+    routes = [u for u in units if u.type == "code_route"]
+    assert len(routes) == 3
+    paths = sorted(r.route_path for r in routes)
+    assert paths == ["groups/", "perms/", "users/"]
+
+
+def test_django_path_outside_urlpatterns_is_ignored() -> None:
+    """A bare ``path(...)`` call NOT inside a list assigned to a
+    name ending in ``urlpatterns`` could be coincidental (Django
+    apps sometimes call ``path`` for non-routing purposes via
+    helper functions). We only emit routes for ``urlpatterns = [...]``
+    membership.
+    """
+    from mnemo.parsers import code
+
+    src = (
+        b"from django.urls import path\n"
+        b'_ROUTE = path("oops/", lambda r: r)\n'
+        b"def helper():\n"
+        b'    return path("nope/", lambda r: r)\n'
+    )
+    units = code.extract(Path("/repo/helpers.py"), src, language="python")
+    routes = [u for u in units if u.type == "code_route"]
+    assert routes == [], (
+        f"path() calls outside urlpatterns should not produce code_route nodes; got {routes}"
+    )
+
+
+def test_django_no_django_imports_no_routes() -> None:
+    """A file with no Django URL conf doesn't emit anything (no
+    false positives for non-Django Python code).
+    """
+    from mnemo.parsers import code
+
+    src = b"def hello():\n    return 'world'\n"
+    units = code.extract(Path("/repo/main.py"), src, language="python")
+    routes = [u for u in units if u.type == "code_route"]
+    assert routes == []
+
+
+def test_django_extractor_registered_in_python_dispatch() -> None:
+    """The ``FRAMEWORK_EXTRACTORS["python"]`` list must include the
+    Django extractor so a parsed Python tree triggers it without
+    explicit per-call wiring.
+    """
+    from mnemo.extractors import FRAMEWORK_EXTRACTORS
+    from mnemo.extractors import django as _django
+
+    assert _django.extract in FRAMEWORK_EXTRACTORS.get("python", []), (
+        "django.extract must be registered in FRAMEWORK_EXTRACTORS['python'] "
+        "alongside fastapi.extract and flask.extract."
+    )
+
+
 # --- Express extractor ----------------------------------------------------
 
 

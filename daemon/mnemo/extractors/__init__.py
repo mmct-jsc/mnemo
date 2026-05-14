@@ -31,6 +31,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
+from mnemo.extractors import django as _django
 from mnemo.extractors import express as _express
 from mnemo.extractors import fastapi as _fastapi
 from mnemo.extractors import flask as _flask
@@ -52,7 +53,7 @@ FrameworkExtractor = Callable[["tree_sitter.Tree", bytes, str, "list[CodeUnit]"]
 
 
 FRAMEWORK_EXTRACTORS: dict[str, list[FrameworkExtractor]] = {
-    "python": [_fastapi.extract, _flask.extract],
+    "python": [_fastapi.extract, _flask.extract, _django.extract],
     "javascript": [_express.extract, _react.extract],
     "typescript": [_express.extract, _react.extract],
     "tsx": [_express.extract, _react.extract],
