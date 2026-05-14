@@ -153,6 +153,19 @@
         scroll to zoom · drag to pan · click a node
       </div>
 
+      <!-- v2.6.0 polish: truncation banner. Large workspaces (e.g. a
+           10 k-node NestJS monorepo) get capped at 3 000 server-side
+           with type priority so architecture-shaping nodes (modules /
+           classes / routes / endpoints) win. The banner tells the
+           user to drill into a module for the full ego-network. -->
+      <div class="nebula-truncated-banner" x-show="truncated" x-cloak>
+        Showing
+        <strong x-text="shownNodeCount.toLocaleString()"></strong>
+        of <strong x-text="totalInScope.toLocaleString()"></strong> nodes
+        (architecture-priority).
+        Click a module to drill into its full ego-network.
+      </div>
+
       <div class="nebula-context"
            x-show="contextProject || contextWorkspaceName || contextBaseOnly"
            x-cloak>
@@ -378,6 +391,9 @@ function nebula() {
     contextBaseOnly: false,      // v2.6.0: true when no workspace is active
     contextWorkspaceName: null,  // v2.6.0: shown in the scope chip
     contextNodeId: null,
+    truncated: false,            // v2.6.0: server returned fewer nodes than scope
+    totalInScope: 0,             // v2.6.0: total nodes the workspace covers
+    shownNodeCount: 0,           // v2.6.0: nodes painted on canvas
     _eventSource: null,
     stats: '',
     rawElements: [],
@@ -696,6 +712,14 @@ function nebula() {
       const r = await fetch('/ui/graph-data?' + qs.toString());
       const data = await r.json();
       this.rawElements = data.elements;
+      // v2.6.0 polish: when a workspace exceeds the canvas cap the
+      // response carries total_in_scope > shown_node_count + a
+      // truncated flag. The banner appears just above the canvas
+      // so the user knows to drill into a module for the full
+      // ego-network.
+      this.truncated = !!data.truncated;
+      this.totalInScope = data.total_in_scope || 0;
+      this.shownNodeCount = data.shown_node_count || 0;
       this.renderCanvas();
       this.buildTree();
       this.buildTypeFilters();

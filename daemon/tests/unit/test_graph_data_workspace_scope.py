@@ -60,6 +60,86 @@ def _seed(store: Store, *, key: str, n: int, base: bool = False, prefix: str = "
 # --- Server contract --------------------------------------------------------
 
 
+def test_project_keys_returns_balanced_set_across_projects(
+    client: TestClient, store: Store
+) -> None:
+    """v2.6.0 polish: a 2-project workspace gets nodes from BOTH
+    projects -- previously only the most-recent project surfaced
+    because list_nodes(limit=2000) capped BEFORE the project
+    filter ran (the aibox+edge workspace looked like a
+    disconnected grid for one repo + nothing for the other).
+
+    Per-key query (uses the project_key index) plus type-priority
+    sort returns a balanced set even when the workspace exceeds
+    GRAPH_NODE_CAP=3000.
+    """
+    _seed(store, key="P1", n=800, prefix="p1n")
+    _seed(store, key="P2", n=800, prefix="p2n")
+    resp = client.get("/ui/graph-data?project_keys=P1,P2")
+    data = resp.json()
+    nodes = [e for e in data["elements"] if "id" in e["data"]]
+    assert len(nodes) == 1600, (
+        f"expected 1600 nodes under the 3000 cap; got {len(nodes)}"
+    )
+    by_proj: dict[str, int] = {}
+    for n in nodes:
+        by_proj[n["data"]["project"]] = by_proj.get(n["data"]["project"], 0) + 1
+    # Both projects surface in full when total is below the cap.
+    assert by_proj.get("P1") == 800
+    assert by_proj.get("P2") == 800
+    assert data["truncated"] is False
+    assert data["total_in_scope"] == 1600
+    assert data["shown_node_count"] == 1600
+
+
+def test_project_keys_truncates_huge_workspaces_with_banner(
+    client: TestClient, store: Store
+) -> None:
+    """Workspaces past GRAPH_NODE_CAP trigger the type-priority cap
+    + drop isolated nodes in the rendered subgraph. The response
+    surfaces total_in_scope so the UI can render a banner.
+
+    Seed a workspace with 4000 nodes + edges chaining them in pairs
+    so the rendered set is connected after the cap kicks in.
+    """
+    _seed(store, key="P1", n=4000, prefix="big")
+    # Wire pairs of nodes so the cap'd set has a connected core.
+    all_nodes = list(store.list_nodes(project_key="P1", limit=4000))
+    for i in range(0, len(all_nodes) - 1, 2):
+        store.add_edge(all_nodes[i].id, all_nodes[i + 1].id, "mentions")
+    resp = client.get("/ui/graph-data?project_keys=P1")
+    data = resp.json()
+    nodes = [e for e in data["elements"] if "id" in e["data"]]
+    assert data["truncated"] is True
+    assert data["total_in_scope"] == 4000
+    # Either the GRAPH_NODE_CAP kicked in OR isolates were dropped.
+    # Both produce <= 3000 nodes; for this seed every node has an
+    # edge so we expect the full cap.
+    assert 1 <= len(nodes) <= 3000
+
+
+def test_project_keys_drops_isolated_nodes_after_cap(
+    client: TestClient, store: Store
+) -> None:
+    """v2.6.0 polish: the architecture-priority cap kept modules +
+    classes but discarded their function/method anchors -- the user
+    saw a 'grid of disconnected cells' for any module whose only
+    edges pointed at filtered-out functions. Drop isolates from the
+    rendered subgraph so fcose lays out a connected core.
+
+    Seed 4000 isolate nodes (no edges) -> the cap renders nothing
+    because every kept node is isolated after edge filter.
+    """
+    _seed(store, key="P1", n=4000, prefix="iso")
+    resp = client.get("/ui/graph-data?project_keys=P1")
+    data = resp.json()
+    nodes = [e for e in data["elements"] if "id" in e["data"]]
+    # Truncated workspace with no edges -> all isolates dropped.
+    assert data["truncated"] is True
+    assert len(nodes) == 0
+    assert data["total_in_scope"] == 4000
+
+
 def test_project_keys_filters_to_csv_set(client: TestClient, store: Store) -> None:
     _seed(store, key="P1", n=3)
     _seed(store, key="P2", n=2)
