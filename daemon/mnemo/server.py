@@ -19,16 +19,18 @@ The OpenAPI schema is filtered to v1-only paths and exposed at both
 
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 import threading
 import time
+from collections.abc import Iterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from fastapi.openapi.utils import get_openapi
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from mnemo import __version__, auto_router, config, ingest, paths, retrieve
@@ -157,6 +159,12 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
                 state.store.close()
 
     app = FastAPI(title="mnemo", version=__version__, lifespan=lifespan)
+    # Expose the per-app state on app.state so tests (and any other
+    # caller that gets a handle on the FastAPI instance) can reach
+    # the reindex lock + started_at counter without monkey-patching
+    # internals. The closure-captured ``state`` above is the same
+    # object, so any mutation here is visible to every route.
+    app.state.mnemo_state = state
     # The version header stamps every response (including 404s from
     # now-removed legacy paths) so adapters introspecting failed
     # requests still see the daemon version.
@@ -296,6 +304,55 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
         finally:
             state.reindex_started_at = None
             state.reindex_lock.release()
+
+    @v1.get("/reindex/events")
+    def reindex_events_route(
+        embed: bool = True,
+        s: Store = Depends(get_store),
+        e: Embedder = Depends(get_embedder),
+    ) -> StreamingResponse:
+        """Server-Sent Events stream of reindex progress.
+
+        Wire format: ``event: <name>\\ndata: <json>\\n\\n`` repeated.
+        Event names: ``start`` (once), ``file`` (per-file), ``done``
+        (once at the end). If another reindex is already in flight,
+        emits a single ``event: busy`` frame and closes.
+
+        Design: docs/plans/2026-05-14-ux-progressive-design.md § 2.
+        """
+
+        def encode(name: str, payload: dict) -> bytes:
+            # Each frame is "event: <name>\ndata: <json>\n\n" -- two
+            # newlines terminate the frame per the SSE spec.
+            return f"event: {name}\ndata: {json.dumps(payload)}\n\n".encode()
+
+        def stream() -> Iterator[bytes]:
+            # Same lock semantics as POST /v1/reindex -- one in-flight
+            # reindex at a time. A second client gets a single busy
+            # frame so it knows to fall back to polling /v1/reindex/status.
+            if not state.reindex_lock.acquire(blocking=False):
+                yield encode("busy", {"started_at": state.reindex_started_at})
+                return
+            try:
+                state.reindex_started_at = int(time.time())
+                # ingest.reindex_events yields (name, payload) tuples.
+                # We encode each one as an SSE frame and flush.
+                for name, payload in ingest.reindex_events(s, embedder=e if embed else None):
+                    yield encode(name, payload)
+            finally:
+                state.reindex_started_at = None
+                state.reindex_lock.release()
+
+        return StreamingResponse(
+            stream(),
+            media_type="text/event-stream",
+            # Event streams must NEVER be cached -- proxies + the
+            # browser would otherwise serve stale events on reconnect.
+            headers={
+                "Cache-Control": "no-store",
+                "X-Accel-Buffering": "no",  # nginx hint: stream immediately
+            },
+        )
 
     @v1.get("/reindex/status")
     def reindex_status() -> JSONResponse:
