@@ -22,7 +22,26 @@
         <span x-show="contextProject" x-cloak class="tree-title-scope"
               x-text="contextProject"></span>
       </h3>
-      <template x-if="treeRoot && Object.keys(treeRoot.children).length === 0">
+      {# v2.6.0 polish: context-aware empty-state copy. The blanket
+         "Add a code_repo?" message lied in BASE-only mode (where the
+         right action is "pick a workspace") and in truncated
+         workspaces (modules were omitted by the cap, not missing
+         from the store). Three states, three messages. #}
+      <template x-if="treeRoot && Object.keys(treeRoot.children).length === 0 && contextBaseOnly">
+        <p class="hint" style="padding:0.5rem;">
+          BASE-only view -- code is never BASE-flagged.
+          <a href="/workspaces">Pick a workspace</a> to see modules.
+        </p>
+      </template>
+      <template x-if="treeRoot && Object.keys(treeRoot.children).length === 0 && contextWorkspaceName && !contextBaseOnly">
+        <p class="hint" style="padding:0.5rem;">
+          No code modules in workspace
+          &ldquo;<span x-text="contextWorkspaceName"></span>&rdquo;.
+          <a href="/sources-page">Add a code_repo</a> whose project_key
+          is in this workspace.
+        </p>
+      </template>
+      <template x-if="treeRoot && Object.keys(treeRoot.children).length === 0 && !contextWorkspaceName && !contextBaseOnly">
         <p class="hint" style="padding:0.5rem;">
           No code modules in this view.
           <a href="/sources-page">Add a code_repo</a>?
