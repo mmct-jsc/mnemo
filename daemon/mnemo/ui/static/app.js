@@ -371,4 +371,479 @@
   // Expose the reduced-motion probe so call sites can branch their own
   // logic on it too (e.g. cy.animate durations).
   window.mnemoPrefersReducedMotion = prefersReducedMotion;
+
+  // ------------------------------------------------------------------
+  // v2.6 phase 7: Workspace switcher Alpine factory.
+  //
+  // Lives on window so x-data="workspaceSwitcher()" resolves on the
+  // top bar (see base.html). Named factory + NO double-init -- the
+  // Alpine.js auto-`init()` pattern is documented in
+  // feedback_alpine_double_init.md; pairing x-data with x-init="init()"
+  // is the anti-pattern this avoids.
+  //
+  // The switcher subscribes to /v1/events for workspace_activated /
+  // workspace_deleted / workspace_cleared so every open browser tab
+  // reflects activation changes without polling. Per pipeline 18
+  // (DOM-overlay over canvas-library effects) we use CSS class
+  // toggles for animations rather than imperative timeline work.
+  // ------------------------------------------------------------------
+  // ------------------------------------------------------------------
+  // v2.6 phase 10.2: chip-based project_key picker.
+  //
+  // _wsChipMixin returns the shared state + methods both
+  // workspaceSwitcher and workspacesPage spread into themselves.
+  // Input field hits /v1/fs/suggest + /v1/projects/known via the
+  // shared makeAutocomplete helper -- but since the helper lives
+  // inside a per-page <script> in base.html, we wire the suggestions
+  // manually here.
+  // ------------------------------------------------------------------
+  function _wsChipMixin() {
+    return {
+      chips: [],
+      chipInput: '',
+      chipSuggestions: [],
+      chipSuggestOpen: false,
+      chipActiveIdx: -1,
+
+      async refreshChipSuggestions(query) {
+        const q = (query || '').trim();
+        try {
+          const [fsResp, knownResp] = await Promise.all([
+            fetch('/v1/fs/suggest?prefix=' + encodeURIComponent(q)).catch(() => null),
+            fetch('/v1/projects/known').catch(() => null),
+          ]);
+          const fsList = fsResp && fsResp.ok ? (await fsResp.json()).candidates || [] : [];
+          const knownList = knownResp && knownResp.ok ? (await knownResp.json()).items || [] : [];
+          const lower = q.toLowerCase();
+          const out = [];
+          for (const it of knownList) {
+            if (!lower || it.project_key.toLowerCase().includes(lower)) {
+              out.push({
+                kind: 'project',
+                value: it.project_key,
+                meta: `${it.node_count} node${it.node_count === 1 ? '' : 's'}`,
+              });
+            }
+          }
+          for (const p of fsList) {
+            out.push({ kind: 'fs', value: p });
+          }
+          this.chipSuggestions = out.slice(0, 12);
+          this.chipSuggestOpen = this.chipSuggestions.length > 0;
+          this.chipActiveIdx = -1;
+        } catch (_) {
+          this.chipSuggestions = [];
+          this.chipSuggestOpen = false;
+        }
+      },
+
+      closeChipSuggestions() {
+        this.chipSuggestOpen = false;
+        this.chipActiveIdx = -1;
+      },
+
+      moveChipSuggestion(delta) {
+        if (!this.chipSuggestions.length) return;
+        const n = this.chipSuggestions.length;
+        this.chipActiveIdx = (this.chipActiveIdx + delta + n) % n;
+      },
+
+      async pickChipSuggestion(entry) {
+        if (!entry) return;
+        if (entry.kind === 'project') {
+          this.addChip(entry.value);
+        } else if (entry.kind === 'fs') {
+          // Resolve the path to a canonical project_key so the chip
+          // matches what retrieval will match against. The daemon's
+          // resolver is the single source of truth.
+          try {
+            const r = await fetch('/v1/projects/resolve', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ path: entry.value }),
+            });
+            if (r.ok) {
+              const data = await r.json();
+              this.addChip(data.project_key);
+            } else {
+              // Fallback: use the raw path so the user is never blocked.
+              this.addChip(entry.value);
+            }
+          } catch (_) {
+            this.addChip(entry.value);
+          }
+        }
+        this.chipInput = '';
+        this.closeChipSuggestions();
+      },
+
+      async submitChipInput() {
+        const raw = (this.chipInput || '').trim();
+        if (!raw) return;
+        // Heuristic: if the value looks like an absolute path
+        // (Windows drive letter or POSIX /), try /v1/projects/resolve.
+        // Otherwise treat it as a literal project_key.
+        const looksLikePath = /^([A-Za-z]:[\\/]|\/)/.test(raw);
+        if (looksLikePath) {
+          try {
+            const r = await fetch('/v1/projects/resolve', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ path: raw }),
+            });
+            if (r.ok) {
+              const data = await r.json();
+              this.addChip(data.project_key);
+              this.chipInput = '';
+              this.closeChipSuggestions();
+              return;
+            }
+          } catch (_) { /* fall through */ }
+        }
+        this.addChip(raw);
+        this.chipInput = '';
+        this.closeChipSuggestions();
+      },
+
+      addChip(value) {
+        const v = (value || '').trim();
+        if (!v) return;
+        if (!this.chips.includes(v)) this.chips.push(v);
+      },
+
+      removeChip(idx) {
+        if (idx < 0 || idx >= this.chips.length) return;
+        this.chips.splice(idx, 1);
+      },
+
+      resetChips(initial = []) {
+        this.chips = Array.isArray(initial) ? [...initial] : [];
+        this.chipInput = '';
+        this.closeChipSuggestions();
+      },
+    };
+  }
+
+  window.workspaceSwitcher = function () {
+    return {
+      ..._wsChipMixin(),
+      // --- State -------------------------------------------------------
+      workspaces: [],
+      active: null,
+      open: false,
+      showNewModal: false,
+      newName: '',
+      busy: false,
+      error: null,
+      capWarning: null,
+      _eventSource: null,
+
+      // --- Lifecycle ---------------------------------------------------
+      init() {
+        this.refresh();
+        this.subscribeToEvents();
+      },
+
+      destroy() {
+        if (this._eventSource) {
+          try { this._eventSource.close(); } catch (_) { /* ignore */ }
+          this._eventSource = null;
+        }
+      },
+
+      // --- Computed views ---------------------------------------------
+      get recent() {
+        const activeId = this.active && this.active.id;
+        return this.workspaces.filter((w) => w.id !== activeId);
+      },
+
+      get activeLabel() {
+        return this.active ? this.active.name : 'No workspace';
+      },
+
+      // --- Data fetchers ----------------------------------------------
+      async refresh() {
+        try {
+          const [list, active] = await Promise.all([
+            fetch('/v1/workspaces').then((r) => r.json()),
+            fetch('/v1/workspaces/active').then((r) => r.json()),
+          ]);
+          this.workspaces = Array.isArray(list) ? list : [];
+          this.active = (active && active.active) || null;
+          this.error = null;
+          // The soft-cap warning is workspace-scoped; if there's no
+          // active workspace anymore (cleared, deleted, FK SET NULL
+          // cascade), drop the lingering "!" indicator so the pill
+          // doesn't lie about a workspace that no longer exists.
+          if (this.active === null) {
+            this.capWarning = null;
+          }
+        } catch (e) {
+          this.error = `Failed to load workspaces: ${e}`;
+        }
+      },
+
+      // --- Activation -------------------------------------------------
+      async activate(workspaceId) {
+        this.busy = true;
+        this.error = null;
+        this.capWarning = null;
+        try {
+          const resp = await fetch(
+            `/v1/workspaces/${workspaceId}/activate`,
+            { method: 'POST' },
+          );
+          if (resp.status === 409) {
+            // Hard-cap refusal: surface the detail so the UI can show
+            // a "remove a project to activate" modal.
+            const body = await resp.json().catch(() => ({}));
+            const d = body.detail || {};
+            const msg = `Workspace too large: ${d.total_nodes} nodes over cap ${d.hard_cap}`;
+            this.error = msg;
+            return;
+          }
+          if (!resp.ok) {
+            const body = await resp.json().catch(() => ({}));
+            this.error = body.detail || `Activate failed (HTTP ${resp.status})`;
+            return;
+          }
+          const body = await resp.json();
+          if (body && body.soft_cap_exceeded) {
+            this.capWarning = `Large workspace -- retrieval may be slower (${body.total_nodes} nodes)`;
+          }
+          await this.refresh();
+          this.open = false;
+        } finally {
+          this.busy = false;
+        }
+      },
+
+      async clearActive() {
+        this.busy = true;
+        this.error = null;
+        this.capWarning = null;
+        try {
+          await fetch('/v1/workspaces/clear', { method: 'POST' });
+          await this.refresh();
+          this.open = false;
+        } finally {
+          this.busy = false;
+        }
+      },
+
+      // --- New workspace ----------------------------------------------
+      async createWorkspace() {
+        const name = (this.newName || '').trim();
+        if (!name) return;
+        this.busy = true;
+        this.error = null;
+        try {
+          const project_keys = [...this.chips];
+          const resp = await fetch('/v1/workspaces', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, project_keys }),
+          });
+          if (!resp.ok) {
+            const body = await resp.json().catch(() => ({}));
+            this.error = body.detail || `Create failed (HTTP ${resp.status})`;
+            return;
+          }
+          const ws = await resp.json();
+          // Auto-activate the new workspace -- matches the design's "create
+          // -> auto-activate" UX.
+          await this.activate(ws.id);
+          this.newName = '';
+          this.resetChips();
+          this.showNewModal = false;
+        } finally {
+          this.busy = false;
+        }
+      },
+
+      // --- SSE plumbing -----------------------------------------------
+      subscribeToEvents() {
+        try {
+          const es = new EventSource('/v1/events');
+          this._eventSource = es;
+          const refreshOn = (name) => {
+            es.addEventListener(name, () => {
+              this.refresh();
+            });
+          };
+          refreshOn('workspace_activated');
+          refreshOn('workspace_deleted');
+          refreshOn('workspace_cleared');
+          // The bell history widget cares about reindex events too,
+          // but the switcher itself only refreshes on workspace ones.
+          es.onerror = () => {
+            // Browser auto-reconnects with backoff; nothing to do.
+          };
+        } catch (e) {
+          // EventSource not available -- silent fallback to manual refresh
+          // on every dropdown open.
+          this.error = null;
+        }
+      },
+    };
+  };
+
+  // ------------------------------------------------------------------
+  // v2.6 phase 8: /workspaces management page Alpine factory.
+  //
+  // The page renders per-workspace cards with Activate / Duplicate /
+  // Delete actions + an inline "New workspace" form. Auto-refreshes
+  // on workspace events from /v1/events.
+  // ------------------------------------------------------------------
+  window.workspacesPage = function () {
+    return {
+      ..._wsChipMixin(),
+      workspaces: [],
+      active: null,
+      busy: false,
+      error: null,
+      showNew: false,
+      newName: '',
+      _eventSource: null,
+
+      init() {
+        this.refresh();
+        this.subscribeToEvents();
+      },
+
+      destroy() {
+        if (this._eventSource) {
+          try { this._eventSource.close(); } catch (_) { /* ignore */ }
+          this._eventSource = null;
+        }
+      },
+
+      async refresh() {
+        try {
+          const [list, active] = await Promise.all([
+            fetch('/v1/workspaces').then((r) => r.json()),
+            fetch('/v1/workspaces/active').then((r) => r.json()),
+          ]);
+          this.workspaces = Array.isArray(list) ? list : [];
+          this.active = (active && active.active) || null;
+        } catch (e) {
+          this.error = `Failed to load workspaces: ${e}`;
+        }
+      },
+
+      async activate(id) {
+        this.busy = true;
+        this.error = null;
+        try {
+          const resp = await fetch(`/v1/workspaces/${id}/activate`, { method: 'POST' });
+          if (resp.status === 409) {
+            const body = await resp.json().catch(() => ({}));
+            const d = body.detail || {};
+            this.error = `Workspace too large: ${d.total_nodes} nodes over cap ${d.hard_cap}`;
+            return;
+          }
+          if (!resp.ok) {
+            const body = await resp.json().catch(() => ({}));
+            this.error = body.detail || `Activate failed (HTTP ${resp.status})`;
+            return;
+          }
+          await this.refresh();
+        } finally {
+          this.busy = false;
+        }
+      },
+
+      async duplicate(w) {
+        this.busy = true;
+        this.error = null;
+        try {
+          // Append " copy" to the name (or " copy N" if collisions).
+          const base = `${w.name} copy`;
+          let candidate = base;
+          let n = 2;
+          const taken = new Set(this.workspaces.map((x) => x.name));
+          while (taken.has(candidate)) {
+            candidate = `${base} ${n++}`;
+          }
+          const resp = await fetch('/v1/workspaces', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              name: candidate,
+              project_keys: w.project_keys || [],
+              filter_prefs: w.filter_prefs || null,
+            }),
+          });
+          if (!resp.ok) {
+            const body = await resp.json().catch(() => ({}));
+            this.error = body.detail || `Duplicate failed (HTTP ${resp.status})`;
+            return;
+          }
+          await this.refresh();
+        } finally {
+          this.busy = false;
+        }
+      },
+
+      async confirmDelete(w) {
+        const isActive = this.active && this.active.id === w.id;
+        const prompt = isActive
+          ? `Delete the ACTIVE workspace '${w.name}'? You'll drop into BASE-only mode.`
+          : `Delete workspace '${w.name}'?`;
+        if (!window.confirm(prompt)) return;
+        this.busy = true;
+        this.error = null;
+        try {
+          const resp = await fetch(`/v1/workspaces/${w.id}`, { method: 'DELETE' });
+          if (!resp.ok) {
+            const body = await resp.json().catch(() => ({}));
+            this.error = body.detail || `Delete failed (HTTP ${resp.status})`;
+            return;
+          }
+          await this.refresh();
+        } finally {
+          this.busy = false;
+        }
+      },
+
+      async createWorkspace() {
+        const name = (this.newName || '').trim();
+        if (!name) return;
+        this.busy = true;
+        this.error = null;
+        try {
+          const project_keys = [...this.chips];
+          const resp = await fetch('/v1/workspaces', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, project_keys }),
+          });
+          if (!resp.ok) {
+            const body = await resp.json().catch(() => ({}));
+            this.error = body.detail || `Create failed (HTTP ${resp.status})`;
+            return;
+          }
+          const ws = await resp.json();
+          await this.activate(ws.id);
+          this.newName = '';
+          this.resetChips();
+          this.showNew = false;
+        } finally {
+          this.busy = false;
+        }
+      },
+
+      subscribeToEvents() {
+        try {
+          const es = new EventSource('/v1/events');
+          this._eventSource = es;
+          ['workspace_activated', 'workspace_deleted', 'workspace_cleared'].forEach((n) => {
+            es.addEventListener(n, () => this.refresh());
+          });
+        } catch (_) {
+          // EventSource not available; fall back to next-page-load refresh.
+        }
+      },
+    };
+  };
 })();

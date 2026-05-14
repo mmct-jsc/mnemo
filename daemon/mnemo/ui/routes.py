@@ -19,10 +19,33 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from mnemo import config, retrieve
+from mnemo import workspaces as ws_mod
 from mnemo.embed import Embedder
-from mnemo.store import Store
+from mnemo.store import Node, Store
 
 UI_DIR = Path(__file__).parent
+
+# v2.6.0: type-priority order for the workspace canvas. Used by the
+# /ui/graph-data route when the in-scope set exceeds the canvas cap.
+# Module-level so ruff N806 stays happy + the constant is testable
+# from outside.
+_GRAPH_TYPE_PRIORITY: dict[str, int] = {
+    "code_module": 0,
+    "code_class": 1,
+    "code_route": 2,
+    "code_endpoint": 3,
+    "code_component": 4,
+    "memory_reference": 5,
+    "memory_project": 6,
+    "memory_feedback": 7,
+    "memory_user": 8,
+    "session_summary": 9,
+    "project_doc": 10,
+    "plan_doc": 11,
+    "code_function": 12,
+    "code_method": 13,
+    "commit": 14,
+}
 TEMPLATES_DIR = UI_DIR / "templates"
 STATIC_DIR = UI_DIR / "static"
 
@@ -195,12 +218,55 @@ def mount_ui(
             _ctx(page="sources", sources=s.list_sources()),
         )
 
+    @app.get("/workspaces", response_class=HTMLResponse)
+    def workspaces_page(request: Request) -> Any:
+        """v2.6 phase 8: workspace management page.
+
+        Lists every workspace with per-card actions (Activate / Edit /
+        Duplicate / Delete). Live node-count + warnings come from
+        ``GET /v1/workspaces/<id>`` per-card; the page itself is a
+        thin shell that hosts the Alpine factory and lets it fetch.
+        """
+        return templates.TemplateResponse(
+            request,
+            "workspaces.html",
+            _ctx(page="workspaces"),
+        )
+
     # --- /code UI family (v2.0 phase 11+) --------------------------------
 
     @app.get("/code", response_class=HTMLResponse)
     def code_landing(request: Request, s: Store = Depends(get_store)) -> Any:
         """Landing page: one card per code_repo project + a cross-stack
-        endpoint summary."""
+        endpoint summary.
+
+        v2.6.0 polish: scopes to the active workspace's ``project_keys``.
+        When the workspace has no code-typed nodes in its set the page
+        shows an empty state (mentioning the workspace name) instead
+        of listing every code project on disk. With no active workspace
+        the page drops into BASE-only mode and shows no code projects
+        (code nodes are always project-scoped, never BASE-flagged).
+        """
+        # v2.6.0 polish: resolve the active workspace's project_keys.
+        # Three states:
+        #   active + project_keys non-empty -> filter to that set
+        #   active + project_keys empty     -> BASE-only (no code)
+        #   no active                       -> show all (back-compat)
+        active_ws = ws_mod.get_active_workspace(s)
+        if active_ws is None or not active_ws.project_keys:
+            # No active workspace OR active workspace with empty
+            # project_keys -> BASE-only UI mode per the v2.6 design.
+            # /code in BASE-only mode is empty (code nodes are always
+            # project-scoped, never BASE-flagged) so the page shows
+            # a "Pick a workspace" empty state.
+            scope_mode = "base_only"
+            scope_keys: set[str] = set()
+            scope_name: str | None = active_ws.name if active_ws else None
+        else:
+            scope_mode = "workspace"
+            scope_keys = set(active_ws.project_keys)
+            scope_name = active_ws.name
+
         # Aggregate code-typed nodes by project_key. A "project" here is
         # whatever project_key value the code nodes carry (auto-derived
         # from the source path during ingest).
@@ -216,6 +282,14 @@ def mount_ui(
         all_code = []
         for t in code_types:
             all_code.extend(s.list_nodes(type=t, limit=100_000))
+
+        # v2.6.0 polish: drop nodes outside the workspace scope BEFORE
+        # the aggregation. base_only collapses to an empty list since
+        # code nodes are never BASE-flagged.
+        if scope_mode == "workspace":
+            all_code = [n for n in all_code if n.project_key in scope_keys]
+        elif scope_mode == "base_only":
+            all_code = [n for n in all_code if n.base]
 
         # Group by project_key.
         by_project: dict[str | None, dict[str, int]] = {}
@@ -244,9 +318,25 @@ def mount_ui(
 
         # Cross-stack endpoint summary: every code_endpoint with the
         # number of incoming ``at_endpoint`` edges (the "fanout").
+        # v2.6.0 polish: skip endpoints whose only at_endpoint edges
+        # come from out-of-scope projects.
         endpoints = []
         for ep in s.list_nodes(type="code_endpoint", limit=10_000):
             in_edges = s.get_edges(dst_id=ep.id, relation="at_endpoint")
+            if scope_mode in ("workspace", "base_only"):
+                # Only count edges whose src node is in-scope.
+                src_ids = [e.src_id for e in in_edges]
+                if not src_ids:
+                    continue
+                src_nodes = s.get_nodes_by_ids(src_ids)
+                if scope_mode == "workspace":
+                    in_scope_count = sum(
+                        1 for n in src_nodes.values() if n.project_key in scope_keys
+                    )
+                else:  # base_only
+                    in_scope_count = sum(1 for n in src_nodes.values() if n.base)
+                if in_scope_count == 0:
+                    continue
             method, _, path = ep.source_path.removeprefix("endpoint:").partition(":")
             endpoints.append(
                 {
@@ -261,7 +351,13 @@ def mount_ui(
         return templates.TemplateResponse(
             request,
             "code_landing.html",
-            _ctx(page="code", projects=projects, endpoints=endpoints),
+            _ctx(
+                page="code",
+                projects=projects,
+                endpoints=endpoints,
+                workspace_scope_mode=scope_mode,
+                workspace_scope_name=scope_name,
+            ),
         )
 
     @app.get("/code/{project_key}", response_class=HTMLResponse)
@@ -489,6 +585,31 @@ def mount_ui(
         pg = _paginate(len(all_q), page, PAGE_SIZE_AUDIT)
         queries = all_q[pg["offset"] : pg["offset"] + pg["page_size"]]
 
+        # v2.6.0 polish: resolve hit IDs to {name, description, type}
+        # so the audit log shows what was actually returned instead of
+        # bare 12-char ID prefixes. Walks every hit ID across the
+        # rendered page, batches the lookup with get_nodes_by_ids
+        # (single SELECT), and exposes the map to the template as
+        # ``hit_meta``. Nodes that have since been removed by a
+        # reindex resolve to ``None`` and the template renders them
+        # as "[removed]" so the log row still makes sense.
+        all_hit_ids: set[str] = set()
+        for q in queries:
+            for nid in q.retrieved_ids or []:
+                all_hit_ids.add(nid)
+        hit_nodes = s.get_nodes_by_ids(list(all_hit_ids)) if all_hit_ids else {}
+        hit_meta: dict[str, dict[str, str | None]] = {}
+        for nid in all_hit_ids:
+            node = hit_nodes.get(nid)
+            if node is None:
+                hit_meta[nid] = {"name": None, "description": None, "type": None}
+            else:
+                hit_meta[nid] = {
+                    "name": node.name,
+                    "description": node.description or "",
+                    "type": node.type,
+                }
+
         # Summary stats over the FULL audit window so the side cards stay
         # stable across pagination.
         total_hits = sum(len(q.retrieved_ids) for q in all_q)
@@ -509,6 +630,7 @@ def mount_ui(
             _ctx(
                 page="audit",
                 queries=queries,
+                hit_meta=hit_meta,
                 pagination=pg,
                 pagination_qs=_pagination_qs(request),
                 total_hits=total_hits,
@@ -566,6 +688,8 @@ def mount_ui(
     @app.get("/ui/graph-data")
     def graph_data(
         project: str | None = None,
+        project_keys: str | None = None,
+        base_only: bool = False,
         node: str | None = None,
         hops: int = 2,
         s: Store = Depends(get_store),
@@ -573,14 +697,21 @@ def mount_ui(
         """v2.1 Nebula graph data feed.
 
         Backwards-compatible: no query string returns the full graph
-        (same shape the v1 page consumed). Optional scoping:
+        (same shape the v1 page consumed). Scoping params (v2.6.0
+        polish so Nebula mirrors the active workspace):
 
-        - ``?project=<key>``: only return nodes with that
-          ``project_key`` plus any cross-cutting BASE / NULL nodes
-          they connect to.
-        - ``?node=<id>&hops=<n>``: return the ego-network of
-          ``<id>`` out to ``n`` hops (default 2). Combine with
-          ``?project=`` to constrain the expansion to one project.
+        - ``?project=<key>``: legacy single-project filter (used by
+          /code deep-links). Nodes with that ``project_key`` plus
+          BASE / NULL nodes that connect to them.
+        - ``?project_keys=k1,k2,...``: workspace multi-project filter.
+          Returns nodes whose ``project_key`` is in the comma-separated
+          set OR is NULL (global) OR has ``base=True``.
+        - ``?base_only=1``: no-workspace UI mode. Returns ONLY nodes
+          with ``base=True``. The Nebula page lands here when no
+          workspace is active.
+        - ``?node=<id>&hops=<n>``: ego-network of ``<id>`` out to
+          ``n`` hops (default 2). Combine with any of the above
+          scope params to constrain the expansion.
 
         Each node carries ``type`` / ``project`` / ``source_path``
         / ``description`` so the file-tree panel can group and the
@@ -589,6 +720,44 @@ def mount_ui(
         Each edge carries ``relation`` + ``weight`` + ``confidence``
         so the canvas can encode uncertainty in line style.
         """
+        # Parse the new project_keys CSV up front so the seed-by-node
+        # and global-scan branches share the same filter set.
+        keys_set: set[str] | None = None
+        if project_keys:
+            keys_set = {k.strip() for k in project_keys.split(",") if k.strip()}
+        # v2.6.0 polish: surfaced in the response so the UI can render
+        # a "showing X of Y" truncation banner. The workspace path
+        # below sets this to the pre-cap size; other paths leave it
+        # at zero (no banner).
+        total_in_scope_total: int = 0
+        # v2.6.0 polish: every in-scope code_module returned UNBOUNDED
+        # so the Nebula left-panel file tree shows the full project
+        # layout even when the canvas is cap'd. The tree is the
+        # navigation surface -- truncating it would hide modules
+        # entirely. tree_modules is a flat list of {id, name,
+        # source_path, type, project} dicts; the client builds the
+        # tree from this side-channel instead of from the canvas
+        # elements.
+        tree_modules: list[dict[str, Any]] = []
+
+        # v2.6.0 polish: tighten scope semantics for workspaces. Two
+        # passes:
+        #   pass 1 (strict)   -- accept nodes whose project_key is IN
+        #                        the scope set OR who are BASE-flagged.
+        #                        NULL-project nodes do NOT pass in pass 1.
+        #   pass 2 (boundary) -- accept NULL-project nodes that share
+        #                        an edge with any pass-1 node. This is
+        #                        the "cross-cutting NULL nodes they
+        #                        connect to" contract from the docstring.
+        def _passes_scope_strict(node_obj: Node) -> bool:
+            if base_only:
+                return bool(node_obj.base)
+            if keys_set is not None:
+                return node_obj.project_key in keys_set or node_obj.base
+            if project:
+                return node_obj.project_key == project or node_obj.base
+            return True
+
         # Step 1: collect the seed node set.
         if node:
             seed = s.get_node(node)
@@ -609,14 +778,153 @@ def mount_ui(
                             next_frontier.add(nid)
                 frontier = next_frontier
             nodes = list(s.get_nodes_by_ids(list(seed_ids)).values())
+            # Scope filter only when a scope is set. Ego-network deep-links
+            # without scope return the entire BFS (matches pre-v2.6 contract).
+            if base_only or keys_set is not None or project:
+                in_scope = [n for n in nodes if _passes_scope_strict(n)]
+                in_scope_ids = {n.id for n in in_scope}
+                # pass 2: NULL-project boundary nodes EDGE-connected to in-scope.
+                boundary: list[Node] = []
+                if not base_only:
+                    null_candidates = [
+                        n
+                        for n in nodes
+                        if n.project_key is None and not n.base and n.id not in in_scope_ids
+                    ]
+                    if null_candidates and in_scope_ids:
+                        edge_set = s.get_edges_for_nodes(
+                            [n.id for n in null_candidates] + list(in_scope_ids)
+                        )
+                        connected: set[str] = set()
+                        for e in edge_set:
+                            if e.src_id in in_scope_ids and e.dst_id not in in_scope_ids:
+                                connected.add(e.dst_id)
+                            elif e.dst_id in in_scope_ids and e.src_id not in in_scope_ids:
+                                connected.add(e.src_id)
+                        boundary = [n for n in null_candidates if n.id in connected]
+                nodes = in_scope + boundary
         else:
-            nodes = s.list_nodes(limit=2000)
-            if project:
-                nodes = [
-                    n for n in nodes if n.project_key == project or n.project_key is None or n.base
-                ]
+            # v2.6.0 polish: when a workspace project_keys scope is set,
+            # query per-key (uses the project_key index) so the canvas
+            # gets EVERY in-scope node. The chat-companion (v3) will
+            # use the graph as a reference flow tree -- the user
+            # explicitly asked for "always display all", so no
+            # truncation cap. fcose layout choice + the client-side
+            # progressive layout strategy handle large graphs without
+            # blocking the main thread.
+            if keys_set is not None:
+                seen_ids: set[str] = set()
+                collected: list[Node] = []
+                # v2.6.0 polish: every in-scope node returned; the
+                # tree_modules side-channel still captures every module
+                # by source_path for the file tree navigation surface.
+                for key in keys_set:
+                    for n in s.list_nodes(
+                        project_key=key,
+                        limit=100_000,
+                        include_base=False,
+                    ):
+                        if n.id not in seen_ids:
+                            seen_ids.add(n.id)
+                            collected.append(n)
+                        if n.type == "code_module" and n.source_path:
+                            tree_modules.append(
+                                {
+                                    "id": n.id,
+                                    "name": n.name,
+                                    "source_path": n.source_path,
+                                    "type": n.type,
+                                    "project": n.project_key,
+                                }
+                            )
+                # BASE-flagged nodes apply to every workspace -- list them
+                # once and dedupe.
+                for n in s.list_nodes(limit=100_000):
+                    if n.base and n.id not in seen_ids:
+                        seen_ids.add(n.id)
+                        collected.append(n)
+                total_in_scope_total = len(collected)
+                # Type-priority sort so the architecture-shaping nodes
+                # land first in the rendered list -- when the client
+                # picks a layout the high-priority types sit near the
+                # center. No truncation.
+                collected.sort(key=lambda n: (_GRAPH_TYPE_PRIORITY.get(n.type, 99), -n.updated_at))
+                in_scope = collected
+                in_scope_ids = {n.id for n in in_scope}
+                # pass 2: NULL-project boundary nodes EDGE-connected to
+                # in-scope.
+                boundary: list[Node] = []
+                if in_scope_ids:
+                    null_candidates = [
+                        n
+                        for n in s.list_nodes(limit=100_000)
+                        if n.project_key is None and not n.base and n.id not in in_scope_ids
+                    ]
+                    if null_candidates:
+                        edge_set = s.get_edges_for_nodes(
+                            [n.id for n in null_candidates] + list(in_scope_ids)
+                        )
+                        connected: set[str] = set()
+                        for e in edge_set:
+                            if e.src_id in in_scope_ids and e.dst_id not in in_scope_ids:
+                                connected.add(e.dst_id)
+                            elif e.dst_id in in_scope_ids and e.src_id not in in_scope_ids:
+                                connected.add(e.src_id)
+                        boundary = [n for n in null_candidates if n.id in connected]
+                nodes = in_scope + boundary
+            elif base_only or project:
+                nodes = s.list_nodes(limit=100_000)
+                in_scope = [n for n in nodes if _passes_scope_strict(n)]
+                in_scope_ids = {n.id for n in in_scope}
+                tree_modules.extend(
+                    {
+                        "id": n.id,
+                        "name": n.name,
+                        "source_path": n.source_path,
+                        "type": n.type,
+                        "project": n.project_key,
+                    }
+                    for n in in_scope
+                    if n.type == "code_module" and n.source_path
+                )
+                boundary = []
+                if not base_only:
+                    null_candidates = [
+                        n
+                        for n in nodes
+                        if n.project_key is None and not n.base and n.id not in in_scope_ids
+                    ]
+                    if null_candidates and in_scope_ids:
+                        edge_set = s.get_edges_for_nodes(
+                            [n.id for n in null_candidates] + list(in_scope_ids)
+                        )
+                        connected = set()
+                        for e in edge_set:
+                            if e.src_id in in_scope_ids and e.dst_id not in in_scope_ids:
+                                connected.add(e.dst_id)
+                            elif e.dst_id in in_scope_ids and e.src_id not in in_scope_ids:
+                                connected.add(e.src_id)
+                        boundary = [n for n in null_candidates if n.id in connected]
+                nodes = in_scope + boundary
+            else:
+                # No scope param at all -- legacy behavior, cap at 2000
+                # to protect canvas rendering across the entire store.
+                nodes = s.list_nodes(limit=2000)
 
+        # v2.6.0 polish: no isolate drop. The user wants the full
+        # graph so v3 chat can reference any node + flow. Isolated
+        # nodes get a grid layout cluster on the canvas; the file
+        # tree on the left renders them too. The chat companion can
+        # still cite them. The layout choice (force vs grid) is the
+        # client's decision -- not ours to filter for it.
         elements: list[dict[str, Any]] = []
+        candidate_ids: set[str] = {n.id for n in nodes}
+        edges_for_render: list[Any] = []
+        if candidate_ids:
+            for edge in s.get_edges_for_nodes(list(candidate_ids)):
+                if edge.dst_id in candidate_ids and edge.src_id in candidate_ids:
+                    edges_for_render.append(edge)
+
         node_ids: set[str] = set()
         for n in nodes:
             elements.append(
@@ -635,19 +943,39 @@ def mount_ui(
             node_ids.add(n.id)
 
         # Step 2: edges. Only between nodes we surfaced.
-        if node_ids:
-            edges = s.get_edges_for_nodes(list(node_ids))
-            for edge in edges:
-                if edge.dst_id in node_ids and edge.src_id in node_ids:
-                    elements.append(
-                        {
-                            "data": {
-                                "source": edge.src_id,
-                                "target": edge.dst_id,
-                                "relation": edge.relation,
-                                "weight": edge.weight,
-                                "confidence": getattr(edge, "confidence", 1.0),
-                            }
+        for edge in edges_for_render:
+            if edge.dst_id in node_ids and edge.src_id in node_ids:
+                elements.append(
+                    {
+                        "data": {
+                            "source": edge.src_id,
+                            "target": edge.dst_id,
+                            "relation": edge.relation,
+                            "weight": edge.weight,
+                            "confidence": getattr(edge, "confidence", 1.0),
                         }
-                    )
-        return JSONResponse({"elements": elements})
+                    }
+                )
+        # v2.6.0 polish: expose how many nodes were available vs how
+        # many we returned so the canvas can show a "showing X of Y --
+        # drill into a module for the full ego-network" banner.
+        # ``total_in_scope`` is set inside the keys_set branch where
+        # priority-cap may have truncated; other branches leave it at 0
+        # which the client treats as "no truncation".
+        shown_count = len(node_ids)
+        # v2.6.0 polish: truncated is always False after the cap was
+        # dropped -- kept in the schema for back-compat with clients
+        # still reading the field. total_in_scope still useful so
+        # the UI can show "rendering 10,762 nodes" once.
+        return JSONResponse(
+            {
+                "elements": elements,
+                "shown_node_count": shown_count,
+                "total_in_scope": total_in_scope_total or shown_count,
+                "truncated": False,
+                # v2.6.0 polish: unbounded module list for the
+                # left-panel file tree. Lets the user navigate to a
+                # module that may not be rendered on the canvas.
+                "tree_modules": tree_modules,
+            }
+        )

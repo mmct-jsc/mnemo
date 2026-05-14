@@ -61,7 +61,120 @@
       </span>
       <span class="hint" x-show="progress.durationMs > 0" x-cloak
             x-text="' &middot; ' + (progress.durationMs / 1000).toFixed(1) + 's'"></span>
+      <!-- v2.6 phase 9: View report button surfaces after done when
+           the report has interesting buckets. Decision UX lives in the
+           modal opened by this button. -->
+      <button class="link-button"
+              type="button"
+              x-show="showReport" x-cloak
+              @click="openReportModal()">View report</button>
     </p>
+  </div>
+
+  <!-- v2.6 phase 9: reindex report modal (3 sections). Opens on
+       "View report" click after a reindex run that surfaced any
+       auto_skipped / malformed / suspicious files. Per-file
+       always_skip / always_keep / retry buttons feed a local
+       decisions map; Apply posts them to /v1/source_overrides. -->
+  <div class="reindex-report-modal-backdrop"
+       x-show="showReportModal" x-cloak
+       @click.self="closeReportModal({ reload: false })">
+    <div class="reindex-report-modal"
+         role="dialog"
+         aria-modal="true">
+      <header class="dash-card-head">
+        <h3>Reindex report</h3>
+        <button type="button" class="link-button"
+                @click="closeReportModal({ reload: false })">close</button>
+      </header>
+      <div class="report-modal-body" x-show="report" x-cloak>
+        <p class="hint">
+          <span x-text="report ? report.indexed_count : 0"></span> indexed,
+          <span x-text="report ? (report.auto_skipped?.length || 0) : 0"></span> auto-skipped,
+          <span x-text="report ? (report.malformed?.length || 0) : 0"></span> malformed,
+          <span x-text="report ? (report.suspicious?.length || 0) : 0"></span> suspicious
+        </p>
+
+        <!-- Auto-skipped (informational only; no user decision) -->
+        <section class="report-section"
+                 x-show="report && report.auto_skipped && report.auto_skipped.length" x-cloak>
+          <h4>Auto-skipped</h4>
+          <p class="hint">Structural skips (unsupported extension / oversize / read failure). No decision needed.</p>
+          <ul class="report-list">
+            <template x-for="item in (report?.auto_skipped || [])" :key="item.path">
+              <li>
+                <code x-text="item.path"></code>
+                <span class="report-reason" x-text="item.reason"></span>
+              </li>
+            </template>
+          </ul>
+        </section>
+
+        <!-- Malformed -->
+        <section class="report-section"
+                 x-show="report && report.malformed && report.malformed.length" x-cloak>
+          <h4>Malformed</h4>
+          <p class="hint">Files the parser couldn't handle. Pick a decision per file.</p>
+          <ul class="report-list">
+            <template x-for="item in (report?.malformed || [])" :key="item.path">
+              <li class="report-decision-row">
+                <div class="report-decision-meta">
+                  <code x-text="item.path"></code>
+                  <span class="report-reason" x-text="item.reason"></span>
+                </div>
+                <div class="report-decision-buttons">
+                  <button type="button"
+                          :class="{ 'is-picked': decisions[item.path] === 'always_skip' }"
+                          @click="setDecision(item.path, 'always_skip')">always_skip</button>
+                  <button type="button"
+                          :class="{ 'is-picked': decisions[item.path] === 'always_keep' }"
+                          @click="setDecision(item.path, 'always_keep')">always_keep</button>
+                  <button type="button"
+                          :class="{ 'is-picked': decisions[item.path] === 'retry' }"
+                          @click="setDecision(item.path, 'retry')">retry</button>
+                </div>
+              </li>
+            </template>
+          </ul>
+        </section>
+
+        <!-- Suspicious -->
+        <section class="report-section"
+                 x-show="report && report.suspicious && report.suspicious.length" x-cloak>
+          <h4>Suspicious</h4>
+          <p class="hint">Files flagged by the safeguards heuristics. Pick a decision per file.</p>
+          <ul class="report-list">
+            <template x-for="item in (report?.suspicious || [])" :key="item.path">
+              <li class="report-decision-row">
+                <div class="report-decision-meta">
+                  <code x-text="item.path"></code>
+                  <span class="report-reason" x-text="item.reason"></span>
+                  <span class="report-heuristic"
+                        x-show="item.heuristic" x-cloak
+                        x-text="'(' + item.heuristic + ')'"></span>
+                </div>
+                <div class="report-decision-buttons">
+                  <button type="button"
+                          :class="{ 'is-picked': decisions[item.path] === 'always_skip' }"
+                          @click="setDecision(item.path, 'always_skip')">always_skip</button>
+                  <button type="button"
+                          :class="{ 'is-picked': decisions[item.path] === 'always_keep' }"
+                          @click="setDecision(item.path, 'always_keep')">always_keep</button>
+                  <button type="button"
+                          :class="{ 'is-picked': decisions[item.path] === 'retry' }"
+                          @click="setDecision(item.path, 'retry')">retry</button>
+                </div>
+              </li>
+            </template>
+          </ul>
+        </section>
+      </div>
+
+      <footer class="report-modal-actions">
+        <button @click="closeReportModal({ reload: false })">Cancel</button>
+        <button class="primary" @click="applyDecisions()">Apply decisions</button>
+      </footer>
+    </div>
   </div>
 
   {% if sources %}
@@ -296,6 +409,14 @@ function sourcesPage() {
       errors: [],
       durationMs: 0,
     },
+    // v2.6 phase 9: three-section report from the reindex pipeline.
+    // Populated from the 'report' SSE event right before 'done'.
+    // ``decisions`` is a per-path map { path: 'always_skip' | 'always_keep' | 'retry' }
+    // collected from the modal's per-file buttons.
+    report: null,
+    showReport: false,
+    showReportModal: false,
+    decisions: {},
     _reindexCtrl: null,
     _reindexStream: null,
     form: { path: '', kind: 'memory_dir', project_key: '', include: '', exclude: '', enabled: true, force: false },
@@ -424,6 +545,15 @@ function sourcesPage() {
             if (data.errors && data.errors.length) {
               this.progress.errors.push(...data.errors);
             }
+          } else if (name === 'report') {
+            // v2.6 phase 9: three-section bucket lands right before 'done'.
+            this.report = data;
+            // Pre-populate decisions with 'retry' as the default so the
+            // user can submit without clicking every row.
+            const decisions = {};
+            for (const item of (data.malformed || [])) decisions[item.path] = 'retry';
+            for (const item of (data.suspicious || [])) decisions[item.path] = 'always_skip';
+            this.decisions = decisions;
           } else if (name === 'done') {
             this.progress.added      = data.added;
             this.progress.updated    = data.updated;
@@ -444,7 +574,19 @@ function sourcesPage() {
             window.toastAfterReload('Reindex done: ' + summary,
                                     data.errors?.length ? 'warn' : 'success');
             this.running = false;
-            setTimeout(() => location.reload(), 1500);
+            // v2.6 phase 9: if the report has anything to decide on,
+            // hold the page so the user can click View report before
+            // the table refreshes. Otherwise reload normally.
+            const hasReportContent = this.report && (
+              (this.report.malformed && this.report.malformed.length) ||
+              (this.report.suspicious && this.report.suspicious.length) ||
+              (this.report.auto_skipped && this.report.auto_skipped.length)
+            );
+            if (hasReportContent) {
+              this.showReport = true;  // unlock the View report button
+            } else {
+              setTimeout(() => location.reload(), 1500);
+            }
           }
         },
         onError: (_err) => {
@@ -475,6 +617,69 @@ function sourcesPage() {
       setTimeout(() => {
         this.progress.active = false;
       }, 2000);
+    },
+
+    // v2.6 phase 9: report modal interactions ------------------------
+
+    openReportModal() {
+      this.showReportModal = true;
+    },
+
+    closeReportModal({ reload } = { reload: true }) {
+      this.showReportModal = false;
+      if (reload) {
+        setTimeout(() => location.reload(), 250);
+      }
+    },
+
+    setDecision(path, decision) {
+      // Track per-file decisions in a local map; applyDecisions posts
+      // the whole batch to /v1/source_overrides.
+      this.decisions = { ...this.decisions, [path]: decision };
+    },
+
+    async applyDecisions() {
+      if (!this.report) return;
+      // Build the batch payload from every path the user has a decision
+      // for. Auto_skipped rows don't get decisions (they are structural
+      // skips); only malformed + suspicious land in /v1/source_overrides.
+      const items = [];
+      const candidate = [
+        ...(this.report.malformed || []).map(x => ({ ...x, _section: 'malformed' })),
+        ...(this.report.suspicious || []).map(x => ({ ...x, _section: 'suspicious' })),
+      ];
+      for (const item of candidate) {
+        const dec = this.decisions[item.path];
+        if (!dec) continue;
+        items.push({
+          source_path: item.path,
+          decision: dec,
+          reason: item._section + ':' + (item.reason || ''),
+        });
+      }
+      if (items.length === 0) {
+        this.closeReportModal({ reload: false });
+        return;
+      }
+      try {
+        const r = await fetch('/v1/source_overrides', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ items }),
+        });
+        if (!r.ok) {
+          const body = await r.json().catch(() => ({}));
+          window.toast('Failed to save decisions: ' + (body.detail || r.status), 'error');
+          return;
+        }
+        window.toastAfterReload(
+          'Saved ' + items.length + ' source override' + (items.length === 1 ? '' : 's'),
+          'success',
+        );
+        this.closeReportModal({ reload: true });
+      } catch (e) {
+        window.toast('Failed to save decisions: ' + e, 'error');
+      }
     },
 
     // v2.1 POST fallback retained -- kept verbatim from pre-phase-3

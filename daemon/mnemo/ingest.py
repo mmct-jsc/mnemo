@@ -29,7 +29,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from mnemo import auto_router, git_log, parsers
+from mnemo import auto_router, git_log, parsers, safeguards, workspaces
 from mnemo.parsers import code as code_parser
 from mnemo.parsers import scope as scope_resolver
 from mnemo.parsers import tree_sitter as ts_loader
@@ -360,42 +360,32 @@ def _build_pathspec(patterns: list[str]):  # type: ignore[no-untyped-def]
     return pathspec.PathSpec.from_lines("gitignore", patterns)
 
 
-def scan_source(source: Source) -> Iterator[ParsedFile]:
-    """Walk a source's path and yield one ParsedFile per indexable file.
+def iter_source_files(source: Source) -> Iterator[Path]:
+    """Yield each file path matched by a source's include / exclude rules.
 
-    Honors per-source ``include`` and ``exclude`` glob patterns
-    (gitignore-style via the pathspec library). Empty/unset include falls
-    back to the kind's default include set.
+    v2.6 phase 3: the file-walking half of :func:`scan_source` extracted
+    so the reindex pipeline can classify a file with
+    :mod:`mnemo.safeguards` BEFORE attempting a parse.
 
-    - ``claude_md`` source: always yields the single file (if it exists).
-      Patterns are ignored for single-file sources.
-    - ``memory_dir`` / ``plan_dir`` / ``transcripts``: walks the directory
-      and yields files that match include AND don't match exclude. Default
-      include matches ``*.md``, ``*.txt``, and ``*.pdf``.
-    - Index files named ``MEMORY.md`` are always skipped.
+    Mirrors :func:`scan_source`'s rules exactly (include / exclude
+    pathspecs, skip_dirs for code_repo, MEMORY.md drop). The only
+    difference is that nothing is parsed here -- consumers run their
+    own safeguard + parse pass.
     """
     p = Path(source.path)
     if not p.exists():
         return
     if p.is_file():
-        yield parse_file(p, kind=source.kind, project_key=source.project_key)
+        yield p
         return
-
     include_patterns = _parse_pattern_field(source.include) or _default_include_for_kind(
         source.kind
     )
-    # v2.0 phase 1 safety: empty include set means "this kind has no
-    # parser wired yet" (currently only ``docs_dir`` -- code_repo got
-    # its defaults in phase 4). Yield nothing rather than letting the
-    # rglob fan-out feed every file to the markdown parser.
     if not include_patterns:
         return
     exclude_patterns = _parse_pattern_field(source.exclude)
     include_spec = _build_pathspec(include_patterns)
     exclude_spec = _build_pathspec(exclude_patterns)
-    # v2.0 phase 4: skip the same noisy directories the auto-router
-    # skips. Without this, every reindex of a code_repo would try to
-    # parse every file in ``node_modules`` / ``__pycache__`` / etc.
     skip_dirs = auto_router.DEFAULT_SKIP_DIRS if source.kind == "code_repo" else frozenset()
 
     for f in sorted(p.rglob("*")):
@@ -411,6 +401,24 @@ def scan_source(source: Source) -> Iterator[ParsedFile]:
             continue
         if exclude_spec is not None and exclude_spec.match_file(rel_posix):
             continue
+        yield f
+
+
+def scan_source(source: Source) -> Iterator[ParsedFile]:
+    """Walk a source's path and yield one ParsedFile per indexable file.
+
+    Honors per-source ``include`` and ``exclude`` glob patterns
+    (gitignore-style via the pathspec library). Empty/unset include falls
+    back to the kind's default include set.
+
+    - ``claude_md`` source: always yields the single file (if it exists).
+      Patterns are ignored for single-file sources.
+    - ``memory_dir`` / ``plan_dir`` / ``transcripts``: walks the directory
+      and yields files that match include AND don't match exclude. Default
+      include matches ``*.md``, ``*.txt``, and ``*.pdf``.
+    - Index files named ``MEMORY.md`` are always skipped.
+    """
+    for f in iter_source_files(source):
         if source.kind == "code_repo":
             yield from parse_code_file(f, project_key=source.project_key)
         else:
@@ -453,14 +461,26 @@ def reindex_events(
 ) -> Iterator[tuple[str, dict]]:
     """Reindex enabled sources, yielding ``(event_name, payload)`` tuples.
 
-    Event sequence:
+    Event sequence (v2.6):
 
-      ('start', {'started_at': int})
-      ('file',  {'idx': int, 'path': str, 'status': str,
-                 'added': int, 'updated': int, 'unchanged': int,
-                 'errors': list}) -- one per parsed file
-      ('done',  {'added': int, 'updated': int, 'unchanged': int,
-                 'removed': int, 'errors': list, 'duration_ms': int})
+      ('start',      {'started_at': int})
+      ('classified', {'idx': int, 'path': str,
+                      'category': 'indexed'|'auto_skipped'|'malformed'|'suspicious',
+                      'reason': str, 'override_applied': bool})
+                     -- emitted ONCE per source-walked file
+      ('file',       {'idx': int, 'path': str, 'status': str,
+                      'added': int, 'updated': int, 'unchanged': int,
+                      'errors': list})
+                     -- emitted ONCE per indexed node. Files that
+                        auto_skip / suspect / malform do NOT emit file.
+                        code_repo files emit N file events (one per
+                        code unit).
+      ('report',     {'auto_skipped': list, 'malformed': list,
+                      'suspicious': list, 'indexed_count': int,
+                      'duration_ms': int})
+                     -- emitted ONCE right before 'done'
+      ('done',       {'added': int, 'updated': int, 'unchanged': int,
+                      'removed': int, 'errors': list, 'duration_ms': int})
 
     ``status`` is one of ``indexed`` / ``updated`` / ``unchanged`` /
     ``error``. The generator is the single source of truth -- the
@@ -470,11 +490,28 @@ def reindex_events(
     (module + declarations). After the upsert loop, a post-pass walks
     the freshly-upserted nodes' frontmatter for ``code_unit`` edge
     intent and creates ``defines`` / ``method_of`` / ``imports`` edges.
+
+    v2.6 phase 3: per-file ``classified`` events from :mod:`mnemo.safeguards`.
+    ``source_overrides`` consulted before classification (``always_skip``
+    forces auto_skipped; ``always_keep`` forces indexed; ``retry``
+    re-classifies on each run, same as no override). Three categorized
+    sections of the per-file decisions land in the ``report`` event so
+    the v2.6 UI can show malformed + suspicious lists with per-file
+    user decisions.
     """
     started_at = int(time.time())
     yield ("start", {"started_at": started_at})
 
     report = ReindexReport()
+    # v2.6 phase 3: per-file categorized report buckets. The final
+    # 'report' event is built from these right before 'done'.
+    safeguard_report: dict[str, list[dict]] = {
+        "auto_skipped": [],
+        "malformed": [],
+        "suspicious": [],
+    }
+    indexed_count = 0
+
     src_list = sources if sources is not None else store.list_sources(only_enabled=True)
     seen_source_paths: set[str] = set()
     # Track every just-touched code node so the edge post-pass can run
@@ -482,80 +519,169 @@ def reindex_events(
     # whole store.
     touched_code_node_ids: list[str] = []
     file_idx = 0
+    classified_idx = 0
 
     for src in src_list:
         try:
-            for parsed in scan_source(src):
-                node_source_path = parsed.source_path or str(parsed.path)
-                seen_source_paths.add(node_source_path)
-                existing = store.get_node_by_source(node_source_path)
-                file_idx += 1
-                # Default per-file event delta; set the right counter
-                # below based on which branch we took.
-                delta = {"added": 0, "updated": 0, "unchanged": 0}
-                status: str
-                if existing is None:
-                    new_node = Node.new(
-                        type=parsed.type,
-                        name=parsed.name,
-                        body=parsed.body,
-                        source_path=node_source_path,
-                        source_kind=parsed.source_kind,
-                        description=parsed.description,
-                        project_key=parsed.project_key,
-                        frontmatter_json=parsed.frontmatter_json,
-                        hash=parsed.hash,
-                        base=parsed.base,
+            for file_path in iter_source_files(src):
+                classified_idx += 1
+                path_str = str(file_path)
+
+                # Consult overrides BEFORE running safeguards. always_skip
+                # short-circuits to auto_skipped; always_keep forces the
+                # parse path (bypassing the suspicious heuristics);
+                # retry / no-override falls through to classify_file.
+                override = workspaces.get_source_override(store, path_str)
+                if override is not None and override.decision == "always_skip":
+                    payload = {
+                        "idx": classified_idx,
+                        "path": path_str,
+                        "category": "auto_skipped",
+                        "reason": "override:always_skip",
+                        "override_applied": True,
+                    }
+                    safeguard_report["auto_skipped"].append(
+                        {"path": path_str, "reason": "override:always_skip"}
                     )
-                    store.upsert_node(new_node)
-                    if embedder is not None:
-                        _embed(store, new_node, embedder)
-                    report.added += 1
-                    delta["added"] = 1
-                    status = "indexed"
-                    if parsed.type.startswith("code_"):
-                        touched_code_node_ids.append(new_node.id)
-                elif existing.hash != parsed.hash:
-                    existing.type = parsed.type
-                    existing.name = parsed.name
-                    existing.description = parsed.description
-                    existing.body = parsed.body
-                    existing.source_kind = parsed.source_kind
-                    existing.project_key = parsed.project_key
-                    existing.frontmatter_json = parsed.frontmatter_json
-                    existing.hash = parsed.hash
-                    existing.base = parsed.base
-                    existing.updated_at = int(time.time())
-                    store.upsert_node(existing)
-                    if embedder is not None:
-                        _embed(store, existing, embedder)
-                    report.updated += 1
-                    delta["updated"] = 1
-                    status = "updated"
-                    if parsed.type.startswith("code_"):
-                        touched_code_node_ids.append(existing.id)
-                else:
-                    report.unchanged += 1
-                    delta["unchanged"] = 1
-                    status = "unchanged"
-                    if parsed.type.startswith("code_"):
-                        # Same hash but the edges might have been
-                        # missed last run (e.g. an imports target was
-                        # added after the first reindex). Cheap to
-                        # re-resolve so include it in the post-pass.
-                        touched_code_node_ids.append(existing.id)
+                    yield ("classified", payload)
+                    continue
+
+                force_keep = override is not None and override.decision == "always_keep"
+                if not force_keep:
+                    classification = safeguards.classify_file(file_path)
+                    if classification.category == "auto_skipped":
+                        payload = {
+                            "idx": classified_idx,
+                            "path": path_str,
+                            "category": "auto_skipped",
+                            "reason": classification.reason or "auto_skipped",
+                            "override_applied": False,
+                        }
+                        safeguard_report["auto_skipped"].append(
+                            {"path": path_str, "reason": classification.reason or "auto_skipped"}
+                        )
+                        yield ("classified", payload)
+                        continue
+                    if classification.category == "suspicious":
+                        payload = {
+                            "idx": classified_idx,
+                            "path": path_str,
+                            "category": "suspicious",
+                            "reason": classification.reason or "suspicious",
+                            "override_applied": False,
+                        }
+                        safeguard_report["suspicious"].append(
+                            {
+                                "path": path_str,
+                                "reason": classification.reason or "suspicious",
+                                "heuristic": (classification.reason or "").split(":", 1)[0],
+                            }
+                        )
+                        yield ("classified", payload)
+                        continue
+
+                # Indexed path: emit one classified(indexed) before the
+                # per-node file events. Wrap parse in a try/except so a
+                # malformed file becomes a 'malformed' classification
+                # instead of crashing the source.
+                indexed_reason = (
+                    "override:always_keep" if force_keep else (classification.reason or "ok")
+                )
                 yield (
-                    "file",
+                    "classified",
                     {
-                        "idx": file_idx,
-                        "path": node_source_path,
-                        "status": status,
-                        **delta,
-                        "errors": [],
+                        "idx": classified_idx,
+                        "path": path_str,
+                        "category": "indexed",
+                        "reason": indexed_reason,
+                        "override_applied": force_keep,
                     },
                 )
+
+                try:
+                    if src.kind == "code_repo":
+                        parsed_files = list(parse_code_file(file_path, project_key=src.project_key))
+                    else:
+                        parsed_files = [
+                            parse_file(file_path, kind=src.kind, project_key=src.project_key)
+                        ]
+                except Exception as exc:  # noqa: BLE001 - per-file malformed bucket
+                    safeguard_report["malformed"].append(
+                        {
+                            "path": path_str,
+                            "reason": f"malformed:{exc.__class__.__name__}:{exc}",
+                            "retry_hint": "rerun reindex after editing the file",
+                        }
+                    )
+                    log.warning("malformed file %s: %s", path_str, exc)
+                    continue
+
+                indexed_count += 1
+                for parsed in parsed_files:
+                    node_source_path = parsed.source_path or str(parsed.path)
+                    seen_source_paths.add(node_source_path)
+                    existing = store.get_node_by_source(node_source_path)
+                    file_idx += 1
+                    delta = {"added": 0, "updated": 0, "unchanged": 0}
+                    status: str
+                    if existing is None:
+                        new_node = Node.new(
+                            type=parsed.type,
+                            name=parsed.name,
+                            body=parsed.body,
+                            source_path=node_source_path,
+                            source_kind=parsed.source_kind,
+                            description=parsed.description,
+                            project_key=parsed.project_key,
+                            frontmatter_json=parsed.frontmatter_json,
+                            hash=parsed.hash,
+                            base=parsed.base,
+                        )
+                        store.upsert_node(new_node)
+                        if embedder is not None:
+                            _embed(store, new_node, embedder)
+                        report.added += 1
+                        delta["added"] = 1
+                        status = "indexed"
+                        if parsed.type.startswith("code_"):
+                            touched_code_node_ids.append(new_node.id)
+                    elif existing.hash != parsed.hash:
+                        existing.type = parsed.type
+                        existing.name = parsed.name
+                        existing.description = parsed.description
+                        existing.body = parsed.body
+                        existing.source_kind = parsed.source_kind
+                        existing.project_key = parsed.project_key
+                        existing.frontmatter_json = parsed.frontmatter_json
+                        existing.hash = parsed.hash
+                        existing.base = parsed.base
+                        existing.updated_at = int(time.time())
+                        store.upsert_node(existing)
+                        if embedder is not None:
+                            _embed(store, existing, embedder)
+                        report.updated += 1
+                        delta["updated"] = 1
+                        status = "updated"
+                        if parsed.type.startswith("code_"):
+                            touched_code_node_ids.append(existing.id)
+                    else:
+                        report.unchanged += 1
+                        delta["unchanged"] = 1
+                        status = "unchanged"
+                        if parsed.type.startswith("code_"):
+                            touched_code_node_ids.append(existing.id)
+                    yield (
+                        "file",
+                        {
+                            "idx": file_idx,
+                            "path": node_source_path,
+                            "status": status,
+                            **delta,
+                            "errors": [],
+                        },
+                    )
             store.mark_source_indexed(src.path)
-        except Exception as exc:  # noqa: BLE001 - we want to keep going on bad files
+        except Exception as exc:  # noqa: BLE001 - we want to keep going on bad sources
             report.errors.append((src.path, str(exc)))
             log.warning("error scanning source %s: %s", src.path, exc)
             file_idx += 1
@@ -626,6 +752,22 @@ def reindex_events(
                     break
 
     duration_ms = max(0, int((time.time() - started_at) * 1000))
+
+    # v2.6 phase 3: three-section reindex report emitted right before
+    # 'done'. The UI listens for this event to populate the report
+    # modal; the daemon caches the most recent one in app.state for
+    # the GET /v1/reindex/report endpoint (phase 6).
+    yield (
+        "report",
+        {
+            "auto_skipped": list(safeguard_report["auto_skipped"]),
+            "malformed": list(safeguard_report["malformed"]),
+            "suspicious": list(safeguard_report["suspicious"]),
+            "indexed_count": indexed_count,
+            "duration_ms": duration_ms,
+        },
+    )
+
     yield (
         "done",
         {

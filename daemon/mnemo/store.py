@@ -481,6 +481,55 @@ CREATE TABLE IF NOT EXISTS feedback_event (
 CREATE INDEX IF NOT EXISTS idx_feedback_query ON feedback_event(query_id);
 CREATE INDEX IF NOT EXISTS idx_feedback_node  ON feedback_event(node_id);
 CREATE INDEX IF NOT EXISTS idx_feedback_ts    ON feedback_event(created_at DESC);
+
+-- v2.6 phase 1: workspaces -- user-named bundles of project_keys + filter
+-- prefs. The active workspace scopes every page's view (Nebula / /code /
+-- Search / v3 chat) to the bundle's projects; with no active workspace
+-- the UI shows BASE-flagged nodes only.
+--
+-- Time columns store epoch milliseconds (NOT seconds like the rest of
+-- the schema). The extra precision keeps rapid create / activate cycles
+-- ordered correctly across a single test run, and the UI consumes the
+-- value directly via `new Date(ms)`.
+CREATE TABLE IF NOT EXISTS workspaces (
+  id                TEXT PRIMARY KEY,
+  name              TEXT NOT NULL UNIQUE,
+  project_keys      TEXT NOT NULL,                 -- JSON array
+  filter_prefs      TEXT,                          -- JSON object (or NULL)
+  page_state        TEXT,                          -- JSON object (or NULL)
+  created_at        INTEGER NOT NULL,
+  updated_at        INTEGER NOT NULL,
+  last_activated_at INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_workspaces_activated
+  ON workspaces(last_activated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_workspaces_created
+  ON workspaces(created_at DESC);
+
+-- Singleton row holding the active workspace pointer.
+-- Empty (no row) / NULL active_id means "no workspace active = BASE-only
+-- UI mode". FK ON DELETE SET NULL so deleting the active workspace
+-- automatically clears the pointer; PRAGMA foreign_keys = ON (set in
+-- Store.__init__) enforces this.
+CREATE TABLE IF NOT EXISTS workspace_state (
+  singleton    INTEGER PRIMARY KEY CHECK (singleton = 0),
+  active_id    TEXT REFERENCES workspaces(id) ON DELETE SET NULL,
+  activated_at INTEGER
+);
+
+-- Per-path decisions from the reindex report's malformed + suspicious
+-- sections. Reindex consults this table BEFORE classifying so a user's
+-- "always_skip" / "always_keep" / "retry" choice persists across runs.
+CREATE TABLE IF NOT EXISTS source_overrides (
+  source_path TEXT PRIMARY KEY,
+  decision    TEXT NOT NULL,    -- 'always_skip' | 'always_keep' | 'retry'
+  reason      TEXT,             -- e.g. 'suspicious:suspected_secret'
+  decided_at  INTEGER NOT NULL  -- epoch milliseconds
+);
+
+CREATE INDEX IF NOT EXISTS idx_source_overrides_decided
+  ON source_overrides(decided_at DESC);
 """
 
 
