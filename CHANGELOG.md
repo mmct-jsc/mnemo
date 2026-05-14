@@ -2,6 +2,86 @@
 
 All notable changes to mnemo are documented here.
 
+## [2.5.0] - 2026-05-14
+
+**JavaScript + TypeScript Tier 1 + Tier 2.** Closes a long-standing
+v2.0 gap: until this release, JS / TS files only got a
+``code_module`` node -- no declarations, no imports, no call sites
+for the Tier 2 resolver. v2.5.0 wires structural extraction for
+both languages.
+
+### Added (JS/TS structural extractor)
+
+New extractor ``_extract_jsts`` in ``daemon/mnemo/parsers/code.py``
+registered against ``javascript``, ``typescript``, AND ``tsx``.
+Detects:
+
+  - ``function foo() {}`` -> ``code_function``
+  - ``class Foo { ... }`` -> ``code_class``
+  - ``method_definition`` inside a class -> ``code_method`` with
+    ``parent_source_path`` pointing at the class
+  - ``const f = () => {}`` / ``const f = function() {}`` (modern
+    arrow-function module-level idiom) -> ``code_function`` named
+    after the variable
+  - ``export function foo() {}`` -> same as ``function foo() {}``
+    (export wrapper is transparently unwrapped)
+
+TypeScript-specific syntax (parameter / return type annotations,
+``interface_declaration``, ``type_alias_declaration``, ``enum_declaration``)
+is silently ignored -- the underlying declaration nodes are the
+same shape as JS, so one shared extractor handles both. TSX
+inherits the TS extractor; the React framework extractor in
+``daemon/mnemo/extractors/react.py`` continues to add component-
+level units on top.
+
+### Added (JS/TS imports)
+
+``_extract_jsts_imports`` recognizes the standard ECMAScript
+``import`` shapes:
+
+  - ``import x from 'mod'``       -> ``mod``
+  - ``import { a, b } from 'mod'`` -> ``mod`` (NOT a / b)
+  - ``import * as ns from 'mod'`` -> ``mod``
+  - ``import 'mod'`` (side-effect) -> ``mod``
+
+Dynamic ``import('mod')`` and CommonJS ``require('mod')`` are
+NOT captured yet -- the import edge model targets module-level
+declarative dependencies that are stable across runs. Lands in a
+later cut alongside additional resolver heuristics.
+
+### Added (JS/TS call sites for Tier 2)
+
+``_jsts_call_sites`` walks each function / method body collecting
+``call_expression`` nodes. Two shapes recorded:
+
+  - ``foo()`` -> ``CallSite(callee_name='foo', receiver=None)``
+  - ``a.b()`` -> ``CallSite(callee_name='b', receiver='a')``
+
+The existing language-agnostic ``scope_resolver.resolve_calls``
+(v2.0 phase 5) consumes these and emits ``calls`` edges -- so JS
+/ TS files now contribute to the Tier 2 graph alongside Python.
+
+### Deferred
+
+- **Go Tier 1 + Tier 2.** Go's grammar (receivers, packages, no
+  classes, different import shape) needs its own pass. Tracked as
+  v2.5.1 in the handover.
+- **CommonJS `require()` imports** + **dynamic `import()` calls.**
+  Less common in modern codebases; the static ``import`` shape
+  covers the majority of cross-module dependencies.
+- **Cross-file resolver heuristics specific to JS/TS** (npm package
+  receivers, JSX `<Component />` call sites). The general resolver
+  works on the shapes we emit; framework extractors layer on top.
+
+### Tests
+
+- ``daemon/tests/unit/test_parsers_code_jsts.py`` (11 new cases):
+  function / class / method / arrow-function declarations,
+  default + named imports, free + member call sites,
+  TS-with-type-annotations function + class + imports, registry
+  contains JS + TS keys.
+- Total daemon suite: 696 passing (was 685 + 11 new).
+
 ## [2.4.0] - 2026-05-14
 
 **Phase 8: Django framework extractor.** The last backend framework
