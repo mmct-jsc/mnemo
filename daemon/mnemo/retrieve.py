@@ -283,14 +283,28 @@ def _tokenize(text: str) -> list[str]:
     return [t.lower() for t in _TOKEN_RE.findall(text) if len(t) >= 3]
 
 
+# v2.6.0 polish: cap the body slice we walk for lexical matching so an
+# enormous body (e.g. a 500 KB Plan_doc) doesn't slow the scorer. 32 KB
+# is enough to cover most handovers + feedback notes end-to-end while
+# bounding the per-candidate cost. Terms past the cap are missed; the
+# trade-off is explicit and documented in the test.
+_LEXICAL_BODY_CAP = 32 * 1024
+
+
 def _lexical_score(query_tokens: list[str], node: Node) -> float:
     """Fraction of query tokens that appear (as substrings) in the node's
-    name + description. This catches exact-term matches the embedding
-    tends to dilute on short queries.
+    name + description + body.
+
+    Catches exact-term matches the embedding tends to dilute on long
+    bodies. Without the body in the haystack a verbose handover whose
+    *body* literally contains every distinctive query term loses to a
+    popular short doc with zero keyword overlap because the graph-edge
+    boost dominates the small gap (v2.6.0 polish lesson).
     """
     if not query_tokens:
         return 0.0
-    haystack = (node.name + " " + (node.description or "")).lower()
+    body_slice = (node.body or "")[:_LEXICAL_BODY_CAP]
+    haystack = (node.name + " " + (node.description or "") + " " + body_slice).lower()
     if not haystack.strip():
         return 0.0
     matches = sum(1 for t in query_tokens if t in haystack)
