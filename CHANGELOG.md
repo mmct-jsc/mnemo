@@ -2,6 +2,89 @@
 
 All notable changes to mnemo are documented here.
 
+## [2.5.1] - 2026-05-14
+
+**Go Tier 1 + Tier 2.** Closes the v2-deferred sweep -- v2.5.0
+added JS + TS, this release closes Go. Every bundled language
+now reaches Python parity in the structural extractor.
+
+### Added (Go structural extractor)
+
+New ``_extract_go`` in ``daemon/mnemo/parsers/code.py`` registered
+against ``go``. Detects:
+
+  - ``func foo() {}``               -> ``code_function``
+  - ``func (r *Foo) m() {}``        -> ``code_method`` with
+                                        ``parent_source_path`` ->
+                                        the ``Foo`` ``code_class``
+  - ``func (s Foo) m() {}``         -> same shape (value receiver
+                                        vs pointer; both produce
+                                        a parented method)
+  - ``type Foo struct { ... }``     -> ``code_class``
+  - ``type Foo interface { ... }``  -> ``code_class``
+
+Go has no classes per se, but structs + their receiver-methods
+are the natural class-analogue. Using ``code_class`` keeps the
+schema consistent across languages so cross-stack queries can
+join code_method -> code_class regardless of source language.
+
+A two-pass walk handles the receiver-resolution edge case
+where a method declaration appears in the file BEFORE its
+receiver type's ``type_declaration``: pass 1 collects all type
+declarations into ``type_units_by_name``, pass 2 walks methods
+and looks up the parent.
+
+### Added (Go imports)
+
+``_extract_go_imports`` recognizes both shapes:
+
+  - ``import "fmt"``                -> ``fmt``
+  - ``import ( "fmt"; "os" )``      -> ``fmt`` + ``os``
+  - ``import alias "pkg/path"``     -> ``pkg/path`` (path, not alias)
+  - ``import _ "pkg"`` (blank)      -> the path
+  - ``import . "pkg"`` (dot)        -> the path
+
+The DFS walker handles both ``import_declaration -> import_spec``
+(single) and ``import_declaration -> import_spec_list -> N
+import_spec`` (grouped).
+
+### Added (Go call sites for Tier 2)
+
+``_go_call_sites`` walks function / method bodies for
+``call_expression`` nodes, skipping nested ``func_literal`` /
+``function_declaration`` / ``method_declaration`` so they
+don't pollute the enclosing function's call_sites:
+
+  - ``foo()``        -> ``CallSite(callee='foo', receiver=None)``
+  - ``pkg.Func()``   -> ``CallSite(callee='Func', receiver='pkg')``
+  - ``obj.method()`` -> same shape as ``pkg.Func()`` (we can't
+                        distinguish package call from method call
+                        without semantic analysis; the Tier 2
+                        resolver handles both via imports + same-
+                        module fallback)
+
+### v2-deferred sweep COMPLETE
+
+With this release the v2 deferred-work backlog is closed:
+
+| Release | What | Status |
+|---|---|---|
+| v2.3.0 | git-log ingestion + provenance edges (phase 9) | shipped |
+| v2.4.0 | Django framework extractor (phase 8) | shipped |
+| v2.5.0 | JavaScript + TypeScript Tier 1 + Tier 2 | shipped |
+| v2.5.1 | Go Tier 1 + Tier 2 | THIS RELEASE |
+
+Next big chapter: **v3 AI chatbot/companion**.
+
+### Tests
+
+- ``daemon/tests/unit/test_parsers_code_go.py`` (10 new cases):
+  function declaration, struct + interface -> code_class,
+  pointer + value receiver methods with parent resolution,
+  simple + grouped imports (incl. aliased), free + package
+  call sites, registry contains ``go`` key.
+- Total daemon suite: 706 passing (was 696 + 10 new).
+
 ## [2.5.0] - 2026-05-14
 
 **JavaScript + TypeScript Tier 1 + Tier 2.** Closes a long-standing
