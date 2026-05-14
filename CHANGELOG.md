@@ -2,6 +2,67 @@
 
 All notable changes to mnemo are documented here.
 
+## [2.2.5] - 2026-05-14
+
+**Phase 5 of the v2.2 progressive-UX rollout.** Body content now
+reveals progressively in every preview surface. The v2.2 design
+is complete with this release.
+
+### Changed (body streaming)
+
+``window.mnemoRenderBody`` keeps the same call-site signature
+``(targetEl, body, { type, sourcePath })`` and the same return
+contract ('code' / 'plain' / 'markdown') but routes the actual
+reveal through ``window.mnemoStreamText`` from v2.2.0. Per-branch
+table:
+
+| Branch | Unit | Cadence |
+|---|---|---|
+| ``code_*`` | line | 8 ms/line, Prism re-highlights every ~80 ms |
+| ``commit`` | line | 8 ms/line into a plain ``<pre>`` |
+| markdown | word | 20 ms/word, sequential over text-node spans |
+
+Cold-load fallback: if ``window.mnemoStreamText`` hasn't hydrated
+yet (rare -- ``app.js`` is ``<script defer>``), the helper falls
+back to a one-shot innerHTML write so the user still sees
+content. The next call streams normally.
+
+### Added (cancellation)
+
+Each call sets ``targetEl._mnemoStreamCancel`` to a closure that
+aborts the in-flight stream + flushes remaining content
+immediately. Calling ``mnemoRenderBody`` twice on the same target
+cancels the prior reveal before starting the new one -- so
+clicking a neighbor mid-stream no longer races two reveals into
+the same panel. The handle is also addressable by future
+coordinators (chat panel, focus-node controller) without
+changing the call-site signature.
+
+### Accessibility
+
+``mnemoStreamText`` already collapses every primitive's delay to
+zero under ``prefers-reduced-motion: reduce`` (verified by
+``test_app_js_honors_reduced_motion``). No special-casing needed
+in ``mnemoRenderBody`` itself.
+
+### Tests
+
+- ``daemon/tests/unit/test_body_streaming.py`` (9 new cases) --
+  surface contract: helper still defined, mode strings preserved,
+  ``mnemoStreamText`` wired, ``unit: 'line'`` for code/commit,
+  ``unit: 'word'`` for markdown, Prism still invoked, cancel
+  handle exposed, prior stream cancelled, reduced-motion path
+  intact.
+- Total daemon suite: 650 passing.
+
+### Where this lands the design
+
+Section 5 of ``docs/plans/2026-05-14-ux-progressive-design.md``
+is the last v2.2 phase. With this release the unified
+progressive-UX pattern -- skeleton -> stream -> settle -- runs
+across reindex, Nebula initial paint, node-to-node transitions,
+AND body previews. Ready to underpin the v2.3 chat layer.
+
 ## [2.2.4] - 2026-05-14
 
 **DOM-overlay pulse (architectural rewrite) + persisted filter /
