@@ -533,7 +533,7 @@ wheels = [
 
 [[package]]
 name = "mnemo"
-version = "2.2.7"
+version = "2.3.0"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
