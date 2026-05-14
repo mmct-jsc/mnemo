@@ -545,4 +545,166 @@
       },
     };
   };
+
+  // ------------------------------------------------------------------
+  // v2.6 phase 8: /workspaces management page Alpine factory.
+  //
+  // The page renders per-workspace cards with Activate / Duplicate /
+  // Delete actions + an inline "New workspace" form. Auto-refreshes
+  // on workspace events from /v1/events.
+  // ------------------------------------------------------------------
+  window.workspacesPage = function () {
+    return {
+      workspaces: [],
+      active: null,
+      busy: false,
+      error: null,
+      showNew: false,
+      newName: '',
+      newProjectKeysInput: '',
+      _eventSource: null,
+
+      init() {
+        this.refresh();
+        this.subscribeToEvents();
+      },
+
+      destroy() {
+        if (this._eventSource) {
+          try { this._eventSource.close(); } catch (_) { /* ignore */ }
+          this._eventSource = null;
+        }
+      },
+
+      async refresh() {
+        try {
+          const [list, active] = await Promise.all([
+            fetch('/v1/workspaces').then((r) => r.json()),
+            fetch('/v1/workspaces/active').then((r) => r.json()),
+          ]);
+          this.workspaces = Array.isArray(list) ? list : [];
+          this.active = (active && active.active) || null;
+        } catch (e) {
+          this.error = `Failed to load workspaces: ${e}`;
+        }
+      },
+
+      async activate(id) {
+        this.busy = true;
+        this.error = null;
+        try {
+          const resp = await fetch(`/v1/workspaces/${id}/activate`, { method: 'POST' });
+          if (resp.status === 409) {
+            const body = await resp.json().catch(() => ({}));
+            const d = body.detail || {};
+            this.error = `Workspace too large: ${d.total_nodes} nodes over cap ${d.hard_cap}`;
+            return;
+          }
+          if (!resp.ok) {
+            const body = await resp.json().catch(() => ({}));
+            this.error = body.detail || `Activate failed (HTTP ${resp.status})`;
+            return;
+          }
+          await this.refresh();
+        } finally {
+          this.busy = false;
+        }
+      },
+
+      async duplicate(w) {
+        this.busy = true;
+        this.error = null;
+        try {
+          // Append " copy" to the name (or " copy N" if collisions).
+          const base = `${w.name} copy`;
+          let candidate = base;
+          let n = 2;
+          const taken = new Set(this.workspaces.map((x) => x.name));
+          while (taken.has(candidate)) {
+            candidate = `${base} ${n++}`;
+          }
+          const resp = await fetch('/v1/workspaces', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              name: candidate,
+              project_keys: w.project_keys || [],
+              filter_prefs: w.filter_prefs || null,
+            }),
+          });
+          if (!resp.ok) {
+            const body = await resp.json().catch(() => ({}));
+            this.error = body.detail || `Duplicate failed (HTTP ${resp.status})`;
+            return;
+          }
+          await this.refresh();
+        } finally {
+          this.busy = false;
+        }
+      },
+
+      async confirmDelete(w) {
+        const isActive = this.active && this.active.id === w.id;
+        const prompt = isActive
+          ? `Delete the ACTIVE workspace '${w.name}'? You'll drop into BASE-only mode.`
+          : `Delete workspace '${w.name}'?`;
+        if (!window.confirm(prompt)) return;
+        this.busy = true;
+        this.error = null;
+        try {
+          const resp = await fetch(`/v1/workspaces/${w.id}`, { method: 'DELETE' });
+          if (!resp.ok) {
+            const body = await resp.json().catch(() => ({}));
+            this.error = body.detail || `Delete failed (HTTP ${resp.status})`;
+            return;
+          }
+          await this.refresh();
+        } finally {
+          this.busy = false;
+        }
+      },
+
+      async createWorkspace() {
+        const name = (this.newName || '').trim();
+        if (!name) return;
+        this.busy = true;
+        this.error = null;
+        try {
+          const project_keys = (this.newProjectKeysInput || '')
+            .split(',')
+            .map((s) => s.trim())
+            .filter(Boolean);
+          const resp = await fetch('/v1/workspaces', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, project_keys }),
+          });
+          if (!resp.ok) {
+            const body = await resp.json().catch(() => ({}));
+            this.error = body.detail || `Create failed (HTTP ${resp.status})`;
+            return;
+          }
+          const ws = await resp.json();
+          await this.activate(ws.id);
+          this.newName = '';
+          this.newProjectKeysInput = '';
+          this.showNew = false;
+        } finally {
+          this.busy = false;
+        }
+      },
+
+      subscribeToEvents() {
+        try {
+          const es = new EventSource('/v1/events');
+          this._eventSource = es;
+          ['workspace_activated', 'workspace_deleted', 'workspace_cleared'].forEach((n) => {
+            es.addEventListener(n, () => this.refresh());
+          });
+        } catch (_) {
+          // EventSource not available; fall back to next-page-load refresh.
+        }
+      },
+    };
+  };
 })();
