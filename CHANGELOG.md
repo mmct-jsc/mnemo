@@ -2,6 +2,38 @@
 
 All notable changes to mnemo are documented here.
 
+## [2.1.3] - 2026-05-14
+
+**Hotfix.** The /code page project-card progress bars were
+invisible (zero-width strips) after v2.1.1's palette refactor.
+Apologies for the v2.1.2 patch -- it fixed the colors but not
+the underlying box-model bug.
+
+### Fixed
+
+- **/code progress bars now actually render.** The /code template
+  marks up each bar as ``<span class="bar-track"><span
+  class="bar-fill"></span></span>``. ``<span>`` defaults to
+  ``display: inline``; per the CSS spec, inline elements ignore
+  ``width`` and ``height``. The inline ``style="width: 8.7%"``
+  and the CSS ``height: 100%`` were both silently dropped on the
+  floor, so each bar rendered at 0x0 -- DOM-present, correctly
+  colored, but invisible.
+
+  The outer ``.bar-track`` happened to be sized because it's a
+  grid item (grid items are blockified by spec). The inner
+  ``.bar-fill`` is nested one level deeper, NOT a grid item, so
+  it remained inline.
+
+  Fix: ``display: block`` on the scoped ``.code-project-card-bars
+  .bar-fill`` rule. Also added defensively to the unscoped rule
+  so the dashboard's ``.bar-fill`` paints regardless of whether
+  the template uses ``<div>`` or ``<span>``.
+
+  Verified live: every bar now has computed height 4px and a
+  proportional computed width (8.7% -> 20.1px on a 231.6px track,
+  49.1% -> 113.7px, etc).
+
 ## [2.1.2] - 2026-05-13
 
 **Two follow-on bug fixes** from real-use feedback minutes after
