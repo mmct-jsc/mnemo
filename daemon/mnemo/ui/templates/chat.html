@@ -31,7 +31,16 @@
             <div class="tool-result" x-text="'got result for ' + (m.content.id || '')"></div>
           </template>
           <template x-if="m.role === 'user' || m.role === 'assistant'">
-            <div class="msg-body" x-html="renderText(m.content.text || '')"></div>
+            <div>
+              <div class="msg-body" x-html="renderText(m.content.text || '')"></div>
+              <template x-for="(d, di) in extractDrafts(m.content.text || '')"
+                        :key="m.key + '-d' + di">
+                <div class="mnemo-draft-card">
+                  <pre x-text="d.raw"></pre>
+                  <button class="primary" @click="saveDraft(d)">Save as memory</button>
+                </div>
+              </template>
+            </div>
           </template>
         </div>
       </template>
@@ -122,6 +131,54 @@ function chatPage() {
         ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
       return esc(t).replace(/\[mnemo:([^\]\s]+)\]/g,
         '<a href="/node/$1" class="cite-link">[mnemo:$1]</a>');
+    },
+    // v3 phase 10: doc-helper. Pull ```mnemo-draft fenced blocks out
+    // of the assistant text so the UI can render a one-click save.
+    extractDrafts(text) {
+      const out = [];
+      const re = /```mnemo-draft\s*\n([\s\S]*?)```/g;
+      let m;
+      while ((m = re.exec(text || '')) !== null) {
+        const raw = m[1];
+        const fm = raw.match(/^---\s*\n([\s\S]*?)\n---\s*\n?([\s\S]*)$/);
+        const front = {};
+        let body = raw.trim();
+        if (fm) {
+          body = (fm[2] || '').trim();
+          for (const line of fm[1].split('\n')) {
+            const kv = line.match(/^([A-Za-z_]+):\s*(.*)$/);
+            if (kv) front[kv[1]] = kv[2].trim();
+          }
+        }
+        out.push({ raw, front, body });
+      }
+      return out;
+    },
+    async saveDraft(d) {
+      const typeMap = {
+        user: 'memory_user', feedback: 'memory_feedback',
+        project: 'memory_project', reference: 'memory_reference',
+        session_summary: 'session_summary',
+      };
+      const t = typeMap[d.front.type] || 'memory_feedback';
+      const payload = {
+        type: t,
+        name: d.front.name || 'untitled',
+        body: d.body,
+        project_key: d.front.projectKey || null,
+      };
+      const r = await fetch('/v1/nodes', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (r.ok) {
+        const n = await r.json();
+        // best-effort memory reindex so it surfaces in retrieval
+        fetch('/v1/reindex', { method: 'POST' }).catch(() => {});
+        if (window.toast) window.toast('Saved memory ' + (n.id || ''), 'success');
+      } else if (window.toast) {
+        window.toast('Save failed: ' + (await r.text()), 'error');
+      }
     },
     async previewNode(cid) {
       const box = this.$refs.citePreview;
