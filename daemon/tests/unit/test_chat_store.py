@@ -169,3 +169,119 @@ def test_schema_idempotent_on_reopen(tmp_path) -> None:
     s2 = Store(p)  # SCHEMA_SQL executescript runs again -> must be idempotent
     assert s2.get_conversation(conv.id) is not None
     s2.close()
+
+
+# ======================================================================
+# v3.1 phase 1: bookmarks + token/summary columns + paginated history.
+# Design: docs/plans/2026-05-15-mnemo-v3.1-companion-design.md S3.1.
+# Pagination follows reference_mnemo_pagination.md (SQL LIMIT/OFFSET +
+# scalar COUNT -- never load-all-then-slice).
+# ======================================================================
+
+
+def test_bookmark_add_list_delete_roundtrip(store: Store) -> None:
+    conv = store.create_conversation(name="c", provider="anthropic", model="m")
+    store.append_message(conv.id, role="user", content={"text": "q"})
+    store.append_message(conv.id, role="assistant", content={"text": "a"})
+    bm = store.add_bookmark(conv.id, message_seq=1, label="the answer")
+    assert bm.id
+    assert bm.conversation_id == conv.id
+    assert bm.message_seq == 1
+    assert bm.label == "the answer"
+    assert bm.created_at > 0
+
+    listed = store.list_bookmarks(conv.id)
+    assert len(listed) == 1
+    assert listed[0].id == bm.id
+
+    store.delete_bookmark(bm.id)
+    assert store.list_bookmarks(conv.id) == []
+
+
+def test_bookmarks_scoped_per_conversation_and_sorted_by_seq(store: Store) -> None:
+    c1 = store.create_conversation(name="c1", provider="anthropic", model="m")
+    c2 = store.create_conversation(name="c2", provider="anthropic", model="m")
+    for i in range(4):
+        store.append_message(c1.id, role="user", content={"text": str(i)})
+    store.add_bookmark(c1.id, message_seq=3, label="late")
+    store.add_bookmark(c1.id, message_seq=1, label="early")
+    store.add_bookmark(c2.id, message_seq=0, label="other")
+    rows = store.list_bookmarks(c1.id)
+    assert [r.message_seq for r in rows] == [1, 3]  # ascending by seq
+    assert len(store.list_bookmarks(c2.id)) == 1
+
+
+def test_bookmarks_cascade_on_purge(store: Store) -> None:
+    conv = store.create_conversation(name="c", provider="anthropic", model="m")
+    store.append_message(conv.id, role="user", content={"text": "q"})
+    store.add_bookmark(conv.id, message_seq=0, label="x")
+    store.purge_conversation(conv.id)
+    assert store.list_bookmarks(conv.id) == []  # FK ON DELETE CASCADE
+
+
+def test_append_message_records_token_usage(store: Store) -> None:
+    conv = store.create_conversation(name="c", provider="anthropic", model="m")
+    store.append_message(conv.id, role="user", content={"text": "q"})
+    store.append_message(
+        conv.id,
+        role="assistant",
+        content={"text": "a"},
+        token_in=1200,
+        token_out=340,
+        cache_read=900,
+    )
+    msgs = store.list_messages(conv.id)
+    assert msgs[0].token_in is None  # legacy / unmeasured rows stay NULL
+    assert msgs[1].token_in == 1200
+    assert msgs[1].token_out == 340
+    assert msgs[1].cache_read == 900
+
+
+def test_bump_tokens_accumulates_on_conversation(store: Store) -> None:
+    conv = store.create_conversation(name="c", provider="anthropic", model="m")
+    assert store.get_conversation(conv.id).tokens_total == 0  # default
+    store.bump_tokens(conv.id, delta=1500)
+    store.bump_tokens(conv.id, delta=420)
+    assert store.get_conversation(conv.id).tokens_total == 1920
+
+
+def test_list_messages_latest_window_limit(store: Store) -> None:
+    conv = store.create_conversation(name="c", provider="anthropic", model="m")
+    for i in range(10):
+        store.append_message(conv.id, role="user", content={"text": str(i)})
+    window = store.list_messages(conv.id, limit=3)
+    # last 3, returned oldest-first for prepend-free rendering
+    assert [m.seq for m in window] == [7, 8, 9]
+    # unbounded default is unchanged (all, ascending)
+    assert [m.seq for m in store.list_messages(conv.id)] == list(range(10))
+
+
+def test_list_messages_before_seq_paginates_older(store: Store) -> None:
+    conv = store.create_conversation(name="c", provider="anthropic", model="m")
+    for i in range(10):
+        store.append_message(conv.id, role="user", content={"text": str(i)})
+    older = store.list_messages(conv.id, before_seq=7, limit=3)
+    assert [m.seq for m in older] == [4, 5, 6]  # the 3 just before seq 7, ASC
+
+
+def test_count_messages_is_scalar_total(store: Store) -> None:
+    conv = store.create_conversation(name="c", provider="anthropic", model="m")
+    for i in range(42):
+        store.append_message(conv.id, role="user", content={"text": str(i)})
+    assert store.count_messages(conv.id) == 42  # COUNT(*), not a capped scan
+
+
+def test_v31_columns_and_bookmarks_idempotent_on_reopen(tmp_path) -> None:
+    """A pre-v3.1 DB must grow the new columns + table on reopen."""
+    p = tmp_path / "mnemo.db"
+    s1 = Store(p)
+    conv = s1.create_conversation(name="c", provider="anthropic", model="m")
+    s1.append_message(conv.id, role="user", content={"text": "q"}, token_in=5)
+    s1.add_bookmark(conv.id, message_seq=0, label="x")
+    s1.bump_tokens(conv.id, delta=99)
+    s1.close()
+    s2 = Store(p)  # SCHEMA_SQL + _ensure_columns re-run -> idempotent
+    assert s2.get_conversation(conv.id).tokens_total == 99
+    assert s2.list_messages(conv.id)[0].token_in == 5
+    assert len(s2.list_bookmarks(conv.id)) == 1
+    s2.close()

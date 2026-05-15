@@ -401,18 +401,40 @@ class Conversation:
     created_at: int
     updated_at: int
     archived_at: int | None = None
+    # v3.1: hybrid-compaction state / running summary (provider-agnostic
+    # fallback path) and the running token counter shown in the UI.
+    summary_json: dict | None = None
+    tokens_total: int = 0
 
 
 @dataclass
 class ChatMessage:
     """One turn. ``content`` is the parsed ``content_json``:
-    ``{text?, tool_call?, tool_result?, citations?: [node_id]}``."""
+    ``{text?, tool_call?, tool_result?, citations?: [node_id]}``.
+    The v3.1 ``token_*`` fields are the per-turn provider usage (NULL on
+    legacy / unmeasured rows)."""
 
     id: str
     conversation_id: str
     seq: int
     role: str
     content: dict
+    created_at: int
+    token_in: int | None = None
+    token_out: int | None = None
+    cache_read: int | None = None
+
+
+@dataclass
+class ChatBookmark:
+    """A user-pinned message in a conversation (v3.1). ``message_seq``
+    is the target turn's ``seq``; ``label`` is an optional free-text
+    note. Server-persisted so it survives reload + device."""
+
+    id: str
+    conversation_id: str
+    message_seq: int
+    label: str | None
     created_at: int
 
 
@@ -642,6 +664,22 @@ CREATE TABLE IF NOT EXISTS chat_permissions (
   granted_at  INTEGER NOT NULL,
   PRIMARY KEY (project_key, tool_name)
 );
+
+-- v3.1: server-persisted bookmarks. FK cascades with the owning
+-- conversation (PRAGMA foreign_keys = ON). message_seq points at a
+-- chat_messages.seq; we don't FK it (messages have no per-seq unique
+-- index and a bookmark can briefly outlive a re-streamed turn).
+CREATE TABLE IF NOT EXISTS chat_bookmarks (
+  id              TEXT PRIMARY KEY,
+  conversation_id TEXT NOT NULL
+                  REFERENCES chat_conversations(id) ON DELETE CASCADE,
+  message_seq     INTEGER NOT NULL,
+  label           TEXT,
+  created_at      INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_chat_bm_conv
+  ON chat_bookmarks(conversation_id, message_seq);
 """
 
 
@@ -727,6 +765,25 @@ class Store:
             "edges",
             {
                 "confidence": "REAL NOT NULL DEFAULT 1.0",
+            },
+        )
+        # v3.1: per-turn provider token usage (NULL on legacy / unmeasured
+        # rows -- the UI dims those) and per-conversation compaction state
+        # + running token counter. Additive so a pre-v3.1 chat DB upgrades
+        # in place on first reopen.
+        self._ensure_columns(
+            "chat_messages",
+            {
+                "token_in": "INTEGER",
+                "token_out": "INTEGER",
+                "cache_read": "INTEGER",
+            },
+        )
+        self._ensure_columns(
+            "chat_conversations",
+            {
+                "summary_json": "TEXT",
+                "tokens_total": "INTEGER NOT NULL DEFAULT 0",
             },
         )
         row = self.conn.execute("SELECT version FROM schema_version").fetchone()
@@ -1968,9 +2025,14 @@ class Store:
         *,
         role: str,
         content: dict,
+        token_in: int | None = None,
+        token_out: int | None = None,
+        cache_read: int | None = None,
     ) -> ChatMessage:
         """Append a turn with the next monotonic ``seq`` and bump the
-        owning conversation's ``updated_at`` so the rail re-sorts."""
+        owning conversation's ``updated_at`` so the rail re-sorts. The
+        optional ``token_*`` args record the per-turn provider usage
+        (v3.1); they stay NULL when the provider didn't surface usage."""
         if role not in CHAT_ROLES:
             raise ValueError(f"unknown chat role: {role!r}")
         now = self._now_ms()
@@ -1988,14 +2050,28 @@ class Store:
                 role=role,
                 content=content,
                 created_at=now,
+                token_in=token_in,
+                token_out=token_out,
+                cache_read=cache_read,
             )
             self.conn.execute(
                 """
                 INSERT INTO chat_messages
-                  (id, conversation_id, seq, role, content_json, created_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                  (id, conversation_id, seq, role, content_json, created_at,
+                   token_in, token_out, cache_read)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (msg.id, conv_id, seq, role, json.dumps(content), now),
+                (
+                    msg.id,
+                    conv_id,
+                    seq,
+                    role,
+                    json.dumps(content),
+                    now,
+                    token_in,
+                    token_out,
+                    cache_read,
+                ),
             )
             self.conn.execute(
                 "UPDATE chat_conversations SET updated_at = ? WHERE id = ?",
@@ -2004,13 +2080,108 @@ class Store:
             self.conn.commit()
         return msg
 
-    def list_messages(self, conv_id: str) -> list[ChatMessage]:
+    def list_messages(
+        self,
+        conv_id: str,
+        *,
+        before_seq: int | None = None,
+        limit: int | None = None,
+    ) -> list[ChatMessage]:
+        """Messages for a conversation, always returned oldest-first.
+
+        - ``list_messages(id)`` -> ALL turns (unchanged default; the agent
+          loop + MCP rely on this).
+        - ``limit=N`` -> the *last* N turns (the latest-window the /chat
+          and dock surfaces open on).
+        - ``before_seq=S, limit=N`` -> the N turns just before ``S`` (the
+          lazy scroll-up page).
+
+        Bounded queries page in SQL (``ORDER BY seq DESC LIMIT ?`` then
+        reversed) per reference_mnemo_pagination.md -- never load-all."""
+        params: list[object] = [conv_id]
+        sql = "SELECT * FROM chat_messages WHERE conversation_id = ?"
+        if before_seq is not None:
+            sql += " AND seq < ?"
+            params.append(before_seq)
+        if limit is None:
+            sql += " ORDER BY seq ASC"
+            with self._lock:
+                rows = self.conn.execute(sql, params).fetchall()
+            return [self._row_to_message(r) for r in rows]
+        # Bounded: take the newest ``limit`` rows in the window, then
+        # flip to ascending so callers render without re-sorting.
+        sql += " ORDER BY seq DESC LIMIT ?"
+        params.append(limit)
+        with self._lock:
+            rows = self.conn.execute(sql, params).fetchall()
+        return [self._row_to_message(r) for r in reversed(rows)]
+
+    def count_messages(self, conv_id: str) -> int:
+        """Scalar ``COUNT(*)`` (never a capped list scan -- see
+        reference_mnemo_pagination.md). Drives ``total`` / ``has_more``."""
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT COUNT(*) AS n FROM chat_messages WHERE conversation_id = ?",
+                (conv_id,),
+            ).fetchone()
+        return int(row["n"])
+
+    def bump_tokens(self, conv_id: str, *, delta: int) -> None:
+        """Add ``delta`` to the conversation's running token counter
+        (the header budget chip reads it)."""
+        with self._lock:
+            self.conn.execute(
+                "UPDATE chat_conversations SET tokens_total = tokens_total + ? WHERE id = ?",
+                (int(delta), conv_id),
+            )
+            self.conn.commit()
+
+    # --- Bookmarks (v3.1) -------------------------------------------------
+
+    def add_bookmark(
+        self, conv_id: str, *, message_seq: int, label: str | None = None
+    ) -> ChatBookmark:
+        bm = ChatBookmark(
+            id=uuid.uuid4().hex,
+            conversation_id=conv_id,
+            message_seq=message_seq,
+            label=label,
+            created_at=self._now_ms(),
+        )
+        with self._lock:
+            self.conn.execute(
+                "INSERT INTO chat_bookmarks "
+                "(id, conversation_id, message_seq, label, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (bm.id, conv_id, message_seq, label, bm.created_at),
+            )
+            self.conn.commit()
+        return bm
+
+    def list_bookmarks(self, conv_id: str) -> list[ChatBookmark]:
+        """Bookmarks for a conversation, ordered by target ``message_seq``
+        so the jump-strip reads top-to-bottom like the thread."""
         with self._lock:
             rows = self.conn.execute(
-                "SELECT * FROM chat_messages WHERE conversation_id = ? ORDER BY seq ASC",
+                "SELECT * FROM chat_bookmarks WHERE conversation_id = ? "
+                "ORDER BY message_seq ASC, created_at ASC",
                 (conv_id,),
             ).fetchall()
-        return [self._row_to_message(r) for r in rows]
+        return [
+            ChatBookmark(
+                id=r["id"],
+                conversation_id=r["conversation_id"],
+                message_seq=int(r["message_seq"]),
+                label=r["label"],
+                created_at=int(r["created_at"]),
+            )
+            for r in rows
+        ]
+
+    def delete_bookmark(self, bookmark_id: str) -> None:
+        with self._lock:
+            self.conn.execute("DELETE FROM chat_bookmarks WHERE id = ?", (bookmark_id,))
+            self.conn.commit()
 
     # --- Permissions (the always-allow allowlist) -------------------------
 
@@ -2076,7 +2247,11 @@ class Store:
 
     @staticmethod
     def _row_to_conversation(row: sqlite3.Row) -> Conversation:
+        # summary_json / tokens_total are always present: _init_schema runs
+        # _ensure_columns on every open and every read here is SELECT *.
         pc = row["page_context"]
+        sj = row["summary_json"]
+        tt = row["tokens_total"]
         return Conversation(
             id=row["id"],
             name=row["name"],
@@ -2087,10 +2262,16 @@ class Store:
             created_at=int(row["created_at"]),
             updated_at=int(row["updated_at"]),
             archived_at=(int(row["archived_at"]) if row["archived_at"] is not None else None),
+            summary_json=json.loads(sj) if sj else None,
+            tokens_total=int(tt) if tt is not None else 0,
         )
 
     @staticmethod
     def _row_to_message(row: sqlite3.Row) -> ChatMessage:
+        def _opt_int(col: str) -> int | None:
+            v = row[col]
+            return int(v) if v is not None else None
+
         return ChatMessage(
             id=row["id"],
             conversation_id=row["conversation_id"],
@@ -2098,4 +2279,7 @@ class Store:
             role=row["role"],
             content=json.loads(row["content_json"]),
             created_at=int(row["created_at"]),
+            token_in=_opt_int("token_in"),
+            token_out=_opt_int("token_out"),
+            cache_read=_opt_int("cache_read"),
         )
