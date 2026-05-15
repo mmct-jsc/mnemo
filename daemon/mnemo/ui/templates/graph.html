@@ -124,6 +124,13 @@
       <!-- Cosmograph mounts its WebGL canvas into this div. -->
       <div id="cy-nebula"></div>
 
+      <!-- v2.6.3: DOM label overlay. cosmos.gl renders no text, so
+           we layer absolutely-positioned spans for the selected
+           node + its neighbours + the hovered node, tracked every
+           frame via spaceToScreenPosition. pointer-events:none so
+           it never blocks canvas drag / click. -->
+      <div id="nebula-labels" class="nebula-labels" aria-hidden="true"></div>
+
       <!-- v2.6.2: loading shimmer while the GPU simulation warms
            up (Cosmograph uploads buffers + runs the first force
            ticks). Cleared the moment the first frame settles. -->
@@ -369,21 +376,37 @@ function nebula() {
       return TYPE_COLORS[t] || TYPE_COLOR_FALLBACK;
     },
 
-    // v2.6.2: edges/labels are Cosmograph render flags now (no more
-    // .edges-off CSS class that collided with selection highlight).
+    // v2.6.3: toggling links must NOT re-scatter the layout. cosmos
+    // setConfig() restarts the force simulation, so we snapshot the
+    // settled positions, flip renderLinks, then pin the positions
+    // straight back (dontRescale) and keep the sim paused. The web
+    // appears / disappears in place -- no "forced re-render".
     toggleEdges() {
       this.edgesVisible = !this.edgesVisible;
       if (this.cg && this.cg.setConfig) {
-        try { this.cg.setConfig({ renderLinks: this.edgesVisible }); } catch (_) {}
+        try {
+          let snap = null;
+          try { snap = this.cg.getPointPositions(); } catch (_) {}
+          this.cg.setConfig({ renderLinks: this.edgesVisible });
+          if (snap && snap.length) {
+            this.cg.setPointPositions(snap, true);
+            if (this.cg.pause) this.cg.pause();
+            this.cg.render();
+          }
+        } catch (_) {}
       }
       this._persistState();
     },
-    // cosmos.gl (low-level) has no text labels -- that's a feature of
-    // the heavyweight @cosmograph/cosmograph wrapper we deliberately
-    // didn't pull in. The toggle still persists intent + flips the
-    // chip so the bar stays consistent; the engine call is a no-op.
+    // v2.6.3: labels are a DOM overlay (cosmos.gl low-level has no
+    // text). The toggle now actually drives that overlay.
     toggleLabels() {
       this.labelsVisible = !this.labelsVisible;
+      if (this.labelsVisible) {
+        this._scheduleLabels();
+      } else {
+        const host = document.getElementById('nebula-labels');
+        if (host) host.innerHTML = '';
+      }
       this._persistState();
     },
 
@@ -618,8 +641,37 @@ function nebula() {
       // tree_modules is the full module list (server-side, no cap);
       // the canvas now also shows everything so they agree.
       this.treeModules = Array.isArray(data.tree_modules) ? data.tree_modules : [];
+      // v2.6.3: layout-cache coordination keys from the server.
+      this._scopeKey = data.scope_key || 'global';
+      this._fingerprint = data.fingerprint || '';
+      // New scope/fingerprint -> this layout hasn't been persisted yet.
+      this._layoutPersisted = false;
 
       this._buildGraphModel();
+
+      // v2.6.3: try the server-side layout cache BEFORE we render.
+      // A hit means the settled force-layout for this exact graph
+      // (scope + fingerprint) is already on disk -- we apply those
+      // positions and SKIP the GPU simulation entirely (instant
+      // settled nebula, no warm-up wait). A miss / stale fingerprint
+      // (graph changed via reindex) falls back to running the sim,
+      // and we PUT the converged positions back on onSimulationEnd.
+      this._cachedPositions = null;
+      if (this._fingerprint) {
+        try {
+          const lr = await fetch(
+            '/ui/graph-layout?scope_key=' + encodeURIComponent(this._scopeKey) +
+            '&fingerprint=' + encodeURIComponent(this._fingerprint));
+          if (lr.ok) {
+            const lj = await lr.json();
+            if (lj.hit && Array.isArray(lj.positions) &&
+                lj.positions.length === this._points.length * 2) {
+              this._cachedPositions = new Float32Array(lj.positions);
+            }
+          }
+        } catch (_) { /* cache offline -- fall back to live sim */ }
+      }
+
       await this.renderCanvas();
       this.buildTree();
       this.buildTypeFilters();
@@ -668,6 +720,7 @@ function nebula() {
         idx += 1;
       }
       const linkPairs = [];      // [srcIdx, tgtIdx, ...] for the GPU
+      const linkRels = [];       // relation per link (for per-edge color)
       const adj = {};
       let linkCount = 0;
       for (const e of this.rawElements) {
@@ -677,10 +730,23 @@ function nebula() {
         const rel = e.data.relation || 'related';
         const conf = e.data.confidence ?? 1.0;
         linkPairs.push(idIndex[s], idIndex[t]);
+        linkRels.push(rel);
         linkCount += 1;
         (adj[s] = adj[s] || []).push({ id: t, rel, confidence: conf });
         (adj[t] = adj[t] || []).push({ id: s, rel, confidence: conf });
       }
+      // v2.6.3: per-edge RGBA so the relation palette (calls /
+      // routes_to / imports / ...) actually reads on the canvas.
+      // The old single faint teal default made edges "barely seen".
+      const linkColors = new Float32Array(linkCount * 4);
+      for (let i = 0; i < linkCount; i++) {
+        const rgba = this._hexToRGBA(REL_COLORS[linkRels[i]] || '#8aa6c8');
+        linkColors[i * 4]     = rgba[0];
+        linkColors[i * 4 + 1] = rgba[1];
+        linkColors[i * 4 + 2] = rgba[2];
+        linkColors[i * 4 + 3] = 0.66;  // visible but not overpowering
+      }
+      this._linkColors = linkColors;
 
       // --- GPU typed-array buffers (@cosmos.gl/graph) --------------
       const n = points.length;
@@ -745,31 +811,49 @@ function nebula() {
         return;
       }
 
-      this.booting = true;
-      this.bootMsg = 'forming ' + this._points.length.toLocaleString() + ' nodes';
+      // v2.6.3: cache HIT -> apply settled positions + skip the GPU
+      // simulation entirely (the whole point of the cache: instant
+      // settled nebula, zero warm-up). cache MISS -> run the sim and
+      // PUT the converged layout back so the NEXT visit is instant.
+      const cached = this._cachedPositions;
+      const useCache = cached && cached.length === this._points.length * 2;
+
+      this.booting = !useCache;
+      this.bootMsg = useCache
+        ? ''
+        : 'forming ' + this._points.length.toLocaleString() + ' nodes';
 
       const config = {
         // -- Nebula aesthetic: transparent so the .nebula-shell
-        //    starfield CSS shows through; faint teal link web;
-        //    glowing points greyed (not hidden) on focus.
+        //    starfield CSS shows through; glowing points greyed
+        //    (NOT hidden) on focus.
         backgroundColor: [0, 0, 0, 0],
         spaceSize: 8192,
-        pointGreyoutOpacity: 0.12,
-        pointGreyoutColor: '#1b2230',
-        pointOpacity: 0.92,
+        // v2.6.3: 0.12 read as "everything else disappeared". 0.42
+        // keeps the rest of the nebula clearly visible but de-
+        // emphasised -- a blur, like the old cytoscape .dim.
+        pointGreyoutOpacity: 0.42,
+        pointGreyoutColor: '#3a4358',
+        pointOpacity: 0.95,
         pointSizeScale: 1.0,
         scalePointsOnZoom: true,
         renderLinks: this.edgesVisible,
-        linkDefaultColor: 'rgba(126, 231, 224, 0.11)',
-        linkOpacity: 0.5,
-        linkWidth: 0.45,
+        // v2.6.3: per-edge colors come from setLinkColors() below;
+        // these globals are the floor. Brighter + wider so the web
+        // is actually visible (the old 0.11-alpha hairline was
+        // "barely seen").
+        linkColor: 'rgba(150, 180, 220, 0.45)',
+        linkOpacity: 0.85,
+        linkWidth: 1.4,
+        linkWidthScale: 1.0,
+        linkArrows: false,
+        curvedLinks: true,
         renderHoveredPointRing: true,
         hoveredPointRingColor: '#7ee7e0',
         focusedPointRingColor: '#7ee7e0',
-        // -- Organic force simulation: the "nebula" motion. Hubs
-        //    repel into separated clusters; springs hold families
-        //    together; gentle gravity + centering stop infinite
-        //    drift. Decay lets it cool to a calm settle.
+        // -- Organic force simulation: the "nebula" motion. Only
+        //    runs on a cache MISS; a hit pins the cached positions.
+        enableSimulation: !useCache,
         simulationGravity: 0.18,
         simulationCenter: 0.5,
         simulationRepulsion: 1.0,
@@ -782,9 +866,21 @@ function nebula() {
           if (index === undefined || index === null) this.deselect();
           else this.selectByIndex(index);
         },
+        onPointMouseOver: (index) => {
+          this._hoverIdx = index;
+          this._scheduleLabels();
+        },
+        onPointMouseOut: () => {
+          this._hoverIdx = null;
+          this._scheduleLabels();
+        },
         onSimulationEnd: () => {
           this.booting = false;
           try { this.cg.fitView(700); } catch (_) {}
+          // Persist the converged layout so the next visit to this
+          // exact graph (scope + fingerprint) is instant.
+          this._persistLayout();
+          this._scheduleLabels();
         },
       };
 
@@ -796,12 +892,25 @@ function nebula() {
         // through setConfig() after construction.
         this.cg = new Graph(container);
         this.cg.setConfig(config);
-        this.cg.setPointPositions(this._positions);
+        // dontRescale=true on the cached path so the persisted
+        // coordinate space is reproduced exactly (no re-fit jump).
+        this.cg.setPointPositions(useCache ? cached : this._positions, !!useCache);
         this.cg.setPointColors(this._colors);
         this.cg.setPointSizes(this._sizes);
-        if (this._linkArray.length) this.cg.setLinks(this._linkArray);
+        if (this._linkArray.length) {
+          this.cg.setLinks(this._linkArray);
+          if (this._linkColors && this.cg.setLinkColors) {
+            this.cg.setLinkColors(this._linkColors);
+          }
+        }
         this.cg.render();
-        if (this.cg.start) this.cg.start();
+        if (useCache) {
+          // Settled instantly -- no sim. Just frame it + labels.
+          try { this.cg.fitView(0); } catch (_) {}
+          this._scheduleLabels();
+        } else if (this.cg.start) {
+          this.cg.start();
+        }
       } catch (e) {
         this.booting = false;
         window.toast && window.toast('Graph render failed: ' + e, 'error');
@@ -809,14 +918,38 @@ function nebula() {
       }
 
       // Safety net: if onSimulationEnd never fires (a perpetually
-      // jiggling component) drop the shimmer + fit anyway so the
-      // canvas is never permanently veiled.
-      setTimeout(() => {
-        if (this.booting) {
-          this.booting = false;
-          try { this.cg.fitView(700); } catch (_) {}
-        }
-      }, 8000);
+      // jiggling component) drop the shimmer, fit, AND still persist
+      // so a slow-to-converge graph isn't re-simulated every visit.
+      if (!useCache) {
+        setTimeout(() => {
+          if (this.booting) {
+            this.booting = false;
+            try { this.cg.fitView(700); } catch (_) {}
+            this._persistLayout();
+            this._scheduleLabels();
+          }
+        }, 8000);
+      }
+    },
+
+    // v2.6.3: PUT the current settled positions to the server cache,
+    // keyed by the scope + fingerprint the data feed gave us. Best-
+    // effort: a failure just means the next visit re-simulates.
+    _persistLayout() {
+      if (!this.cg || !this._fingerprint || this._layoutPersisted) return;
+      let pos;
+      try { pos = this.cg.getPointPositions(); } catch (_) { return; }
+      if (!pos || !pos.length) return;
+      this._layoutPersisted = true;
+      fetch('/ui/graph-layout', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          scope_key: this._scopeKey,
+          fingerprint: this._fingerprint,
+          positions: Array.from(pos),
+        }),
+      }).catch(() => { this._layoutPersisted = false; });
     },
 
     // --- Selection: highlight (NOT hide) + camera fly --------------
@@ -857,6 +990,7 @@ function nebula() {
         }
       }
       this.neighbors = Object.values(seen);
+      this._scheduleLabels();
 
       // Hydrate body/description from /v1/nodes/<id> a frame later
       // so the click feels instant.
@@ -895,8 +1029,80 @@ function nebula() {
       }
       this.selected = null;
       this.neighbors = [];
+      this._hoverIdx = null;
+      this._scheduleLabels();
       // Re-assert any active filter highlight after a plain deselect.
       this.applyFilters();
+    },
+
+    // --- v2.6.3 DOM label overlay ---------------------------------
+    // cosmos.gl (low-level) renders no text. We layer absolutely-
+    // positioned spans over the canvas for the SELECTED node, its
+    // (capped) neighbours, and the hovered node -- updated every
+    // frame via spaceToScreenPosition so they track pan / zoom /
+    // residual sim motion. Showing all 10 k labels would be an
+    // unreadable smear (and the old cytoscape build only showed
+    // labels on zoom-in too), so the set is intentionally bounded.
+    _labelSet() {
+      if (!this.labelsVisible || !this.cg) return [];
+      const idxs = new Set();
+      if (this.selected && this._idIndex[this.selected.id] !== undefined) {
+        idxs.add(this._idIndex[this.selected.id]);
+        let added = 0;
+        for (const nb of this.neighbors) {
+          const ni = this._idIndex[nb.id];
+          if (ni !== undefined) { idxs.add(ni); if (++added >= 40) break; }
+        }
+      }
+      if (this._hoverIdx !== null && this._hoverIdx !== undefined) {
+        idxs.add(this._hoverIdx);
+      }
+      return [...idxs];
+    },
+
+    _scheduleLabels() {
+      if (this._labelRAF) return;  // already pumping
+      const tick = () => {
+        this._labelRAF = null;
+        this._renderLabels();
+        // Keep tracking while there's something to label (camera /
+        // residual sim drift moves the anchors every frame).
+        if (this._labelSet().length) {
+          this._labelRAF = requestAnimationFrame(tick);
+        }
+      };
+      this._labelRAF = requestAnimationFrame(tick);
+    },
+
+    _renderLabels() {
+      const host = document.getElementById('nebula-labels');
+      if (!host || !this.cg) return;
+      const set = this._labelSet();
+      if (!set.length) { host.innerHTML = ''; return; }
+      let posAll;
+      try { posAll = this.cg.getPointPositions(); } catch (_) { return; }
+      if (!posAll) return;
+      const selId = this.selected ? this.selected.id : null;
+      const frag = document.createDocumentFragment();
+      for (const i of set) {
+        const rec = this._points[i];
+        if (!rec) continue;
+        let screen;
+        try {
+          screen = this.cg.spaceToScreenPosition([posAll[i * 2], posAll[i * 2 + 1]]);
+        } catch (_) { continue; }
+        if (!screen) continue;
+        const span = document.createElement('span');
+        span.className = 'nebula-label' + (rec.id === selId ? ' is-selected' : '');
+        span.style.left = Math.round(screen[0]) + 'px';
+        span.style.top = Math.round(screen[1]) + 'px';
+        span.style.setProperty('--label-color', rec.color);
+        span.textContent = rec.name.length > 42
+          ? rec.name.slice(0, 41) + '…' : rec.name;
+        frag.appendChild(span);
+      }
+      host.innerHTML = '';
+      host.appendChild(frag);
     },
 
     // --- Filters: type chips + text + min-confidence --------------
