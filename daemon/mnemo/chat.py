@@ -252,6 +252,11 @@ class AgentLoop:
             # Dispatch tools (phase 2: all registered tools are safe).
             ctx = ToolContext(store=self._store, embedder=self._embedder)
             result_blocks: list[dict] = []
+            # Skill guidance is pinned AFTER the tool turn (a user turn
+            # between a tool_use and its tool_result would break the
+            # Anthropic contract) and as 'user' (mid-list 'system' is
+            # dropped by every translator -- see test_compaction).
+            skill_pins: list[dict] = []
             for tc in tool_calls:
                 name = tc["name"]
                 args = tc.get("args", {}) or {}
@@ -295,6 +300,18 @@ class AgentLoop:
                         "args": ua.get("args", {}),
                     }
                     result = {"ui_action_dispatched": ua["action"]}
+                # Skill-load sentinel (design S3.5): pin the guidance for
+                # the rest of the run + ack so the model continues.
+                if isinstance(result, dict) and "_skill" in result:
+                    sk = result["_skill"]
+                    skill_pins.append(
+                        {
+                            "role": "user",
+                            "content": f"[active skill: {sk['name']}]\n{sk['guidance']}",
+                        }
+                    )
+                    yield {"type": "skill_loaded", "name": sk["name"]}
+                    result = {"skill_loaded": sk["name"]}
                 self._store.append_message(
                     conv_id,
                     role="tool_call",
@@ -321,6 +338,7 @@ class AgentLoop:
                     }
                 )
             pmsgs.append({"role": "tool", "content": result_blocks})
+            pmsgs.extend(skill_pins)
 
         yield {
             "type": "error",
