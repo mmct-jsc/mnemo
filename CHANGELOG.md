@@ -2,6 +2,37 @@
 
 All notable changes to mnemo are documented here.
 
+## [3.0.0] - 2026-05-15
+
+**Mnem - the agentic companion.** v3 turns mnemo into an agent with
+tools over its own memory + code graph, not a pre-canned RAG box.
+
+- **Agent loop + 4 providers** behind one abstraction (Anthropic,
+  OpenAI, Google, Ollama) with a shared `(text_delta|tool_call|stop)`
+  event contract. BYO API keys: env var > repo `.env` > OS keychain >
+  plaintext 0600 fallback (never in `settings.json`).
+- **Tool surface, two consumers.** One `agent_tools.TOOLS` registry
+  feeds the internal loop and an MCP server (`mnemo mcp`, stdio) so
+  Cursor / Claude Desktop / Codex / Windsurf get mnemo for free. 6
+  safe read tools + 9 write/danger tools + 5 client-side UI
+  directives, each risk-tagged.
+- **Permission protocol.** `confirm`/`danger` tools emit a
+  `permission_request`; the loop pauses on `POST /v1/chat/<id>/permit`;
+  `allow_always` persists per-project to `chat_permissions`. `danger`
+  never offers always.
+- **Conversations are first-class** SQLite rows (`chat_conversations`
+  / `chat_messages` / `chat_permissions`); 9 `/v1/chat/*` REST
+  endpoints + an SSE event stream.
+- **/chat page** (3-column shell + streaming + citation panel),
+  **Mnem companion dock** on every page (5 CSS mood states, opt-in
+  proactive nudges), **doc-helper** (` ```mnemo-draft ` fences ->
+  one-click Save as memory) + the `mnemo:doc` skill, **companion
+  settings** at `/settings/chat` (the v1.2 retrieval-tuning
+  `/settings` page is untouched).
+
+12 phases, ~140 new unit tests, full suite green; live-smoked against
+a real Anthropic key.
+
 ## [2.6.0] - 2026-05-14
 
 **Workspaces + indexing safeguards.** Named workspaces replace the
