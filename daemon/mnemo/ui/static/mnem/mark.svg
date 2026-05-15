@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="mnemo">
+  <defs>
+    <radialGradient id="kg" cx="38%" cy="32%" r="80%">
+      <stop offset="0" stop-color="#1b2a2c"/>
+      <stop offset="0.55" stop-color="#11181b"/>
+      <stop offset="1" stop-color="#0b0d10"/>
+    </radialGradient>
+    <linearGradient id="ka" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#a5f0eb"/>
+      <stop offset="1" stop-color="#5fd6cd"/>
+    </linearGradient>
+  </defs>
+  <circle cx="32" cy="32" r="30" fill="url(#kg)"/>
+  <circle cx="32" cy="32" r="30" fill="none" stroke="#7ee7e0" stroke-opacity="0.35" stroke-width="2"/>
+  <!-- simplified 3-node memory constellation -- bold enough to read at 16px -->
+  <path d="M21 42 L32 20 L45 38" fill="none" stroke="url(#ka)"
+        stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round" opacity="0.85"/>
+  <circle cx="21" cy="42" r="5" fill="url(#ka)"/>
+  <circle cx="32" cy="20" r="5.6" fill="#7ee7e0"/>
+  <circle cx="45" cy="38" r="5" fill="url(#ka)"/>
+</svg>
