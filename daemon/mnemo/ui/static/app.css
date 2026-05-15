@@ -4833,7 +4833,12 @@ dl.meta dd { margin: 0; color: var(--fg); }
   position: absolute;
   top: 0.7rem;
   left: 0.85rem;
-  background: rgba(15, 19, 28, 0.85);
+  /* v2.6.5: above the .nebula-labels DOM overlay (z-index 5) and
+     the cosmos canvas, with a near-opaque background so the chip
+     stays legible over the perpetually-drifting bright nebula
+     (the old 0.85-alpha let moving nodes bleed through). */
+  z-index: 20;
+  background: rgba(8, 11, 18, 0.96);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 0.4rem 0.7rem;
@@ -4883,7 +4888,9 @@ dl.meta dd { margin: 0; color: var(--fg); }
   position: absolute;
   top: 0.7rem;
   right: 0.85rem;
-  background: rgba(15, 19, 28, 0.85);
+  /* v2.6.5: top layer + near-opaque (see .nebula-hint note). */
+  z-index: 20;
+  background: rgba(8, 11, 18, 0.96);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 0.4rem 0.7rem;
@@ -4908,8 +4915,11 @@ dl.meta dd { margin: 0; color: var(--fg); }
   position: absolute;
   right: 0.85rem;
   bottom: 0.85rem;
-  z-index: 5;
-  background: rgba(15, 19, 28, 0.85);
+  /* v2.6.5: was z-index 5 (TIED with the .nebula-labels overlay ->
+     workspace name bled under drifting labels). Lift above it +
+     near-opaque background. */
+  z-index: 20;
+  background: rgba(8, 11, 18, 0.96);
   color: var(--fg-muted);
   border: 1px solid var(--border);
   border-radius: var(--radius);
