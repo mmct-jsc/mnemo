@@ -39,6 +39,16 @@
       hasMore: false,
       total: 0,
       tokensTotal: 0,
+      provider: 'anthropic',
+      bookmarks: [],
+      // Rough per-provider context windows -- the budget the running
+      // tokens_total is shown against (settings override is v3.x).
+      _budgets: {
+        anthropic: 200000,
+        openai: 128000,
+        google: 1000000,
+        ollama: 32000,
+      },
       _es: null,
       _streamCtl: null,
       _io: null,
@@ -68,6 +78,17 @@
           .map(function (e) {
             return { label: e[0], items: e[1] };
           });
+      },
+
+      // --- token budget -------------------------------------------------
+      get tokenBudget() {
+        return this._budgets[this.provider] || 128000;
+      },
+      get budgetFrac() {
+        return Math.max(0, Math.min(1, this.tokensTotal / this.tokenBudget));
+      },
+      get budgetWarn() {
+        return this.budgetFrac >= 0.85;
       },
 
       relTime: function (ms) {
@@ -156,9 +177,68 @@
             self.hasMore = !!data.has_more;
             self.total = data.total || self.messages.length;
             self.tokensTotal = data.tokens_total || 0;
+            self.provider = data.provider || self.provider;
             self.collectCitations();
+            self.loadBookmarks();
             self.scroll(true);
           });
+      },
+
+      // --- bookmarks (server-persisted; survives reload + device) ------
+      loadBookmarks: function () {
+        var self = this;
+        if (!this.activeId) return Promise.resolve();
+        return fetch('/v1/chat/' + this.activeId + '/bookmarks')
+          .then(function (r) {
+            return r.ok ? r.json() : [];
+          })
+          .then(function (bm) {
+            self.bookmarks = bm || [];
+          })
+          .catch(function () {
+            self.bookmarks = [];
+          });
+      },
+
+      isBookmarked: function (seq) {
+        return this.bookmarks.some(function (b) {
+          return b.message_seq === seq;
+        });
+      },
+
+      toggleBookmark: function (seq, label) {
+        var self = this;
+        if (seq == null || !this.activeId) return Promise.resolve();
+        var existing = this.bookmarks.find(function (b) {
+          return b.message_seq === seq;
+        });
+        var req = existing
+          ? fetch('/v1/chat/' + this.activeId + '/bookmarks/' + existing.id, {
+              method: 'DELETE',
+            })
+          : fetch('/v1/chat/' + this.activeId + '/bookmarks', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ message_seq: seq, label: label || null }),
+            });
+        return req.then(function () {
+          return self.loadBookmarks();
+        });
+      },
+
+      jumpTo: function (seq) {
+        var log = this.$refs.log;
+        if (!log) return;
+        var el = log.querySelector('[data-seq="' + seq + '"]');
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          el.classList.add('jump-flash');
+          setTimeout(function () {
+            el.classList.remove('jump-flash');
+          }, 1200);
+        } else if (window.toast) {
+          window.toast('Scroll up to load that earlier message', 'info');
+        }
       },
 
       // Lazy scroll-up: prepend the page just before the oldest shown
@@ -217,6 +297,28 @@
         this.citations = seen;
       },
 
+      // [mnemo:<id>] -> a cite link. Run AFTER markdown render (marked
+      // keeps the literal brackets; they aren't markdown syntax).
+      _citeLinks: function (html) {
+        return (html || '').replace(
+          /\[mnemo:([^\]\s]+)\]/g,
+          '<a href="/node/$1" class="cite-link" onclick="event.stopPropagation()">[mnemo:$1]</a>'
+        );
+      },
+
+      // The REAL renderer: marked + DOMPurify (window.mnemoMd) so
+      // headings / lists / tables / fenced code render like Claude --
+      // not the toy fallback below. mnemo-draft fences are stripped
+      // (shown as one-click cards instead).
+      renderMarkdown: function (t) {
+        var noDraft = (t || '').replace(/```mnemo-draft[\s\S]*?```/g, '').trim();
+        if (window.mnemoMd) {
+          return this._citeLinks(window.mnemoMd(noDraft));
+        }
+        return this.renderText(t); // marked not hydrated yet -- fallback
+      },
+
+      // Fallback only (window.mnemoMd missing on a cold paint).
       renderText: function (t) {
         var esc = function (s) {
           return s.replace(/[&<>]/g, function (c) {
@@ -224,15 +326,13 @@
           });
         };
         var noDraft = (t || '').replace(/```mnemo-draft[\s\S]*?```/g, '').trim();
-        return esc(noDraft)
-          .replace(/```([\s\S]*?)```/g, '<pre>$1</pre>')
-          .replace(/`([^`]+)`/g, '<code>$1</code>')
-          .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-          .replace(
-            /\[mnemo:([^\]\s]+)\]/g,
-            '<a href="/node/$1" class="cite-link" onclick="event.stopPropagation()">[mnemo:$1]</a>'
-          )
-          .replace(/\n/g, '<br>');
+        return this._citeLinks(
+          esc(noDraft)
+            .replace(/```([\s\S]*?)```/g, '<pre>$1</pre>')
+            .replace(/`([^`]+)`/g, '<code>$1</code>')
+            .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+            .replace(/\n/g, '<br>')
+        );
       },
 
       extractDrafts: function (text) {
@@ -287,6 +387,46 @@
         });
       },
 
+      // One-shot markup for a node body. A static preview does NOT
+      // need (and the v2.x bucket-stream mnemoRenderBody STALLS after
+      // the first fragment -- live-review bug): code -> escaped
+      // <pre><code> + Prism; everything else -> marked+DOMPurify.
+      previewMarkup: function (box, n) {
+        var body = (n && n.body) || '';
+        var isCode = window.mnemoIsCodeType && window.mnemoIsCodeType(n.type);
+        var ext = window.mnemoLanguageOf
+          ? window.mnemoLanguageOf(n.source_path)
+          : 'none';
+        if (isCode && ext !== 'markdown' && ext !== 'none') {
+          var esc = body
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;');
+          box.innerHTML =
+            '<pre class="mnemo-code language-' +
+            ext +
+            '"><code class="language-' +
+            ext +
+            '">' +
+            esc +
+            '</code></pre>';
+          if (window.Prism) {
+            var c = box.querySelector('code');
+            try {
+              window.Prism.highlightElement(c);
+            } catch (e) {
+              /* tolerate */
+            }
+          }
+          return;
+        }
+        box.innerHTML = window.mnemoMd
+          ? window.mnemoMd(body)
+          : '<pre>' +
+            body.replace(/&/g, '&amp;').replace(/</g, '&lt;') +
+            '</pre>';
+      },
+
       previewNode: function (cid) {
         var self = this;
         this.citeSel = cid;
@@ -298,13 +438,8 @@
             return r.ok ? r.json() : null;
           })
           .then(function (n) {
-            if (n && window.mnemoRenderBody) {
-              window.mnemoRenderBody(box, n.body || '', {
-                type: n.type,
-                sourcePath: n.source_path,
-              });
-            } else if (n) {
-              box.textContent = n.body || '';
+            if (n) {
+              self.previewMarkup(box, n);
             } else {
               box.innerHTML = '<a href="/node/' + cid + '">open ' + cid + '</a>';
             }
