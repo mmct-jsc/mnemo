@@ -539,9 +539,7 @@ def _mnemo_add_source(
         [],
     ),
 )
-def _mnemo_reindex_source(
-    ctx: ToolContext, *, source_path: str | None = None
-) -> dict:
+def _mnemo_reindex_source(ctx: ToolContext, *, source_path: str | None = None) -> dict:
     return {
         "status": "queued",
         "source_path": source_path,

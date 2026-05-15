@@ -200,14 +200,10 @@ class AgentLoop:
                         "tool_args": args,
                         "risk": spec.risk,
                         "rationale": f"Mnem wants to run {name} ({spec.risk}).",
-                        "auto_grant_options": (
-                            ["always", "once"] if allow_always_ok else ["once"]
-                        ),
+                        "auto_grant_options": (["always", "once"] if allow_always_ok else ["once"]),
                     }
                     yield req
-                    decision = (
-                        self._permission_cb(req) if self._permission_cb else "deny"
-                    )
+                    decision = self._permission_cb(req) if self._permission_cb else "deny"
                     if decision == "deny":
                         result = {"error": f"user denied permission for {name}"}
                     else:
