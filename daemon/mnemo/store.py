@@ -530,6 +530,24 @@ CREATE TABLE IF NOT EXISTS source_overrides (
 
 CREATE INDEX IF NOT EXISTS idx_source_overrides_decided
   ON source_overrides(decided_at DESC);
+
+-- v2.6.3: cached Nebula force-layout positions. The GPU force
+-- simulation is expensive on 10 k+ nodes; once it settles we
+-- persist the final positions keyed by (scope_key, fingerprint).
+-- The client loads them directly on the next visit -> instant
+-- settled render, no re-simulation. The fingerprint is a hash of
+-- the in-scope node id set + edge count, so a reindex / node-write
+-- that changes the graph naturally changes the fingerprint and
+-- invalidates the cache (exactly "recompute only on reindex /
+-- impact actions"). One row per scope; PUT overwrites. This lives
+-- in the ALWAYS-run SCHEMA_SQL (not the lazy VEC_SCHEMA_SQL) so the
+-- table exists even on stores that never touch embeddings.
+CREATE TABLE IF NOT EXISTS graph_layout (
+  scope_key   TEXT PRIMARY KEY,
+  fingerprint TEXT NOT NULL,
+  positions   TEXT NOT NULL,   -- JSON array [x0,y0,x1,y1,...]
+  updated_at  INTEGER NOT NULL
+);
 """
 
 
@@ -1132,6 +1150,38 @@ class Store:
     def clear_active_project(self) -> None:
         with self._lock:
             self.conn.execute("DELETE FROM active_project WHERE singleton_id = 1")
+            self.conn.commit()
+
+    # --- Nebula layout cache (v2.6.3) --------------------------------------
+
+    def get_graph_layout(self, scope_key: str) -> tuple[str, str] | None:
+        """Return ``(fingerprint, positions_json)`` for ``scope_key`` or
+        ``None`` if no layout is cached. The caller compares the stored
+        fingerprint against the live graph fingerprint to decide hit vs
+        miss -- a row whose fingerprint no longer matches is a stale
+        layout (the graph changed via reindex) and must be recomputed.
+        """
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT fingerprint, positions FROM graph_layout WHERE scope_key = ?",
+                (scope_key,),
+            ).fetchone()
+        if row is None:
+            return None
+        return (row["fingerprint"], row["positions"])
+
+    def put_graph_layout(self, *, scope_key: str, fingerprint: str, positions_json: str) -> None:
+        """Upsert the settled layout for ``scope_key``. One row per scope;
+        a fresh fingerprint overwrites the prior layout in place."""
+        with self._lock:
+            self.conn.execute(
+                """
+                INSERT OR REPLACE INTO graph_layout
+                  (scope_key, fingerprint, positions, updated_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (scope_key, fingerprint, positions_json, int(time.time())),
+            )
             self.conn.commit()
 
     # --- Query audit log ---------------------------------------------------

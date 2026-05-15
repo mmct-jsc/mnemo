@@ -8,6 +8,8 @@ the JSON endpoints in ``mnemo.server``.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import time
 from collections import Counter
 from pathlib import Path
@@ -51,6 +53,36 @@ STATIC_DIR = UI_DIR / "static"
 
 PAGE_SIZE = 25
 PAGE_SIZE_AUDIT = 25
+
+
+def _graph_scope_key(*, project: str | None, project_keys: str | None, base_only: bool) -> str:
+    """Stable cache key for one Nebula scope. Mirrors the scope
+    precedence the graph-data endpoint + client use so the layout
+    cache is partitioned per workspace / deep-link / base-only view.
+    """
+    if project:
+        return f"project:{project}"
+    if project_keys:
+        keys = sorted(k.strip() for k in project_keys.split(",") if k.strip())
+        return "keys:" + ",".join(keys)
+    if base_only:
+        return "base_only"
+    return "global"
+
+
+def _graph_fingerprint(node_ids: list[str], edge_count: int) -> str:
+    """Content fingerprint of the in-scope graph. Changes iff the
+    node set or edge count changes -- which is exactly what a reindex
+    / node-write does. mnemo node ids are content hashes already, so
+    a hash of the sorted id set + edge count is a strong, cheap
+    invalidation key for the cached force layout.
+    """
+    h = hashlib.sha1()
+    for nid in sorted(node_ids):
+        h.update(nid.encode("utf-8"))
+        h.update(b"\x00")
+    h.update(f"|edges={edge_count}".encode())
+    return h.hexdigest()
 
 
 def mount_ui(
@@ -967,6 +999,17 @@ def mount_ui(
         # dropped -- kept in the schema for back-compat with clients
         # still reading the field. total_in_scope still useful so
         # the UI can show "rendering 10,762 nodes" once.
+        # v2.6.3: layout-cache coordination. The client GETs
+        # /ui/graph-layout?scope_key=&fingerprint= -- a hit means the
+        # settled force-layout positions are already cached (instant
+        # render, no GPU re-simulation). The fingerprint changes iff
+        # the in-scope node set / edge count changes (reindex), so the
+        # cache self-invalidates exactly on "impact actions".
+        edge_count = len(elements) - len(node_ids)
+        scope_key = _graph_scope_key(
+            project=project, project_keys=project_keys, base_only=base_only
+        )
+        fingerprint = _graph_fingerprint(list(node_ids), edge_count)
         return JSONResponse(
             {
                 "elements": elements,
@@ -977,5 +1020,71 @@ def mount_ui(
                 # left-panel file tree. Lets the user navigate to a
                 # module that may not be rendered on the canvas.
                 "tree_modules": tree_modules,
+                # v2.6.3: Nebula layout cache coordination.
+                "scope_key": scope_key,
+                "fingerprint": fingerprint,
             }
         )
+
+    # --- Nebula layout cache (v2.6.3) -------------------------------------
+
+    @app.get("/ui/graph-layout")
+    def get_graph_layout(
+        scope_key: str,
+        fingerprint: str,
+        s: Store = Depends(get_store),
+    ) -> JSONResponse:
+        """Return the cached settled force-layout for ``scope_key`` IFF
+        the stored fingerprint still matches the live graph
+        fingerprint the client just got from /ui/graph-data. A miss
+        (no row, or a stale fingerprint after a reindex) tells the
+        client to run the GPU simulation + PUT the result back.
+
+        Positions are a flat JSON array ``[x0, y0, x1, y1, ...]`` in
+        the same point order the client built (node id -> index), so
+        the client applies them with ``setPointPositions`` directly.
+        """
+        cached = s.get_graph_layout(scope_key)
+        if cached is None:
+            return JSONResponse({"hit": False, "reason": "no_layout"})
+        stored_fp, positions_json = cached
+        if stored_fp != fingerprint:
+            return JSONResponse({"hit": False, "reason": "stale"})
+        try:
+            positions = json.loads(positions_json)
+        except (ValueError, TypeError):
+            return JSONResponse({"hit": False, "reason": "corrupt"})
+        return JSONResponse({"hit": True, "positions": positions})
+
+    @app.put("/ui/graph-layout")
+    async def put_graph_layout(
+        request: Request,
+        s: Store = Depends(get_store),
+    ) -> JSONResponse:
+        """Persist the settled layout once the client's GPU
+        simulation converges. Body:
+        ``{scope_key, fingerprint, positions: [x0,y0,...]}``. One row
+        per scope; a fresh fingerprint overwrites the prior layout so
+        the cache always reflects the latest converged graph.
+        """
+        try:
+            body = await request.json()
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=400, detail="invalid JSON body") from None
+        scope_key = body.get("scope_key")
+        fingerprint = body.get("fingerprint")
+        positions = body.get("positions")
+        if not scope_key or not fingerprint or not isinstance(positions, list):
+            raise HTTPException(
+                status_code=400,
+                detail="scope_key, fingerprint, positions[] required",
+            )
+        # Guard against absurd payloads (a 2-float-per-node array).
+        if len(positions) > 4_000_000:
+            raise HTTPException(status_code=413, detail="layout too large")
+        s.put_graph_layout(
+            scope_key=scope_key,
+            fingerprint=fingerprint,
+            positions_json=json.dumps(positions, separators=(",", ":")),
+        )
+        return JSONResponse({"ok": True})
