@@ -379,6 +379,54 @@ class ActiveProject:
     since: int
 
 
+# v3 phase 1: agentic chat companion (design doc S5). Roles map 1:1
+# to the provider message protocol; tool_call / tool_result are the
+# agent-loop turns surfaced as collapsible rows in the UI.
+CHAT_ROLES = frozenset({"user", "assistant", "tool_call", "tool_result", "system"})
+
+
+@dataclass
+class Conversation:
+    """One agentic-chat thread. ``page_context`` is the auto-attached
+    page state (``{page, selected_node_id, filters}``) the companion
+    uses to ground answers. ``archived_at`` is a soft-delete -- archived
+    conversations are still fetchable by id but hidden from the rail."""
+
+    id: str
+    name: str
+    project_key: str | None
+    page_context: dict | None
+    provider: str
+    model: str
+    created_at: int
+    updated_at: int
+    archived_at: int | None = None
+
+
+@dataclass
+class ChatMessage:
+    """One turn. ``content`` is the parsed ``content_json``:
+    ``{text?, tool_call?, tool_result?, citations?: [node_id]}``."""
+
+    id: str
+    conversation_id: str
+    seq: int
+    role: str
+    content: dict
+    created_at: int
+
+
+@dataclass
+class ChatPermission:
+    """A persisted always-allow grant. ``project_key`` None = global
+    (applies to every project); a project-scoped grant only applies to
+    that project_key."""
+
+    project_key: str | None
+    tool_name: str
+    granted_at: int
+
+
 # --- SQL --------------------------------------------------------------------
 
 
@@ -547,6 +595,52 @@ CREATE TABLE IF NOT EXISTS graph_layout (
   fingerprint TEXT NOT NULL,
   positions   TEXT NOT NULL,   -- JSON array [x0,y0,x1,y1,...]
   updated_at  INTEGER NOT NULL
+);
+
+-- v3 phase 1: agentic chat companion. Conversations + messages +
+-- the always-allow permission allowlist are first-class rows (design
+-- doc 2026-05-14-mnemo-v3-design.md S5). Lives in the always-run
+-- SCHEMA_SQL so a pre-v3 DB grows the tables on first reopen
+-- (idempotent executescript). chat_messages FK cascades so purging a
+-- conversation drops its messages (PRAGMA foreign_keys = ON, set in
+-- Store.__init__).
+CREATE TABLE IF NOT EXISTS chat_conversations (
+  id           TEXT PRIMARY KEY,
+  name         TEXT NOT NULL,
+  project_key  TEXT,
+  page_context TEXT,                 -- JSON object (or NULL)
+  provider     TEXT NOT NULL,
+  model        TEXT NOT NULL,
+  created_at   INTEGER NOT NULL,
+  updated_at   INTEGER NOT NULL,
+  archived_at  INTEGER               -- soft-delete; NULL = active
+);
+
+CREATE INDEX IF NOT EXISTS idx_chat_conv_project
+  ON chat_conversations(project_key, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS chat_messages (
+  id              TEXT PRIMARY KEY,
+  conversation_id TEXT NOT NULL
+                  REFERENCES chat_conversations(id) ON DELETE CASCADE,
+  seq             INTEGER NOT NULL, -- 0..N within a conversation
+  role            TEXT NOT NULL,    -- user|assistant|tool_call|tool_result|system
+  content_json    TEXT NOT NULL,    -- JSON {text?,tool_call?,tool_result?,citations?}
+  created_at      INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_chat_msg_conv
+  ON chat_messages(conversation_id, seq);
+
+-- project_key NULL = a global always-allow grant. SQLite permits
+-- repeated NULLs in a composite PK, so grant_permission guards
+-- existence before INSERT -> idempotent regardless of the NULL-PK
+-- quirk.
+CREATE TABLE IF NOT EXISTS chat_permissions (
+  project_key TEXT,
+  tool_name   TEXT NOT NULL,
+  granted_at  INTEGER NOT NULL,
+  PRIMARY KEY (project_key, tool_name)
 );
 """
 
@@ -1722,3 +1816,286 @@ class Store:
             )
             for r in rows
         ]
+
+    # --- Chat (v3 phase 1) -------------------------------------------------
+
+    @staticmethod
+    def _now_ms() -> int:
+        """Epoch milliseconds for chat timestamps. Like the ``workspaces``
+        table (and unlike the second-resolution rest of the schema) the
+        conversation rail must order rapid create / message cycles
+        correctly within a single session or test run -- second
+        precision collides and the newest-first sort goes
+        non-deterministic. The UI consumes the value via
+        ``new Date(ms)`` directly."""
+        return int(time.time() * 1000)
+
+    def create_conversation(
+        self,
+        *,
+        name: str,
+        provider: str,
+        model: str,
+        project_key: str | None = None,
+        page_context: dict | None = None,
+    ) -> Conversation:
+        now = self._now_ms()
+        conv = Conversation(
+            id=uuid.uuid4().hex,
+            name=name,
+            project_key=project_key,
+            page_context=page_context,
+            provider=provider,
+            model=model,
+            created_at=now,
+            updated_at=now,
+            archived_at=None,
+        )
+        with self._lock:
+            self.conn.execute(
+                """
+                INSERT INTO chat_conversations
+                  (id, name, project_key, page_context, provider, model,
+                   created_at, updated_at, archived_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    conv.id,
+                    conv.name,
+                    conv.project_key,
+                    json.dumps(page_context) if page_context is not None else None,
+                    conv.provider,
+                    conv.model,
+                    conv.created_at,
+                    conv.updated_at,
+                    None,
+                ),
+            )
+            self.conn.commit()
+        return conv
+
+    def get_conversation(self, conv_id: str) -> Conversation | None:
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT * FROM chat_conversations WHERE id = ?", (conv_id,)
+            ).fetchone()
+        return self._row_to_conversation(row) if row else None
+
+    def list_conversations(
+        self,
+        *,
+        project_key: str | None = None,
+        include_archived: bool = False,
+    ) -> list[Conversation]:
+        """Conversations sorted ``updated_at DESC``. Archived rows are
+        hidden unless ``include_archived``. ``project_key`` filters to
+        that project (None = every conversation)."""
+        sql = "SELECT * FROM chat_conversations"
+        clauses: list[str] = []
+        params: list[object] = []
+        if project_key is not None:
+            clauses.append("project_key = ?")
+            params.append(project_key)
+        if not include_archived:
+            clauses.append("archived_at IS NULL")
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY updated_at DESC, created_at DESC"
+        with self._lock:
+            rows = self.conn.execute(sql, params).fetchall()
+        return [self._row_to_conversation(r) for r in rows]
+
+    def archive_conversation(self, conv_id: str) -> None:
+        with self._lock:
+            self.conn.execute(
+                "UPDATE chat_conversations SET archived_at = ? WHERE id = ?",
+                (self._now_ms(), conv_id),
+            )
+            self.conn.commit()
+
+    def rename_conversation(
+        self,
+        conv_id: str,
+        *,
+        name: str | None = None,
+        provider: str | None = None,
+        model: str | None = None,
+        page_context: dict | None = None,
+    ) -> Conversation | None:
+        """Patch the metadata fields present in the call (PATCH
+        semantics) and bump ``updated_at``. Returns the refreshed row,
+        or None if the conversation does not exist."""
+        with self._lock:
+            if (
+                self.conn.execute(
+                    "SELECT 1 FROM chat_conversations WHERE id = ?", (conv_id,)
+                ).fetchone()
+                is None
+            ):
+                return None
+            sets: list[str] = ["updated_at = ?"]
+            params: list[object] = [self._now_ms()]
+            if name is not None:
+                sets.append("name = ?")
+                params.append(name)
+            if provider is not None:
+                sets.append("provider = ?")
+                params.append(provider)
+            if model is not None:
+                sets.append("model = ?")
+                params.append(model)
+            if page_context is not None:
+                sets.append("page_context = ?")
+                params.append(json.dumps(page_context))
+            params.append(conv_id)
+            self.conn.execute(
+                f"UPDATE chat_conversations SET {', '.join(sets)} WHERE id = ?",
+                params,
+            )
+            self.conn.commit()
+        return self.get_conversation(conv_id)
+
+    def purge_conversation(self, conv_id: str) -> None:
+        """Hard-delete a conversation. ``chat_messages`` rows go with it
+        via ``ON DELETE CASCADE`` (foreign_keys pragma is on)."""
+        with self._lock:
+            self.conn.execute("DELETE FROM chat_conversations WHERE id = ?", (conv_id,))
+            self.conn.commit()
+
+    def append_message(
+        self,
+        conv_id: str,
+        *,
+        role: str,
+        content: dict,
+    ) -> ChatMessage:
+        """Append a turn with the next monotonic ``seq`` and bump the
+        owning conversation's ``updated_at`` so the rail re-sorts."""
+        if role not in CHAT_ROLES:
+            raise ValueError(f"unknown chat role: {role!r}")
+        now = self._now_ms()
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT COALESCE(MAX(seq), -1) + 1 AS next FROM chat_messages "
+                "WHERE conversation_id = ?",
+                (conv_id,),
+            ).fetchone()
+            seq = int(row["next"])
+            msg = ChatMessage(
+                id=uuid.uuid4().hex,
+                conversation_id=conv_id,
+                seq=seq,
+                role=role,
+                content=content,
+                created_at=now,
+            )
+            self.conn.execute(
+                """
+                INSERT INTO chat_messages
+                  (id, conversation_id, seq, role, content_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (msg.id, conv_id, seq, role, json.dumps(content), now),
+            )
+            self.conn.execute(
+                "UPDATE chat_conversations SET updated_at = ? WHERE id = ?",
+                (now, conv_id),
+            )
+            self.conn.commit()
+        return msg
+
+    def list_messages(self, conv_id: str) -> list[ChatMessage]:
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT * FROM chat_messages WHERE conversation_id = ? ORDER BY seq ASC",
+                (conv_id,),
+            ).fetchall()
+        return [self._row_to_message(r) for r in rows]
+
+    # --- Permissions (the always-allow allowlist) -------------------------
+
+    def _permission_exists(self, project_key: str | None, tool_name: str) -> bool:
+        if project_key is None:
+            sql = "SELECT 1 FROM chat_permissions WHERE tool_name = ? AND project_key IS NULL"
+            args: tuple[object, ...] = (tool_name,)
+        else:
+            sql = "SELECT 1 FROM chat_permissions WHERE tool_name = ? AND project_key = ?"
+            args = (tool_name, project_key)
+        return self.conn.execute(sql, args).fetchone() is not None
+
+    def grant_permission(self, *, project_key: str | None, tool_name: str) -> None:
+        """Persist an always-allow grant. Idempotent: a duplicate
+        (project_key, tool_name) is a no-op (guards the NULL-in-PK
+        quirk where SQLite would otherwise allow repeated NULL rows)."""
+        with self._lock:
+            if not self._permission_exists(project_key, tool_name):
+                self.conn.execute(
+                    "INSERT INTO chat_permissions "
+                    "(project_key, tool_name, granted_at) VALUES (?, ?, ?)",
+                    (project_key, tool_name, self._now_ms()),
+                )
+                self.conn.commit()
+
+    def revoke_permission(self, *, project_key: str | None, tool_name: str) -> None:
+        with self._lock:
+            if project_key is None:
+                self.conn.execute(
+                    "DELETE FROM chat_permissions WHERE tool_name = ? AND project_key IS NULL",
+                    (tool_name,),
+                )
+            else:
+                self.conn.execute(
+                    "DELETE FROM chat_permissions WHERE tool_name = ? AND project_key = ?",
+                    (tool_name, project_key),
+                )
+            self.conn.commit()
+
+    def is_permission_granted(self, *, project_key: str | None, tool_name: str) -> bool:
+        """True if this tool is always-allowed for ``project_key`` --
+        either via a project-scoped grant OR a global (NULL) grant."""
+        with self._lock:
+            if self._permission_exists(None, tool_name):
+                return True
+            if project_key is not None and self._permission_exists(project_key, tool_name):
+                return True
+        return False
+
+    def list_permissions(self) -> list[ChatPermission]:
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT * FROM chat_permissions ORDER BY granted_at ASC, tool_name ASC"
+            ).fetchall()
+        return [
+            ChatPermission(
+                project_key=r["project_key"],
+                tool_name=r["tool_name"],
+                granted_at=int(r["granted_at"]),
+            )
+            for r in rows
+        ]
+
+    @staticmethod
+    def _row_to_conversation(row: sqlite3.Row) -> Conversation:
+        pc = row["page_context"]
+        return Conversation(
+            id=row["id"],
+            name=row["name"],
+            project_key=row["project_key"],
+            page_context=json.loads(pc) if pc else None,
+            provider=row["provider"],
+            model=row["model"],
+            created_at=int(row["created_at"]),
+            updated_at=int(row["updated_at"]),
+            archived_at=(int(row["archived_at"]) if row["archived_at"] is not None else None),
+        )
+
+    @staticmethod
+    def _row_to_message(row: sqlite3.Row) -> ChatMessage:
+        return ChatMessage(
+            id=row["id"],
+            conversation_id=row["conversation_id"],
+            seq=int(row["seq"]),
+            role=row["role"],
+            content=json.loads(row["content_json"]),
+            created_at=int(row["created_at"]),
+        )
