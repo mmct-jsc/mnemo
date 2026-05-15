@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Mnem thinking">
+  <circle cx="32" cy="32" r="28" fill="#b08cff"/>
+  <circle cx="24" cy="28" r="3.2" fill="#06121f"/>
+  <circle cx="40" cy="28" r="3.2" fill="#06121f"/>
+  <circle cx="24" cy="44" r="2.4" fill="#06121f"/>
+  <circle cx="32" cy="44" r="2.4" fill="#06121f"/>
+  <circle cx="40" cy="44" r="2.4" fill="#06121f"/>
+</svg>
