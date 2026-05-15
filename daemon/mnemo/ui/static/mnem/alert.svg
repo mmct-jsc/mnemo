@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Mnem alert">
+  <circle cx="32" cy="32" r="28" fill="#ff7a7a"/>
+  <circle cx="24" cy="29" r="3.2" fill="#06121f"/>
+  <circle cx="40" cy="29" r="3.2" fill="#06121f"/>
+  <path d="M24 44 q8 -6 16 0" stroke="#06121f" stroke-width="3" fill="none" stroke-linecap="round"/>
+  <path d="M32 10 v8" stroke="#06121f" stroke-width="3" stroke-linecap="round"/>
+</svg>
