@@ -140,8 +140,19 @@
            x-show) so the user can sanity-check completeness at a
            glance. -->
       <div class="nebula-status">
-        <span class="nebula-status-count"
-              x-text="shownNodeCount.toLocaleString() + ' nodes'"></span>
+        <!-- v2.6.1: when the canvas is degree-capped, say so plainly
+             and point at the tree. The bare "10,845 nodes" while only
+             2 000 paint read as a bug; this makes the curation
+             explicit + tells the user the full corpus is in the
+             file tree (which v3 chat references). -->
+        <template x-if="canvasCapped">
+          <span class="nebula-status-count"
+                x-text="'top ' + canvasShown.toLocaleString() + ' of ' + canvasTotal.toLocaleString() + ' nodes · full list in tree'"></span>
+        </template>
+        <template x-if="!canvasCapped">
+          <span class="nebula-status-count"
+                x-text="canvasTotal.toLocaleString() + ' nodes'"></span>
+        </template>
         <span class="nebula-status-sep" x-show="contextWorkspaceName" x-cloak>·</span>
         <span class="nebula-status-ws" x-show="contextWorkspaceName" x-cloak
               x-text="contextWorkspaceName"></span>
@@ -286,16 +297,11 @@
           <option :value="3">3</option>
         </select>
       </label>
-      <div class="nebula-layout-buttons">
-        <button @click="relayout('fcose')"
-                :class="{ active: currentLayout === 'fcose' }">force</button>
-        <button @click="relayout('concentric')"
-                :class="{ active: currentLayout === 'concentric' }">rings</button>
-        <button @click="relayout('breadthfirst')"
-                :class="{ active: currentLayout === 'breadthfirst' }">tree</button>
-        <button @click="relayout('grid')"
-                :class="{ active: currentLayout === 'grid' }">grid</button>
-      </div>
+      <!-- v2.6.1: the four-layout switcher (force / rings / tree /
+           grid) is gone. fcose on 10 k+ nodes froze the tab for
+           30 s, so the buttons were a foot-gun. We now ship one
+           polished layout (concentric, log-bucketed by degree)
+           for every workspace size. -->
       <!-- v2.2.3: edge + label visibility toggles. Both default to
            ON; tapping each flips a class on the matching cytoscape
            selector (.edges-off / .labels-off) inside a cy.batch so
@@ -378,6 +384,9 @@ function nebula() {
     truncated: false,            // v2.6.0: deprecated -- always false after we removed the cap
     totalInScope: 0,             // v2.6.0: total nodes the workspace covers (== shown for status chip)
     shownNodeCount: 0,           // v2.6.0: nodes painted on canvas
+    canvasCapped: false,         // v2.6.1: true when canvas shows top-N-by-degree (tree still full)
+    canvasShown: 0,              // v2.6.1: node count actually on the canvas
+    canvasTotal: 0,              // v2.6.1: node count in scope (canvas + capped-out, all in tree)
     treeModules: [],             // v2.6.0: unbounded module list for left-panel tree
     _eventSource: null,
     stats: '',
@@ -418,15 +427,29 @@ function nebula() {
       return TYPE_COLORS[t] || TYPE_COLOR_FALLBACK;
     },
 
-    // v2.2.3: edges + labels visibility toggles. Mirror cytoscape
-    // class toggles inside cy.batch() so the canvas redraws once
-    // per toggle, not per affected element.
+    // v2.6.1: edges toggle now ACTUALLY adds / removes edges from
+    // the cytoscape model. The v2.2.3 design relied on a
+    // .edges-off CSS class (display: none) which collided with the
+    // .hl class selectFromCanvas added to the closed neighborhood
+    // -- you'd toggle edges off, click a node, and the
+    // "neighborhood" edges would visually pop back in. With actual
+    // removal there's nothing in cy to paint, so off truly is off.
+    //
+    // On heavy graphs we still default to "off" (15 k edges
+    // re-added to a 10 k-node canvas is a 30 s freeze), but the
+    // toggle remains available if the user really wants them.
     toggleEdges() {
       this.edgesVisible = !this.edgesVisible;
       if (!this.cy) return;
       this.cy.batch(() => {
-        if (this.edgesVisible) this.cy.edges().removeClass('edges-off');
-        else this.cy.edges().addClass('edges-off');
+        if (this.edgesVisible) {
+          // Re-attach from the stash if cy is currently edge-less.
+          if (this.cy.edges().length === 0 && this._allEdges?.length) {
+            this.cy.add(this._allEdges);
+          }
+        } else {
+          this.cy.edges().remove();
+        }
       });
       this._persistState();
     },
@@ -713,14 +736,13 @@ function nebula() {
       this.buildTree();
       this.buildTypeFilters();
 
-      // v2.2.4: apply the persisted edge / label visibility so the
-      // canvas matches the user's last session from first paint.
-      // Has to land AFTER renderCanvas because cy.batch needs cy.
-      if (this.cy) {
-        this.cy.batch(() => {
-          if (!this.edgesVisible) this.cy.edges().addClass('edges-off');
-          if (!this.labelsVisible) this.cy.nodes().addClass('labels-off');
-        });
+      // v2.6.1: edges visibility is now baked into renderCanvas
+      // (canvasEls excludes edges when !edgesVisible), so there's
+      // nothing to do for the persisted edge state here. Labels
+      // still ride on a CSS class because they're per-node-style,
+      // not whether-to-paint-the-element-at-all.
+      if (this.cy && !this.labelsVisible) {
+        this.cy.batch(() => this.cy.nodes().addClass('labels-off'));
       }
       // Restored filter chips also need to feed into the actual
       // node hide/show -- applyFilters handles it but is otherwise
@@ -747,46 +769,82 @@ function nebula() {
           degree[e.data.target] = (degree[e.data.target] || 0) + 1;
         }
       }
-      const els = this.rawElements.map(e => {
-        if (e.data.id !== undefined) {
-          return { data: { ...e.data, deg: degree[e.data.id] || 0 } };
-        }
-        return e;
-      });
+      const allNodes = this.rawElements
+        .filter(e => e.data.id !== undefined)
+        .map(e => ({ data: { ...e.data, deg: degree[e.data.id] || 0 } }));
+      const allEdges = this.rawElements
+        .filter(e => e.data.source !== undefined)
+        .map(e => ({ data: { ...e.data } }));
 
-      // v2.6.0 perf: when the graph is large, every per-node visual
-      // effect (motion blur, edge re-paint during pan, underlay
-      // glow) compounds into multi-second jank. Tune them down
-      // automatically above 3 000 nodes so the user sees a smooth
-      // canvas even at 10 k. The architecture is still all there --
-      // we just stop painting expensive composite layers per node.
-      const canvasNodeCount = els.filter(e => e.data.id !== undefined).length;
-      const heavyGraph = canvasNodeCount > 3_000;
+      // v2.6.1: ONE LAYOUT + DEGREE-CAPPED CANVAS.
+      //
+      // The hard limit we hit: cytoscape's canvas renderer cannot
+      // paint 10 k+ sharp nodes per frame smoothly. Every config
+      // knob is a trade -- low pixelRatio is fast but blurry,
+      // textureOnViewport is sharp but stutters ~2 s on every
+      // pan-past-the-cached-region, no-texture full-res is a flat
+      // 2 s freeze per frame. Three same-family fixes all failed;
+      // that means the architecture (render-everything) is wrong,
+      // not the tuning.
+      //
+      // Resolution: the CANVAS is a visual overview, the FILE TREE
+      // is the navigator. The tree (left panel, fed by the
+      // unbounded tree_modules side-channel) already lists EVERY
+      // module, and that -- not the canvas -- is what v3 chat
+      // references. So we cap the canvas to the GRAPH_CANVAS_CAP
+      // most-connected nodes (degree desc). The user gets a silky,
+      // sharp star-map of the important hubs; the complete corpus
+      // stays one click away in the tree.
+      //
+      // Edges are kept only between surviving nodes, then held in
+      // this._allEdges so toggleEdges() / the selection neighbors
+      // list work without the edges being painted by default.
+      const GRAPH_CANVAS_CAP = 2000;
+      const totalNodeCount = allNodes.length;
+      const capped = totalNodeCount > GRAPH_CANVAS_CAP;
+      this._heavyGraph = capped;
+      this.canvasCapped = capped;
+      this.canvasShown = capped ? GRAPH_CANVAS_CAP : totalNodeCount;
+      this.canvasTotal = totalNodeCount;
+
+      let keptNodes = allNodes;
+      if (capped) {
+        keptNodes = allNodes
+          .slice()
+          .sort((a, b) => (b.data.deg || 0) - (a.data.deg || 0))
+          .slice(0, GRAPH_CANVAS_CAP);
+      }
+      const keptIds = new Set(keptNodes.map(n => n.data.id));
+      // Only edges whose BOTH endpoints survived the cap.
+      this._allEdges = allEdges.filter(
+        e => keptIds.has(e.data.source) && keptIds.has(e.data.target),
+      );
+      this._stashedEdges = this._allEdges;  // legacy alias for select path
+
+      // Edges paint only when the user has them toggled on. Default
+      // for a capped (still ~2 k-node) canvas is off so the first
+      // paint is instant; the toggle adds them back on demand.
+      const wantEdgesOnCanvas = this.edgesVisible && !capped;
+      const canvasEls = wantEdgesOnCanvas
+        ? [...keptNodes, ...this._allEdges]
+        : keptNodes;
 
       if (this.cy) this.cy.destroy();
       this.cy = cytoscape({
         container: document.getElementById('cy-nebula'),
-        elements: els,
+        elements: canvasEls,
         minZoom: 0.12,
         maxZoom: 4,
-        // Cheap-render hints for big graphs: cache the rendered scene
-        // as a texture during pan/zoom so we don't redraw every edge
-        // every frame. Render labels only at moderate zoom.
+        // Capped to <=2 k nodes now -- texture capture is cheap and
+        // makes pan/zoom buttery, so keep it on everywhere.
         textureOnViewport: true,
-        // v2.6.0 perf: on big graphs the edges are the single most
-        // expensive thing to repaint during pan. Hide them while
-        // the viewport is moving; cytoscape pops them back on release.
-        // The "graph collapses to bare nodes mid-drag" feel is a worth-
-        // it trade vs 5-second pan stalls on a 15 k-edge canvas.
-        hideEdgesOnViewport: heavyGraph,
+        hideEdgesOnViewport: false,
         hideLabelsOnViewport: true,
-        pixelRatio: 1.0,
+        // No pixelRatio override -- cytoscape defaults to
+        // window.devicePixelRatio so HiDPI screens stay crisp.
         wheelSensitivity: 0.18,  // slow, silky scroll-zoom
-        // Motion blur: nice on small graphs, expensive on big ones.
-        motionBlur: !heavyGraph,
+        motionBlur: true,
         motionBlurOpacity: 0.18,
-        // Damped pan: cytoscape eases to a stop when the user
-        // releases the mouse rather than locking instantly.
         userPanningEnabled: true,
         autounselectify: false,
         style: [
@@ -802,14 +860,14 @@ function nebula() {
               // Inner glow / halo: ``underlay`` paints BEHIND the node
               // so the color bleeds outward like a star -- the
               // "nebula" feel the design asked for.
-              // v2.6.0 perf: the underlay composite layer is the
-              // single most expensive per-node style on big graphs.
-              // Skip it above 3 000 nodes; the user still gets color
-              // + size; the glow is the polish we trade for fluid
-              // pan/zoom.
+              // v2.6.1: the canvas is now capped at <=2 000 nodes
+              // (the tree carries the full corpus) so we can afford
+              // the underlay glow on every node again -- it's the
+              // signature "nebula" look and 2 k composites paint
+              // well within frame budget.
               'underlay-color': (n) => TYPE_COLORS[n.data('type')] || TYPE_COLOR_FALLBACK,
-              'underlay-opacity': heavyGraph ? 0 : 0.32,
-              'underlay-padding': heavyGraph ? 0 : 8,
+              'underlay-opacity': 0.32,
+              'underlay-padding': 8,
               'underlay-shape': 'ellipse',
               'border-width': 1,
               'border-color': '#0a0d14',
@@ -909,47 +967,39 @@ function nebula() {
           { selector: 'edge.edges-off', style: { display: 'none' }},
           { selector: 'node.labels-off', style: { 'text-opacity': 0 }},
         ],
-        // v2.6.0 polish: graceful initial layout for large workspaces.
-        // fcose default fights the main thread above ~3 000 nodes;
-        // for 10 k+ (the aibox + edge case) it freezes the tab for
-        // 5-30 s. The initial layout falls back to concentric for
-        // big graphs; ``currentLayout`` is synced so the toolbar's
-        // active button reflects what's actually on the canvas.
-        // ``relayout('fcose')`` runs in DRAFT quality for big graphs
-        // (fewer iterations, no animation) so the button stays
-        // functional without freezing the tab.
-        layout: (heavyGraph
-          ? {
-              name: 'concentric',
-              concentric: (n) => n.data('deg') || 0,
-              levelWidth: () => 1,
-              minNodeSpacing: 4,
-              animate: false,
-              fit: true,
-              padding: 30,
-            }
-          : {
-              name: 'fcose',
-              animate: false,
-              randomize: true,
-              quality: 'default',
-              nodeRepulsion: 8000,
-              idealEdgeLength: 80,
-              edgeElasticity: 0.45,
-              gravity: 0.25,
-              padding: 50,
-              fit: true,
-            }),
+        // v2.6.1: ONE layout, polished. Concentric arranges nodes in
+        // rings; we bucket the degree on a log scale so hubs land
+        // on the inner rings and leaves spread to the outer ones.
+        // The result reads as a star map: the most-connected ideas
+        // sit in the bright center, peripheral references orbit
+        // outside. Way more legible than the v2.6.0 "every distinct
+        // degree gets its own ring" config (which produced hundreds
+        // of paper-thin rings indistinguishable from each other).
+        layout: {
+          name: 'concentric',
+          concentric: (n) => {
+            const d = n.data('deg') || 0;
+            if (d >= 51) return 5;   // mega-hubs
+            if (d >= 16) return 4;   // major hubs
+            if (d >= 5)  return 3;   // small hubs
+            if (d >= 2)  return 2;   // connected
+            if (d >= 1)  return 1;   // pendants
+            return 0;                // isolates (outer ring)
+          },
+          levelWidth: () => 1,
+          // v2.6.1 polish: wider spacing so the canvas breathes.
+          // 4 (the v2.6.0 value) crammed nodes into a dense annulus
+          // that read as a blob; 12 separates them cleanly.
+          minNodeSpacing: 12,
+          animate: false,
+          fit: true,
+          padding: 40,
+        },
       });
 
-      // v2.6.0 polish: sync the active-layout toolbar button with
-      // the layout that actually ran. Without this, the "force"
-      // button stays highlighted while the canvas shows concentric
-      // (the big-graph fallback) -- the user thinks they're looking
-      // at force-directed layout when they aren't.
-      if (heavyGraph) {
-        this.currentLayout = 'concentric';
-      }
+      // v2.6.1: layout is always concentric. The toolbar switcher
+      // is gone; this line keeps the persisted-state read happy.
+      this.currentLayout = 'concentric';
 
       this.cy.on('tap', 'node', (evt) => {
         // Suppress the canvas-tap that fires alongside a node-tap on
@@ -983,7 +1033,9 @@ function nebula() {
 
       // Silky hover: lift the underlay padding briefly when the
       // cursor enters a node so it "blooms" without committing the
-      // selection.
+      // selection. v2.6.1: the canvas is capped at <=2 000 nodes so
+      // the per-event restyle is affordable on every workspace --
+      // no more heavy-graph special case.
       this.cy.on('mouseover', 'node', (evt) => {
         const n = evt.target;
         if (!n.hasClass('hl')) {
@@ -1042,9 +1094,11 @@ function nebula() {
       // captured (so positions are final), hide every node, then
       // un-hide in batches of CHUNK_SIZE by descending degree. The
       // user sees the densest cluster of the graph appear first,
-      // then the rest of the components fade in waves. Total reveal
-      // time ~600-900ms depending on node count; far easier to
-      // visually parse than "blank canvas -> 478 nodes at once".
+      // then the rest of the components fade in waves.
+      // v2.6.1: the canvas is capped at <=2 000 nodes so the reveal
+      // is a bounded ~3 s wave (40 chunks * 80 ms) -- a pleasant
+      // "star map igniting" effect, not the 16 s churn the old
+      // 10 k-node path produced. Runs for every workspace now.
       this._renderCanvasChunked();
     },
 
@@ -1385,16 +1439,52 @@ function nebula() {
         { duration: 350, easing: 'ease-out' },
       );
 
-      // PERFORMANCE: batch class mutations so Cytoscape only
-      // re-styles once. Without ``batch``, each ``.addClass`` on a
-      // 1200-element graph forces a separate render pass.
-      const neighborhood = node.closedNeighborhood();
-      this.cy.batch(() => {
-        this.cy.elements().removeClass('hl dim');
-        // Dim only what's NOT in the neighborhood.
-        this.cy.elements().not(neighborhood).addClass('dim');
-        neighborhood.addClass('hl');
-      });
+      // v2.6.1 perf: split fast and slow paths.
+      //
+      // HEAVY (>3 k nodes): the canvas holds nodes only and a hub
+      // can have 971 connections. The previous "highlight the whole
+      // 1-hop neighborhood" approach blew up two ways at this scale:
+      // (1) cy.elements().removeClass('hl dim') walks all 10 k+
+      // elements every select, (2) cy.add(971 edges) per hub is a
+      // full restyle pass. Both produced 14 s hangs on selection.
+      // Instead: just hl the ONE selected node (targeted class swap
+      // via _lastHl) and build the neighbors list from the edge
+      // stash. Visual signal is the single bright glow + the side-
+      // panel list -- canvas edges stay out.
+      //
+      // LIGHT (<=3 k): keep the v2.2 closed-neighborhood + dim
+      // behavior -- it's cheap and the prettier focus effect.
+      if (this._heavyGraph) {
+        if (this._lastHl) this._lastHl.removeClass('hl');
+        node.addClass('hl');
+        this._lastHl = node;
+
+        const seen = {};
+        for (const e of this._stashedEdges) {
+          const eSrc = e.data.source;
+          const eTgt = e.data.target;
+          const otherId = eSrc === d.id ? eTgt : eTgt === d.id ? eSrc : null;
+          if (!otherId) continue;
+          const other = this.cy.getElementById(otherId);
+          if (!other.length) continue;
+          const od = other.data();
+          const rel = e.data.relation;
+          const conf = e.data.confidence ?? 1.0;
+          if (!seen[otherId] || conf > seen[otherId].confidence) {
+            seen[otherId] = {
+              id: otherId, name: od.name, type: od.type, rel, confidence: conf,
+            };
+          }
+        }
+        this.neighbors = Object.values(seen);
+      } else {
+        const neighborhood = node.closedNeighborhood();
+        this.cy.batch(() => {
+          this.cy.elements().removeClass('hl dim');
+          this.cy.elements().not(neighborhood).addClass('dim');
+          neighborhood.addClass('hl');
+        });
+      }
 
       // Hydrate body from /v1/nodes/<id> -- defer the fetch a frame
       // so the click feels instant. The DOM updates from this.selected
@@ -1411,17 +1501,22 @@ function nebula() {
       });
 
       // Build neighbors list (deduped by node id, keep best relation).
-      const seen = {};
-      node.connectedEdges().forEach((e) => {
-        const other = e.source().id() === d.id ? e.target() : e.source();
-        const od = other.data();
-        const rel = e.data('relation');
-        const conf = e.data('confidence') ?? 1.0;
-        if (!seen[od.id] || conf > seen[od.id].confidence) {
-          seen[od.id] = { id: od.id, name: od.name, type: od.type, rel, confidence: conf };
-        }
-      });
-      this.neighbors = Object.values(seen);
+      // v2.6.1 perf: heavy mode already built this.neighbors inline
+      // from the stash above; skip the cy.connectedEdges path (which
+      // would walk the absent edges anyway).
+      if (!this._heavyGraph) {
+        const seen = {};
+        node.connectedEdges().forEach((e) => {
+          const other = e.source().id() === d.id ? e.target() : e.source();
+          const od = other.data();
+          const rel = e.data('relation');
+          const conf = e.data('confidence') ?? 1.0;
+          if (!seen[od.id] || conf > seen[od.id].confidence) {
+            seen[od.id] = { id: od.id, name: od.name, type: od.type, rel, confidence: conf };
+          }
+        });
+        this.neighbors = Object.values(seen);
+      }
 
       // PERFORMANCE: replace the old 60ms-tick setInterval pulse
       // (which re-styled the selected node + every highlighted edge
@@ -1502,7 +1597,18 @@ function nebula() {
       this._stopPulse();
       if (this.cy) {
         this.cy.elements().stop(true, false);
-        this.cy.batch(() => this.cy.elements().removeClass('hl dim'));
+        // v2.6.1 perf: in heavy mode only the single hl node was
+        // styled, so a targeted removeClass is O(1) vs O(N) for the
+        // bulk path. Same for the no-op edges.remove (heavy mode
+        // doesn't add edges to cy anymore).
+        if (this._heavyGraph) {
+          if (this._lastHl) {
+            this._lastHl.removeClass('hl');
+            this._lastHl = null;
+          }
+        } else {
+          this.cy.batch(() => this.cy.elements().removeClass('hl dim'));
+        }
       }
       this.selected = null;
       this.neighbors = [];
