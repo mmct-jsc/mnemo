@@ -2,7 +2,8 @@
 {% block title %} - chat{% endblock %}
 
 {% block content %}
-<section class="mn" x-data="chatPage()" x-init="init()">
+<script src="/static/chat.js?v={{ mnemo_version }}" defer></script>
+<section class="mn" x-data="mnemoChat({ surface: 'page' })" x-init="init()">
 
   <!-- left rail: conversations -->
   <aside class="chat-rail">
@@ -37,6 +38,16 @@
   <main class="chat-thread">
     <div class="thread-scroll" x-ref="log">
       <div class="thread-col">
+
+        <!-- scroll-up lazy-history sentinel (IntersectionObserver) -->
+        <div class="load-older" x-ref="topSentinel" :class="{ on: hasMore }">
+          <template x-if="hasMore">
+            <span class="lo-pill">
+              <span class="lo-dot"></span><span class="lo-dot"></span><span class="lo-dot"></span>
+              earlier messages
+            </span>
+          </template>
+        </div>
 
         <!-- empty / welcome state -->
         <div class="welcome" x-show="!messages.length && !streaming" x-cloak>
@@ -102,7 +113,9 @@
                  width="30" height="30" alt="Mnem">
             <div class="assistant-body">
               <div class="prose" x-ref="liveBody"></div>
-              <span class="caret" x-show="thinking" x-cloak>thinking</span>
+              <div class="mnem-working" x-show="working" x-cloak aria-label="Mnem is working">
+                <span></span><span></span><span></span>
+              </div>
             </div>
           </div>
         </div>
@@ -159,250 +172,6 @@
   </aside>
 </section>
 
-<script>
-function chatPage() {
-  return {
-    conversations: [], activeId: null, messages: [], citations: [],
-    citeSel: '', draft: '', streaming: false, thinking: false,
-    pending: null, _es: null,
-    examples: [
-      'What do we know about MQTT broker auth?',
-      'Trace why the Nebula renderer was reverted.',
-      'Draft a memory for what we just learned.',
-    ],
-    get groupedConversations() {
-      const now = Date.now(), DAY = 86400000;
-      const sod = new Date(); sod.setHours(0, 0, 0, 0);
-      const groups = { Today: [], Yesterday: [], Earlier: [] };
-      for (const c of this.conversations) {
-        const t = c.updated_at || 0;
-        if (t >= sod.getTime()) groups.Today.push(c);
-        else if (t >= sod.getTime() - DAY) groups.Yesterday.push(c);
-        else groups.Earlier.push(c);
-      }
-      return Object.entries(groups)
-        .filter(([, v]) => v.length)
-        .map(([label, items]) => ({ label, items }));
-    },
-    relTime(ms) {
-      if (!ms) return '';
-      const s = (Date.now() - ms) / 1000;
-      if (s < 60) return 'now';
-      if (s < 3600) return Math.floor(s / 60) + 'm';
-      if (s < 86400) return Math.floor(s / 3600) + 'h';
-      if (s < 604800) return Math.floor(s / 86400) + 'd';
-      return new Date(ms).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-    },
-    mood(m) {
-      document.dispatchEvent(new CustomEvent('mnemo-mnem-mood', { detail: { mood: m } }));
-    },
-    grow(el) { el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 180) + 'px'; },
-    async init() {
-      await this.loadConversations();
-      if (this.conversations.length) this.openConversation(this.conversations[0].id);
-    },
-    async loadConversations() {
-      this.conversations = await fetch('/v1/chat').then(r => r.json());
-    },
-    async newConversation() {
-      const conv = await fetch('/v1/chat', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: 'New chat' }),
-      }).then(r => r.json());
-      await this.loadConversations();
-      this.openConversation(conv.id);
-      this.$nextTick(() => this.$refs.draft && this.$refs.draft.focus());
-    },
-    async openConversation(id) {
-      this.activeId = id; this.citations = []; this.citeSel = '';
-      const data = await fetch('/v1/chat/' + id).then(r => r.json());
-      this.messages = (data.messages || []).map((m, i) =>
-        Object.assign({}, m, { key: m.id || ('m' + i) }));
-      this.collectCitations();
-      this.scroll(true);
-    },
-    collectCitations() {
-      const seen = [];
-      for (const m of this.messages)
-        for (const c of (m.content && m.content.citations) || [])
-          if (!seen.includes(c)) seen.push(c);
-      this.citations = seen;
-    },
-    renderText(t) {
-      const esc = (s) => s.replace(/[&<>]/g, (c) =>
-        ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
-      // strip mnemo-draft fences from prose (rendered as cards separately)
-      const noDraft = (t || '').replace(/```mnemo-draft[\s\S]*?```/g, '').trim();
-      return esc(noDraft)
-        .replace(/```([\s\S]*?)```/g, '<pre>$1</pre>')
-        .replace(/`([^`]+)`/g, '<code>$1</code>')
-        .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-        .replace(/\[mnemo:([^\]\s]+)\]/g,
-          '<a href="/node/$1" class="cite-link" onclick="event.stopPropagation()">[mnemo:$1]</a>')
-        .replace(/\n/g, '<br>');
-    },
-    extractDrafts(text) {
-      const out = [], re = /```mnemo-draft\s*\n([\s\S]*?)```/g;
-      let m;
-      while ((m = re.exec(text || '')) !== null) {
-        const raw = m[1];
-        const fm = raw.match(/^---\s*\n([\s\S]*?)\n---\s*\n?([\s\S]*)$/);
-        const front = {};
-        let body = raw.trim();
-        if (fm) {
-          body = (fm[2] || '').trim();
-          for (const line of fm[1].split('\n')) {
-            const kv = line.match(/^([A-Za-z_]+):\s*(.*)$/);
-            if (kv) front[kv[1]] = kv[2].trim();
-          }
-        }
-        out.push({ raw, front, body });
-      }
-      return out;
-    },
-    async saveDraft(d) {
-      const typeMap = {
-        user: 'memory_user', feedback: 'memory_feedback',
-        project: 'memory_project', reference: 'memory_reference',
-        session_summary: 'session_summary',
-      };
-      const r = await fetch('/v1/nodes', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          type: typeMap[d.front.type] || 'memory_feedback',
-          name: d.front.name || 'untitled', body: d.body,
-          project_key: d.front.projectKey || null,
-        }),
-      });
-      if (r.ok) {
-        const n = await r.json();
-        fetch('/v1/reindex', { method: 'POST' }).catch(() => {});
-        if (window.toast) window.toast('Saved memory ' + (n.id || ''), 'success');
-      } else if (window.toast) {
-        window.toast('Save failed: ' + (await r.text()), 'error');
-      }
-    },
-    async previewNode(cid) {
-      this.citeSel = cid;
-      const box = this.$refs.citePreview;
-      box.textContent = 'loading…';
-      try {
-        const n = await fetch('/v1/nodes/' + cid).then(r => r.ok ? r.json() : null);
-        if (n && window.mnemoRenderBody) {
-          window.mnemoRenderBody(box, n.body || '', { type: n.type, sourcePath: n.source_path });
-        } else if (n) {
-          box.textContent = n.body || '';
-        } else {
-          box.innerHTML = '<a href="/node/' + cid + '">open ' + cid + '</a>';
-        }
-      } catch (e) {
-        box.innerHTML = '<a href="/node/' + cid + '">open ' + cid + '</a>';
-      }
-    },
-    scroll(instant) {
-      this.$nextTick(() => {
-        const l = this.$refs.log;
-        if (l) l.scrollTo({ top: l.scrollHeight, behavior: instant ? 'auto' : 'smooth' });
-      });
-    },
-    async sendMessage() {
-      const text = this.draft.trim();
-      if (!text || this.streaming) return;
-      if (!this.activeId) {
-        await this.newConversation();
-        await new Promise(r => setTimeout(r, 50));
-      }
-      const id = this.activeId;
-      this.draft = '';
-      if (this.$refs.draft) this.$refs.draft.style.height = 'auto';
-      this.messages.push({ key: 'u' + Date.now(), role: 'user', content: { text } });
-      this.scroll();
-      await fetch('/v1/chat/' + id + '/message', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text }),
-      });
-      this.streamRun(id);
-    },
-    streamRun(id) {
-      this.streaming = true; this.thinking = true; this.mood('thinking');
-      const live = this.$refs.liveBody;
-      if (live) live.innerHTML = '';
-      let buf = '';
-      const es = new EventSource('/v1/chat/' + id + '/events');
-      this._es = es;
-      const finish = (mood) => {
-        es.close(); this._es = null;
-        this.streaming = false; this.thinking = false; this.pending = null;
-        this.mood(mood || 'idle');
-        this.openConversation(id);
-      };
-      es.addEventListener('thinking', () => { this.thinking = true; this.mood('thinking'); });
-      es.addEventListener('text_delta', (e) => {
-        this.thinking = false; this.mood('speaking');
-        buf += JSON.parse(e.data).text || '';
-        if (live) live.innerHTML = this.renderText(buf) + '<span class="blink">▍</span>';
-        this.scroll();
-      });
-      es.addEventListener('tool_call', (e) => {
-        const d = JSON.parse(e.data);
-        this.messages.push({ key: 'tc' + Date.now(), role: 'tool_call',
-          content: { name: d.name, args: d.args } });
-        this.scroll();
-      });
-      es.addEventListener('tool_result', (e) => {
-        const d = JSON.parse(e.data);
-        this.messages.push({ key: 'tr' + Date.now(), role: 'tool_result',
-          content: { id: d.id } });
-        this.scroll();
-      });
-      es.addEventListener('permission_request', (e) => {
-        this.pending = JSON.parse(e.data);
-        this.thinking = false; this.mood('waiting');
-        this.scroll();
-      });
-      es.addEventListener('citation', (e) => {
-        const d = JSON.parse(e.data);
-        if (!this.citations.includes(d.node_id)) this.citations.push(d.node_id);
-      });
-      es.addEventListener('ui_action', (e) => {
-        const d = JSON.parse(e.data), a = d.args || {};
-        if (d.action === 'navigate' && a.path) {
-          setTimeout(() => { window.location.href = a.path; }, 600);
-        } else if (d.action === 'select_node') {
-          document.dispatchEvent(new CustomEvent('mnemo-select-node', { detail: a }));
-        } else if (d.action === 'set_filter') {
-          document.dispatchEvent(new CustomEvent('mnemo-set-filter', { detail: a }));
-        } else if (d.action === 'scroll_to' && a.selector) {
-          const el = document.querySelector(a.selector);
-          if (el) el.scrollIntoView({ behavior: 'smooth' });
-        } else if (d.action === 'open_panel') {
-          document.dispatchEvent(new CustomEvent('mnemo-open-panel', { detail: a }));
-        }
-        if (window.toast) window.toast('Mnem: ' + d.action, 'info');
-      });
-      es.addEventListener('done', () => finish('idle'));
-      es.addEventListener('idle', () => finish('idle'));
-      es.addEventListener('error', (e) => {
-        try {
-          const d = JSON.parse(e.data || '{}');
-          if (d.message && window.toast) window.toast(d.message, 'error');
-        } catch (_) { /* bare connection-close error */ }
-        finish('alert');
-      });
-    },
-    async decide(decision) {
-      if (!this.pending) return;
-      const pid = this.pending.id;
-      this.pending = null;
-      this.thinking = true; this.mood('thinking');
-      await fetch('/v1/chat/' + this.activeId + '/permit', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ permission_id: pid, decision }),
-      });
-    },
-  };
-}
-</script>
 
 <style>
   /* ---- mnemo v3 chat : "knowledge terminal", Claude-grade ---- */
@@ -475,6 +244,33 @@ function chatPage() {
   .blink { animation: blink 1s steps(1) infinite; color: var(--accent); }
   @keyframes blink { 50% { opacity: 0; } }
   @keyframes pulse { 0%,100% { opacity: .4; } 50% { opacity: 1; } }
+
+  /* "working" animation -- orbiting dots while Mnem is thinking
+     (Claude-style; a short min-display avoids a flash) */
+  .mnem-working { display: inline-flex; gap: .3rem; align-items: center;
+    padding: .15rem 0; min-height: 1.1rem; }
+  .mnem-working span { width: 6px; height: 6px; border-radius: 50%;
+    background: var(--accent); opacity: .35;
+    animation: mnem-bob 1.1s ease-in-out infinite; }
+  .mnem-working span:nth-child(2) { animation-delay: .15s; }
+  .mnem-working span:nth-child(3) { animation-delay: .3s; }
+  @keyframes mnem-bob {
+    0%,80%,100% { opacity: .3; transform: translateY(0); }
+    40% { opacity: 1; transform: translateY(-4px); } }
+  @media (prefers-reduced-motion: reduce) {
+    .mnem-working span { animation: none; opacity: .6; } }
+
+  /* lazy-history scroll-up sentinel */
+  .load-older { min-height: 6px; display: flex; justify-content: center; }
+  .load-older.on { padding: .35rem 0 .2rem; }
+  .lo-pill { display: inline-flex; align-items: center; gap: .4rem;
+    font-family: var(--mono); font-size: .7rem; color: var(--fg-dim);
+    background: var(--panel); border: 1px solid var(--border-soft);
+    border-radius: 999px; padding: .25rem .7rem; }
+  .lo-dot { width: 4px; height: 4px; border-radius: 50%;
+    background: var(--fg-dim); animation: mnem-bob 1.2s ease-in-out infinite; }
+  .lo-dot:nth-child(2) { animation-delay: .15s; }
+  .lo-dot:nth-child(3) { animation-delay: .3s; }
 
   /* tool chips */
   .tool-chip { margin-left: 3.4rem; }

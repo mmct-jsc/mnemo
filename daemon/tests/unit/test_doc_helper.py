@@ -5,22 +5,20 @@ from __future__ import annotations
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
-CHAT_HTML = (
-    Path(__file__).resolve().parents[2]
-    / "mnemo"
-    / "ui"
-    / "templates"
-    / "chat.html"
-)
+_UI = Path(__file__).resolve().parents[2] / "mnemo" / "ui"
+CHAT_HTML = _UI / "templates" / "chat.html"
+# v3.1 phase 6: the chat logic moved to the shared static module.
+CHAT_JS = _UI / "static" / "chat.js"
 
 
 def test_chat_page_parses_draft_fences_and_saves() -> None:
     html = CHAT_HTML.read_text(encoding="utf-8")
-    assert "mnemo-draft" in html  # the fence tag
-    assert "extractDrafts" in html  # the parser
+    js = CHAT_JS.read_text(encoding="utf-8")
+    assert "mnemo-draft" in html  # the fence tag (template card)
     assert "Save as memory" in html  # the one-click button
-    assert "/v1/nodes" in html  # POST target
-    assert "/v1/reindex" in html  # triggers a memory reindex
+    assert "extractDrafts" in js  # the parser (shared module)
+    assert "/v1/nodes" in js  # POST target
+    assert "/v1/reindex" in js  # triggers a memory reindex
 
 
 def test_mnemo_doc_skill_exists_and_documents_the_fence() -> None:
