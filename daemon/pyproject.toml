@@ -39,6 +39,7 @@ dependencies = [
     "anthropic>=0.40",
     "openai>=1.40",
     "google-genai>=0.3",
+    "mcp>=1.2",
 ]
 
 [tool.hatch.build.targets.wheel.sources]

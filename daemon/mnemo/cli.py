@@ -584,6 +584,18 @@ def _run_foreground(*, host: str, port: int) -> None:
         daemon.remove_pid_file()
 
 
+@app.command()
+def mcp() -> None:
+    """Run the mnemo MCP server over stdio.
+
+    Point an external MCP client (Cursor / Claude Desktop / Codex /
+    Windsurf) at ``mnemo mcp`` to get mnemo's full tool surface --
+    retrieval + the write/danger tools, risk-tagged (v3 phase 6)."""
+    from mnemo import mcp_server
+
+    mcp_server.serve_stdio()
+
+
 def main() -> None:
     app()
 
