@@ -54,6 +54,7 @@ from mnemo.api_schemas import (
     ChatCreateIn,
     ChatPatchIn,
     ChatPermitIn,
+    CompanionPatchIn,
     ConversationDetailOut,
     ConversationOut,
     FeedbackIn,
@@ -70,6 +71,7 @@ from mnemo.api_schemas import (
     ProjectActivateIn,
     ProjectResolveIn,
     ProjectResolveOut,
+    ProvidersPatchIn,
     QueryAuditOut,
     QueryIn,
     QueryOut,
@@ -77,6 +79,7 @@ from mnemo.api_schemas import (
     ReindexReportSectionsOut,
     RetuneIn,
     RetuneReportOut,
+    SettingsOut,
     SourceIn,
     SourceOut,
     SourceOverrideBatchIn,
@@ -1407,19 +1410,16 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
                 except Exception as exc:  # key/construction failure
                     yield encode("error", {"type": "error", "message": str(exc)})
                     return
+
                 def permission_cb(req: dict) -> str:
                     # The loop already yielded the permission_request
                     # frame; block here until POST .../permit records a
                     # decision (or cancel denies it). 5 min ceiling.
-                    evt = state.chat_permit_event.setdefault(
-                        conv_id, threading.Event()
-                    )
+                    evt = state.chat_permit_event.setdefault(conv_id, threading.Event())
                     evt.clear()
                     if not evt.wait(timeout=300):
                         return "deny"
-                    return (state.chat_permit.get(conv_id) or {}).get(
-                        "decision", "deny"
-                    )
+                    return (state.chat_permit.get(conv_id) or {}).get("decision", "deny")
 
                 loop = chat.AgentLoop(
                     s,
@@ -1444,9 +1444,7 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
         )
 
     @v1.post("/chat/{conv_id}/permit")
-    def permit_chat(
-        conv_id: str, body: ChatPermitIn, s: Store = Depends(get_store)
-    ) -> dict:
+    def permit_chat(conv_id: str, body: ChatPermitIn, s: Store = Depends(get_store)) -> dict:
         """Grant or deny a pending permission request. The decision is
         delivered to the blocked agent loop; ``allow_always`` is
         persisted to ``chat_permissions`` by the loop itself (design
@@ -1469,6 +1467,72 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
         state.chat_permit[conv_id] = {"permission_id": "", "decision": "deny"}
         state.chat_permit_event.setdefault(conv_id, threading.Event()).set()
         return {"ok": True, "cancelled": conv_id}
+
+    # --- Settings (v3 phase 7) -------------------------------------------
+
+    def _settings_out() -> SettingsOut:
+        cfg = config.load()
+        providers = {
+            name: {
+                "has_key": keys.has_key(name),
+                "model": (cfg.providers.get(name) or {}).get("model"),
+            }
+            for name in cfg.providers
+        }
+        return SettingsOut(
+            default_provider=cfg.default_provider,
+            providers=providers,
+            companion=cfg.companion,
+            chat_history_retention_days=cfg.chat_history_retention_days,
+        )
+
+    @v1.get("/settings", response_model=SettingsOut)
+    def get_settings() -> SettingsOut:
+        """Never returns key material -- per-provider ``has_key`` only."""
+        return _settings_out()
+
+    @v1.post("/settings/providers", response_model=SettingsOut)
+    def post_settings_providers(body: ProvidersPatchIn) -> SettingsOut:
+        patch: dict = {}
+        if body.default_provider:
+            patch["default_provider"] = body.default_provider
+        clean_providers: dict = {}
+        for name, pcfg in (body.providers or {}).items():
+            if not isinstance(pcfg, dict):
+                continue
+            key = pcfg.get("key")
+            if key:
+                keys.set_api_key(name, key)  # -> keychain (never persisted)
+            if "model" in pcfg:
+                clean_providers[name] = {"model": pcfg["model"]}
+        if clean_providers:
+            patch["providers"] = clean_providers
+        if patch:
+            config.update(patch)
+        return _settings_out()
+
+    @v1.post("/settings/companion", response_model=SettingsOut)
+    def post_settings_companion(body: CompanionPatchIn) -> SettingsOut:
+        comp = {
+            k: v
+            for k, v in {
+                "name": body.name,
+                "tone": body.tone,
+                "dock_state": body.dock_state,
+                "proactive": body.proactive,
+                "proactive_pages": body.proactive_pages,
+                "proactive_frequency": body.proactive_frequency,
+            }.items()
+            if v is not None
+        }
+        patch: dict = {}
+        if comp:
+            patch["companion"] = comp
+        if body.chat_history_retention_days is not None:
+            patch["chat_history_retention_days"] = body.chat_history_retention_days
+        if patch:
+            config.update(patch)
+        return _settings_out()
 
     app.include_router(v1)
 

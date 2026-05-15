@@ -1,0 +1,157 @@
+{% extends "base.html" %}
+{% block title %} - companion settings{% endblock %}
+
+{% block content %}
+<section class="settings" x-data="settingsPage()" x-init="load()">
+  <header class="page-hero">
+    <div class="hero-text">
+      <h1>Companion settings</h1>
+      <p>BYO API keys, Mnem's personality, and chat history retention.
+         Keys go to the OS keychain &mdash; never to <code>settings.json</code>.
+         Retrieval tuning lives on the <a href="/settings">main settings</a> page.</p>
+    </div>
+  </header>
+
+  <div class="tabs" role="tablist">
+    <button :class="{active: tab==='providers'}" @click="tab='providers'">Providers &amp; keys</button>
+    <button :class="{active: tab==='companion'}" @click="tab='companion'">Companion</button>
+    <button :class="{active: tab==='permissions'}" @click="tab='permissions'">Permissions &amp; history</button>
+  </div>
+
+  <p x-show="loading" class="hint">Loading&hellip;</p>
+
+  <section class="dash-card" x-show="!loading &amp;&amp; tab==='providers'" x-cloak>
+    <div class="row">
+      <label>Default provider</label>
+      <select x-model="data.default_provider">
+        <template x-for="name in providerNames" :key="name">
+          <option :value="name" x-text="name"></option>
+        </template>
+      </select>
+    </div>
+    <template x-for="name in providerNames" :key="name">
+      <div class="prov">
+        <h3 x-text="name"></h3>
+        <div class="row">
+          <label>Model</label>
+          <input type="text" x-model="data.providers[name].model">
+        </div>
+        <div class="row">
+          <label>API key</label>
+          <input type="password"
+                 :placeholder="data.providers[name].has_key ? 'set (hidden)' : 'paste key to set'"
+                 x-model="keyInput[name]">
+          <span class="hint" x-show="name==='ollama'">local &mdash; no key</span>
+        </div>
+      </div>
+    </template>
+    <button class="primary" @click="saveProviders()">Save providers</button>
+    <span class="ok" x-show="saved" x-cloak>saved</span>
+  </section>
+
+  <section class="dash-card" x-show="!loading &amp;&amp; tab==='companion'" x-cloak>
+    <div class="row"><label>Name</label><input type="text" x-model="data.companion.name"></div>
+    <div class="row"><label>Tone</label>
+      <select x-model="data.companion.tone">
+        <option>formal</option><option>casual</option><option>quirky</option>
+      </select>
+    </div>
+    <div class="row"><label>Dock state</label>
+      <select x-model="data.companion.dock_state">
+        <option value="closed">closed</option>
+        <option value="docked-open">docked-open</option>
+        <option value="pinned">pinned</option>
+      </select>
+    </div>
+    <div class="row"><label>Proactive nudges</label>
+      <input type="checkbox" x-model="data.companion.proactive"></div>
+    <div class="row"><label>Frequency</label>
+      <select x-model="data.companion.proactive_frequency">
+        <option>minimal</option><option>normal</option><option>chatty</option>
+      </select>
+    </div>
+    <button class="primary" @click="saveCompanion()">Save companion</button>
+    <span class="ok" x-show="saved" x-cloak>saved</span>
+  </section>
+
+  <section class="dash-card" x-show="!loading &amp;&amp; tab==='permissions'" x-cloak>
+    <div class="row"><label>Chat history retention</label>
+      <select x-model="retention">
+        <option value="">forever</option>
+        <option value="30">30 days</option>
+        <option value="7">7 days</option>
+      </select>
+    </div>
+    <p class="hint">
+      Always-allowed tool grants persist per project in
+      <code>chat_permissions</code>. Mnem prompts for every
+      <code>confirm</code>/<code>danger</code> tool until you choose
+      &ldquo;Always allow&rdquo;.
+    </p>
+    <button class="primary" @click="saveCompanion()">Save history</button>
+    <span class="ok" x-show="saved" x-cloak>saved</span>
+  </section>
+</section>
+
+<script>
+function settingsPage() {
+  return {
+    tab: 'providers',
+    loading: true,
+    saved: false,
+    data: { default_provider: 'anthropic', providers: {}, companion: {} },
+    keyInput: {},
+    retention: '',
+    get providerNames() { return Object.keys(this.data.providers || {}); },
+    async load() {
+      const r = await fetch('/v1/settings');
+      this.data = await r.json();
+      this.retention = this.data.chat_history_retention_days == null
+        ? '' : String(this.data.chat_history_retention_days);
+      this.loading = false;
+    },
+    flash() { this.saved = true; setTimeout(() => { this.saved = false; }, 1500); },
+    async saveProviders() {
+      const providers = {};
+      for (const name of this.providerNames) {
+        providers[name] = { model: this.data.providers[name].model };
+        if (this.keyInput[name]) providers[name].key = this.keyInput[name];
+      }
+      await fetch('/v1/settings/providers', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ default_provider: this.data.default_provider, providers }),
+      });
+      this.keyInput = {};
+      await this.load();
+      this.flash();
+    },
+    async saveCompanion() {
+      const body = Object.assign({}, this.data.companion);
+      body.chat_history_retention_days = this.retention === '' ? null : Number(this.retention);
+      await fetch('/v1/settings/companion', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      await this.load();
+      this.flash();
+    },
+  };
+}
+</script>
+
+<style>
+  .settings .tabs { display: flex; gap: .4rem; border-bottom: 1px solid var(--border-soft); margin: 1rem 0 1.25rem; }
+  .settings .tabs button { background: none; border: 0; padding: .55rem 1rem; color: var(--fg-muted); cursor: pointer; border-bottom: 2px solid transparent; }
+  .settings .tabs button.active { color: var(--fg); border-bottom-color: var(--accent); }
+  .settings .row { display: flex; align-items: center; gap: .75rem; margin: .55rem 0; }
+  .settings .row label { width: 180px; color: var(--fg-dim); }
+  .settings .row input[type=text], .settings .row input[type=password], .settings .row select {
+    flex: 1; padding: .45rem .6rem; background: var(--bg); color: var(--fg);
+    border: 1px solid var(--border); border-radius: var(--radius);
+  }
+  .settings .prov { border: 1px solid var(--border-soft); border-radius: var(--radius); padding: .75rem 1rem; margin: .75rem 0; }
+  .settings .prov h3 { margin: 0 0 .5rem; text-transform: capitalize; }
+  .settings .ok { color: var(--type-feedback); margin-left: .6rem; }
+  .settings .primary { margin-top: 1rem; }
+</style>
+{% endblock %}
