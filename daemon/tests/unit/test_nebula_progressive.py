@@ -1,26 +1,28 @@
-"""Phase 4 of v2.2: lazy Nebula initial paint + coordinated transitions.
+"""Nebula renderer contract (v2.6.2: Cosmograph / @cosmos.gl/graph).
 
-We can't execute Cytoscape in pytest -- those behaviors live behind
-the preview tool / live browser. But we CAN lock the SURFACE that
-makes the streaming + staggering possible:
+History: v2.2 phase 4 introduced a cytoscape "chunked initial paint"
+(``_renderCanvasChunked`` walking nodes by descending degree in
+CHUNK_SIZE batches, tagging ``.fade-in``) plus a ``cy.animate(...)``
+camera pan on focus. v2.6.1 then proved cytoscape's canvas renderer
+physically cannot paint 10 k+ sharp nodes per frame, forcing a 2 k
+degree cap that misled the future v3 chat companion + broke tree
+navigation.
 
-  - graph.html ships a ``_renderCanvasChunked`` method that walks
-    nodes by descending degree in CHUNK_SIZE batches;
-  - it tags each batch with the ``.fade-in`` class so the per-chunk
-    opacity transition fires (the class lives in app.css since
-    phase 1);
-  - the ``focusNode`` orchestrator cross-fades the detail panel,
-    pans the camera, AND streams the body via
-    ``window.mnemoStreamText`` from phase 1;
-  - the neighbors list is rendered via ``window.mnemoStaggeredReveal``
-    so items appear paced rather than popping in all at once.
+v2.6.2 replaces cytoscape entirely with Cosmograph's lean GPU engine
+(``@cosmos.gl/graph``). The GPU force simulation IS the progressive
+reveal -- points fly into their cluster positions in real time, so
+the hand-rolled chunked paint, the ``.fade-in`` cadence, and the
+``cy.animate`` camera tween are all gone by design (see
+docs/plans/2026-05-15-nebula-cosmograph-webgl-design.md).
 
-Design: docs/plans/2026-05-14-ux-progressive-design.md § 4.
+We can't run WebGL in pytest, but we CAN lock the SURFACE of the new
+renderer + the parts of the old contract that still hold (the side-
+panel body still streams via ``mnemoRenderBody``; the neighbors list
+still uses ``mnemoStaggeredReveal``; the page still 200s).
 """
 
 from __future__ import annotations
 
-import re
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -45,107 +47,109 @@ def graph_html() -> str:
     return path.read_text(encoding="utf-8")
 
 
-# --- Chunked initial paint ----------------------------------------------
+# --- v2.6.2 Cosmograph renderer contract --------------------------------
 
 
-def test_graph_html_defines_render_canvas_chunked(graph_html: str) -> None:
-    """The Alpine factory must expose ``_renderCanvasChunked``."""
-    assert "_renderCanvasChunked" in graph_html, (
-        "graph.html must define _renderCanvasChunked -- the chunked "
-        "initial-paint helper. See design § 4."
+def test_graph_loads_cosmos_gl_engine(graph_html: str) -> None:
+    """The page must import the lean ``@cosmos.gl/graph`` GPU engine
+    as an ESM module (NOT the heavyweight @cosmograph/cosmograph
+    wrapper, which drags in duckdb-wasm + supabase + mosaic)."""
+    assert "@cosmos.gl/graph" in graph_html, (
+        "graph.html must import @cosmos.gl/graph -- the lean GPU "
+        "force-graph engine that replaced cytoscape in v2.6.2."
+    )
+    assert 'type="module"' in graph_html, (
+        'Cosmograph is ESM-only; it must load via a <script type="module"> tag.'
     )
 
 
-def test_chunked_paint_sorts_by_degree_desc(graph_html: str) -> None:
-    """The chunked paint sorts nodes by degree DESC so the densest
-    cluster paints first."""
-    # We just look for a sort that references a degree-ish key.
-    # Accepts either ``degree()`` (cytoscape collection method) or
-    # the pre-computed ``deg`` data attribute the renderCanvas
-    # already builds.
-    pattern = re.compile(
-        r"sort\s*\(\s*\([^)]*\)\s*=>\s*.+?\.(?:degree\s*\(\s*\)|data\(\s*['\"]deg['\"]\s*\)|deg)",
-        re.DOTALL,
+def test_graph_has_no_cytoscape(graph_html: str) -> None:
+    """Cytoscape is fully removed -- no <script> include, no
+    ``cytoscape(`` factory call, no fcose plugin, no ``cy.`` API.
+    (The word may still appear in the head comment that explains
+    *why* we switched away from it -- that's intentional history,
+    so we assert on USAGE patterns, not the bare substring.)"""
+    usage_markers = (
+        "unpkg.com/cytoscape",  # the old CDN <script src>
+        "cytoscape-fcose",  # the old layout plugin
+        "cytoscape({",  # the factory call
+        "cytoscape.use(",  # plugin registration
+        "this.cy =",  # the old instance handle
+        "cy.elements(",  # cytoscape collection API
     )
-    assert pattern.search(graph_html), (
-        "chunked paint must sort by node degree descending so the highest-degree nodes appear first"
-    )
-
-
-def test_chunked_paint_adds_fade_in_class(graph_html: str) -> None:
-    """Each chunk gets the ``.fade-in`` class so the per-chunk opacity
-    transition fires. ``.fade-in`` lives in app.css since phase 1."""
-    assert "fade-in" in graph_html, (
-        "graph.html must tag each chunk with the .fade-in class so "
-        "new nodes fade in (class defined in app.css from phase 1)"
+    hits = [m for m in usage_markers if m in graph_html]
+    assert not hits, (
+        f"v2.6.2 removed cytoscape entirely; found lingering cytoscape usage in graph.html: {hits}"
     )
 
 
-def test_chunked_paint_has_chunk_size_constant(graph_html: str) -> None:
-    """A named chunk-size constant (50 by default per design) makes
-    the cadence obvious and tunable."""
-    # We accept either a plain ``CHUNK`` / ``CHUNK_SIZE`` const or an
-    # inline literal 50 in the chunked-paint block. The literal is
-    # the cheapest pattern.
-    has_const = re.search(r"const\s+CHUNK(?:_SIZE)?\s*=\s*\d+", graph_html)
-    has_literal_in_chunked = "_renderCanvasChunked" in graph_html and re.search(
-        r"_renderCanvasChunked[\s\S]{0,2000}?\b(?:50|chunkSize)\b", graph_html
-    )
-    assert has_const or has_literal_in_chunked, (
-        "chunked paint must reference a chunk-size constant (50 per design); "
-        "either a const declaration or a literal in the function body"
+def test_graph_has_no_degree_cap(graph_html: str) -> None:
+    """The v2.6.1 GRAPH_CANVAS_CAP degree cap is gone -- Cosmograph
+    renders the FULL graph so the canvas mirrors exactly what the
+    v3 chat companion analyzes."""
+    assert "GRAPH_CANVAS_CAP" not in graph_html, (
+        "v2.6.2 removed the canvas degree cap; the full graph is always rendered now."
     )
 
 
-# --- Node-to-node coordinated transition ---------------------------------
+def test_graph_has_force_simulation_config(graph_html: str) -> None:
+    """The organic 'nebula' look is a GPU force simulation -- the
+    config must set the simulation knobs (gravity / repulsion /
+    link spring)."""
+    for knob in ("simulationGravity", "simulationRepulsion", "simulationLinkSpring"):
+        assert knob in graph_html, (
+            f"graph.html must configure {knob} -- the force-simulation "
+            "parameters that produce the organic nebula layout."
+        )
 
 
-def test_focus_node_streams_body_via_mnemo_stream_text(graph_html: str) -> None:
-    """When the body fetch resolves, the body is revealed progressively.
-
-    v2.2.0-v2.2.6 routed the side-panel body through
-    ``window.mnemoStreamText`` directly (via the helper
-    ``streamBodyToCode``). v2.2.7 retired that helper and delegated
-    to ``window.mnemoRenderBody`` instead -- which itself routes
-    through mnemoStreamText for every branch AND adds type-aware
-    rendering (markdown bodies render as HTML, not as monospace
-    source).
-
-    The INTENT this test guards is "the side-panel body reveals
-    progressively via the v2.2 streaming primitives" -- so it
-    accepts either surface.
-    """
-    streaming_surfaces = ("mnemoStreamText", "mnemoRenderBody")
-    assert any(s in graph_html for s in streaming_surfaces), (
-        "graph.html must call window.mnemoStreamText or "
-        "window.mnemoRenderBody (which itself routes through "
-        "mnemoStreamText) so the detail-panel body reveals "
-        "progressively. See design § 4 + § 5 and the v2.2.7 "
-        "regression fix (Nebula side panel now uses mnemoRenderBody "
-        "for type-aware markdown / code / commit rendering)."
+def test_graph_config_applied_via_setconfig(graph_html: str) -> None:
+    """cosmos.gl v3's constructor IGNORES a config argument (verified
+    in the preview -- passing it leaves every sim param at default and
+    points collapse coincident). Config MUST go through setConfig()
+    after construction; lock that so a refactor can't regress it."""
+    assert "setConfig(config)" in graph_html or "setConfig(" in graph_html, (
+        "renderCanvas must call cg.setConfig(...) after `new Graph()` "
+        "-- the constructor-config path is a known cosmos.gl no-op."
     )
 
 
-def test_focus_node_uses_staggered_reveal_for_neighbors(
-    graph_html: str,
-) -> None:
-    """The neighbors list is rendered via ``mnemoStaggeredReveal`` so
-    items appear paced instead of popping in together."""
+def test_graph_no_ego_fetch_on_tree_click(graph_html: str) -> None:
+    """The cap-era bug: clicking a capped-out node ran focusNode ->
+    reload -> ?node= ego-fetch -> standalone node + collapsed tree +
+    no way back. v2.6.2 deletes that path: every node is always in
+    the full graph so focusNode just flies the camera."""
+    assert "this.contextNodeId = id" not in graph_html, (
+        "focusNode must NOT set contextNodeId + reload (the ego-fetch "
+        "path that collapsed the tree). It should select within the "
+        "full graph instead."
+    )
+    assert "selectByIndex" in graph_html, (
+        "focusNode should resolve the id to a point index and call "
+        "selectByIndex (camera fly within the full graph)."
+    )
+
+
+# --- Carried-forward contract (still valid post-swap) -------------------
+
+
+def test_focus_node_streams_body_via_mnemo_render_body(graph_html: str) -> None:
+    """The side-panel body still reveals progressively via the v2.2
+    streaming primitive -- now through ``window.mnemoRenderBody``
+    (type-aware: code -> Prism, commit -> pre, else -> markdown)."""
+    assert "mnemoRenderBody" in graph_html, (
+        "graph.html must delegate the detail-panel body to "
+        "window.mnemoRenderBody so it reveals progressively + "
+        "type-aware."
+    )
+
+
+def test_focus_node_uses_staggered_reveal_for_neighbors(graph_html: str) -> None:
+    """The neighbors list still renders via ``mnemoStaggeredReveal``
+    so items appear paced instead of popping in together."""
     assert "mnemoStaggeredReveal" in graph_html, (
-        "graph.html must call window.mnemoStaggeredReveal for the neighbors "
-        "list so items reveal paced (phase 1 primitive). See design § 4."
-    )
-
-
-def test_focus_node_pans_camera_with_animate(graph_html: str) -> None:
-    """The orchestrator must call ``cy.animate({ center, zoom })`` so the
-    camera pans rather than snapping when a different node is focused."""
-    # The pattern from the existing focusNode is preserved -- we just
-    # check it's still there. Refactor cleanups must not lose it.
-    pattern = re.compile(r"cy\.animate\s*\(\s*\{\s*center\s*:[^}]+\}", re.DOTALL)
-    assert pattern.search(graph_html), (
-        "focusNode must call cy.animate({ center: ..., zoom: ... }) so "
-        "the camera pans on neighbor click. See design § 4."
+        "graph.html must call window.mnemoStaggeredReveal for the "
+        "neighbors list so items reveal paced."
     )
 
 
@@ -153,13 +157,12 @@ def test_focus_node_pans_camera_with_animate(graph_html: str) -> None:
 
 
 def test_graph_page_still_renders(client: TestClient) -> None:
-    """Phase 4 is feature-additive; the page must still return 200."""
+    """The renderer swap is structural; the page must still 200 with
+    the shell + canvas mount point intact."""
     r = client.get("/graph")
     assert r.status_code == 200, (
-        f"GET /graph should still 200 after phase 4 refactor; got {r.status_code}"
+        f"GET /graph should 200 after the Cosmograph swap; got {r.status_code}"
     )
     body = r.text
-    # The shell + canvas markers must still be present so the rest
-    # of the Nebula UI isn't accidentally torn out.
     assert "nebula-shell" in body
     assert "cy-nebula" in body
