@@ -395,7 +395,7 @@
 <body>
   <header class="topbar">
     <a href="/" class="brand" aria-label="mnemo home">
-      <img src="/static/mnem/mark.svg" width="22" height="22" alt="" class="brand-mark">
+      <img src="/static/mnem/mark.svg?v={{ mnemo_version }}" width="22" height="22" alt="" class="brand-mark">
       <span>mnemo</span>
     </a>
 
@@ -652,7 +652,7 @@
                 <div class="mc-user" x-text="m.content.text"></div>
               </template>
               <template x-if="m.role === 'assistant' && m.content.text">
-                <div class="mc-asst prose" x-html="renderText(m.content.text)"></div>
+                <div class="mc-asst prose" x-html="renderMarkdown(m.content.text || '')"></div>
               </template>
               <template x-if="m.role === 'tool_call'">
                 <div class="mc-tool" x-text="'⚙ ' + (m.content.name || 'tool')"></div>
@@ -688,7 +688,8 @@
     <button class="mnem-dock" :class="'mnem-' + mood"
             @pointerdown="dragStart($event)" @click="onClick()"
             :aria-label="'Mnem (' + mood + ')'">
-      <img :src="'/static/mnem/' + mood + '.svg'" :alt="mood" width="52" height="52">
+      <img :src="'/static/mnem/' + mood + '.svg'" :alt="mood" width="52" height="52"
+           draggable="false">
     </button>
   </div>
 
@@ -745,25 +746,45 @@
         this.state = this.state === 'closed' ? 'docked-open' : 'closed';
         this.persist();
       },
+      _vw() {
+        return window.innerWidth || document.documentElement.clientWidth || 0;
+      },
+      _vh() {
+        return window.innerHeight || document.documentElement.clientHeight || 0;
+      },
       dragStart(e) {
+        // Stop the browser's native image/text drag-and-drop -- without
+        // this the launcher <img> starts an HTML5 drag and the custom
+        // pointer drag never tracks (the live-review "drag failed" bug).
+        e.preventDefault();
         var el = e.currentTarget.closest('.mnem-wrap');
+        var btn = e.currentTarget;
         var r = el.getBoundingClientRect();
         if (this.pos.x == null) { this.pos.x = r.left; this.pos.y = r.top; }
         this._start = { px: e.clientX, py: e.clientY, ox: this.pos.x, oy: this.pos.y };
         this._moved = false;
         this.dragging = true;
+        try { btn.setPointerCapture(e.pointerId); } catch (_) { /* tolerate */ }
         var self = this;
         var mv = function (ev) {
           var dx = ev.clientX - self._start.px;
           var dy = ev.clientY - self._start.py;
           if (Math.abs(dx) + Math.abs(dy) > 4) self._moved = true;
-          var w = el.offsetWidth, h = el.offsetHeight;
-          self.pos.x = Math.max(6, Math.min(window.innerWidth - w - 6, self._start.ox + dx));
-          self.pos.y = Math.max(6, Math.min(window.innerHeight - h - 6, self._start.oy + dy));
+          var nx = self._start.ox + dx;
+          var ny = self._start.oy + dy;
+          var vw = self._vw();
+          var vh = self._vh();
+          // Only clamp when the viewport size is actually known
+          // (a 0-size/offscreen renderer must not push it off-screen).
+          if (vw) nx = Math.max(6, Math.min(vw - el.offsetWidth - 6, nx));
+          if (vh) ny = Math.max(6, Math.min(vh - el.offsetHeight - 6, ny));
+          self.pos.x = nx;
+          self.pos.y = ny;
         };
         var up = function () {
           document.removeEventListener('pointermove', mv);
           document.removeEventListener('pointerup', up);
+          try { btn.releasePointerCapture(e.pointerId); } catch (_) { /* tolerate */ }
           self.dragging = false;
           if (self._moved) self.snapToEdge();
         };
@@ -772,13 +793,20 @@
       },
       snapToEdge() {
         var el = this.$el;
+        var vw = this._vw();
+        if (!vw) {
+          // viewport unknown -- keep the dropped position, just persist
+          localStorage.setItem('mnem.pos', JSON.stringify(this.pos));
+          return;
+        }
+        var vh = this._vh();
         var w = el.offsetWidth;
         var cx = this.pos.x + w / 2;
-        if (cx < window.innerWidth / 2) { this.pos.x = 12; this.pos.edge = 'left'; }
-        else { this.pos.x = window.innerWidth - w - 12; this.pos.edge = 'right'; }
-        this.pos.y = Math.max(
-          12, Math.min(window.innerHeight - el.offsetHeight - 12, this.pos.y)
-        );
+        if (cx < vw / 2) { this.pos.x = 12; this.pos.edge = 'left'; }
+        else { this.pos.x = vw - w - 12; this.pos.edge = 'right'; }
+        if (vh) {
+          this.pos.y = Math.max(12, Math.min(vh - el.offsetHeight - 12, this.pos.y));
+        }
         localStorage.setItem('mnem.pos', JSON.stringify(this.pos));
       },
       _armDwell() {
@@ -818,7 +846,9 @@
     .mnem-dock:hover { transform: translateY(-2px) scale(1.04); }
     .mnem-dock:hover::after { opacity: 1; }
     .mnem-dock img { display: block; border-radius: 50%;
-      box-shadow: 0 0 0 1px var(--border), 0 6px 22px rgba(0,0,0,.45); }
+      box-shadow: 0 0 0 1px var(--border), 0 6px 22px rgba(0,0,0,.45);
+      -webkit-user-drag: none; user-drag: none; user-select: none;
+      pointer-events: none; }
     .mnem-idle img { animation: mnem-breathe 4s ease-in-out infinite; }
     .mnem-thinking img { animation: mnem-spin 2.2s linear infinite; }
     .mnem-speaking img { animation: mnem-talk .42s ease-in-out infinite; }

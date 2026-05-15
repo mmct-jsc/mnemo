@@ -1,0 +1,97 @@
+"""v3.1 live-review bug fixes (root-caused via the preview tool).
+
+Reproduced live on 2026-05-15:
+  1. logo blank -> mark.svg had `--` inside an XML comment => invalid
+     XML; <img> strict-parses and fails (naturalWidth 0). Every shipped
+     SVG must be well-formed XML.
+  2. dock drag dead -> the launcher <img> triggers native HTML image
+     drag-and-drop, hijacking the custom pointer drag.
+  3/4. chat shows raw `## ...` markdown + cited-node preview stuck on
+     the title -> the toy renderText()/stalling mnemoRenderBody stream;
+     must render through the real marked+DOMPurify pipeline
+     (window.mnemoMd), one-shot.
+"""
+
+from __future__ import annotations
+
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+_UI = Path(__file__).resolve().parents[2] / "mnemo" / "ui"
+MNEM_DIR = _UI / "static" / "mnem"
+CHAT_JS = (_UI / "static" / "chat.js").read_text(encoding="utf-8")
+CHAT_HTML = (_UI / "templates" / "chat.html").read_text(encoding="utf-8")
+BASE_HTML = (_UI / "templates" / "base.html").read_text(encoding="utf-8")
+
+
+# --- Bug 1: every shipped SVG must be well-formed XML -------------------
+
+
+def test_all_mnem_svgs_are_well_formed_xml() -> None:
+    svgs = sorted(MNEM_DIR.glob("*.svg"))
+    assert svgs, "no mnem SVG assets found"
+    for svg in svgs:
+        text = svg.read_text(encoding="utf-8")
+        # would raise ET.ParseError on the `--`-in-comment bug
+        ET.fromstring(text)
+        # belt-and-suspenders: no `--` inside an XML comment
+        for block in text.split("<!--")[1:]:
+            body = block.split("-->")[0]
+            assert "--" not in body, f"{svg.name}: '--' inside an XML comment"
+
+
+def test_mark_svg_renders_as_a_glyph() -> None:
+    svg = (MNEM_DIR / "mark.svg").read_text(encoding="utf-8")
+    root = ET.fromstring(svg)  # must parse
+    assert root.tag.endswith("svg")
+    assert root.attrib.get("viewBox") == "0 0 64 64"
+
+
+# --- Bug 2: the dock launcher image must not native-drag ---------------
+
+
+def test_dock_image_is_not_natively_draggable() -> None:
+    # the <img> inside .mnem-dock must opt out of native image DnD,
+    # else it hijacks the custom pointer drag
+    assert 'draggable="false"' in BASE_HTML
+    assert "user-drag" in BASE_HTML  # CSS belt: -webkit-user-drag:none
+    # the brand mark MUST be cache-busted -- without ?v= the browser
+    # pins the (possibly broken) first response forever (live-review:
+    # users kept seeing the old blank logo until a version change)
+    assert "/static/mnem/mark.svg?v=" in BASE_HTML
+    # dragStart suppresses the default (text/img drag) + tolerates a
+    # 0-size viewport (don't snap off-screen)
+    assert "preventDefault" in BASE_HTML
+    assert "innerWidth || " in BASE_HTML or "vw =" in BASE_HTML
+
+
+# --- Bug 3/4: real markdown rendering, one-shot ------------------------
+
+
+def test_chat_uses_the_real_markdown_pipeline() -> None:
+    # the shared module renders assistant prose through window.mnemoMd
+    # (marked + DOMPurify: headings/lists/tables/code), not the toy
+    assert "window.mnemoMd" in CHAT_JS
+    assert "renderMarkdown" in CHAT_JS
+    # mnemo-draft fences still stripped from prose; [mnemo:id] still
+    # rewritten to cite links
+    assert "mnemo-draft" in CHAT_JS
+    assert "cite-link" in CHAT_JS
+
+
+def test_chat_templates_bind_render_markdown() -> None:
+    # /chat page and the dock both render via renderMarkdown(...)
+    assert "renderMarkdown(m.content.text" in CHAT_HTML
+    assert "renderMarkdown(m.content.text" in BASE_HTML
+
+
+def test_citation_preview_is_one_shot_not_the_stalling_stream() -> None:
+    # the cited-node preview must render directly (mnemoMd / escaped
+    # pre), NOT the v2.x bucket-stream reveal that stalls after the
+    # first fragment
+    assert "previewNode" in CHAT_JS
+    # the stalling streaming CALL is gone (the word may remain in a
+    # comment explaining why)
+    assert "window.mnemoRenderBody(" not in CHAT_JS
+    assert "previewMarkup" in CHAT_JS
+    assert "window.mnemoMd" in CHAT_JS

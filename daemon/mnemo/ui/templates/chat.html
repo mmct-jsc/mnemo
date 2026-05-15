@@ -36,6 +36,24 @@
 
   <!-- centre: the thread -->
   <main class="chat-thread">
+
+    <!-- running token budget bar (tokens_total vs per-provider cap) -->
+    <div class="tok-bar" :class="{ warn: budgetWarn }" x-show="activeId" x-cloak>
+      <div class="tok-track">
+        <div class="tok-fill" :style="'width:' + (budgetFrac * 100) + '%'"></div>
+      </div>
+      <span class="tok-label"
+            x-text="tokensTotal.toLocaleString() + ' / ' + tokenBudget.toLocaleString() + ' tok'"></span>
+    </div>
+
+    <!-- slim bookmark jump strip (left gutter / minimap) -->
+    <div class="bm-strip" x-show="bookmarks.length" x-cloak>
+      <template x-for="b in bookmarks" :key="b.id">
+        <button class="bm-tick" @click="jumpTo(b.message_seq)"
+                :title="b.label || ('message ' + b.message_seq)"></button>
+      </template>
+    </div>
+
     <div class="thread-scroll" x-ref="log">
       <div class="thread-col">
 
@@ -63,7 +81,19 @@
         </div>
 
         <template x-for="m in messages" :key="m.key">
-          <div class="turn" :class="'turn-' + m.role">
+          <div class="turn" :class="'turn-' + m.role" :data-seq="m.seq">
+
+            <!-- per-turn meta: bookmark star + token usage -->
+            <template x-if="m.seq !== undefined && (m.role === 'user' || m.role === 'assistant')">
+              <div class="turn-meta">
+                <button class="bm-star" :class="{ on: isBookmarked(m.seq) }"
+                        @click="toggleBookmark(m.seq)"
+                        :aria-label="isBookmarked(m.seq) ? 'remove bookmark' : 'bookmark'"
+                        x-text="isBookmarked(m.seq) ? '★' : '☆'"></button>
+                <span class="turn-tok" x-show="m.token_out" x-cloak
+                      x-text="(m.token_in || 0) + '→' + (m.token_out || 0) + ' tok'"></span>
+              </div>
+            </template>
 
             <template x-if="m.role === 'user'">
               <div class="bubble-user" x-text="m.content.text"></div>
@@ -73,7 +103,7 @@
               <div class="turn-assistant">
                 <img class="ava" src="/static/mnem/idle.svg" width="30" height="30" alt="Mnem">
                 <div class="assistant-body">
-                  <div class="prose" x-html="renderText(m.content.text || '')"></div>
+                  <div class="prose" x-html="renderMarkdown(m.content.text || '')"></div>
                   <template x-for="(d, di) in extractDrafts(m.content.text || '')"
                             :key="m.key + '-d' + di">
                     <div class="draft-card">
@@ -259,6 +289,47 @@
     40% { opacity: 1; transform: translateY(-4px); } }
   @media (prefers-reduced-motion: reduce) {
     .mnem-working span { animation: none; opacity: .6; } }
+
+  /* token budget bar */
+  .chat-thread { position: relative; }
+  .tok-bar { display: flex; align-items: center; gap: .6rem;
+    padding: .4rem 1.5rem; border-bottom: 1px solid var(--border-soft);
+    font-family: var(--mono); }
+  .tok-track { flex: 1; height: 4px; background: var(--panel);
+    border-radius: 2px; overflow: hidden; max-width: 40rem; }
+  .tok-fill { height: 100%; background: var(--accent);
+    border-radius: 2px; transition: width .4s ease; }
+  .tok-bar.warn .tok-fill { background: var(--warn); }
+  .tok-label { font-size: .68rem; color: var(--fg-dim); white-space: nowrap; }
+  .tok-bar.warn .tok-label { color: var(--warn); }
+
+  /* per-turn meta: bookmark star + token usage */
+  .turn-meta { display: flex; align-items: center; gap: .5rem;
+    justify-content: flex-end; min-height: 1rem; margin-bottom: -.4rem; }
+  .turn-user .turn-meta { justify-content: flex-end; }
+  .bm-star { background: none; border: 0; cursor: pointer; padding: 0 .15rem;
+    color: var(--fg-dim); font-size: .9rem; line-height: 1;
+    opacity: 0; transition: opacity .15s ease, color .15s ease; }
+  .turn:hover .bm-star, .bm-star.on { opacity: 1; }
+  .bm-star.on { color: var(--accent); }
+  .bm-star:hover { color: var(--accent); }
+  .turn-tok { font-family: var(--mono); font-size: .62rem;
+    color: var(--fg-dim); opacity: 0; transition: opacity .15s ease; }
+  .turn:hover .turn-tok { opacity: .8; }
+
+  /* bookmark jump strip (left gutter minimap) */
+  .bm-strip { position: absolute; left: 6px; top: 4.2rem; bottom: 5rem;
+    width: 8px; display: flex; flex-direction: column; gap: 4px;
+    z-index: 4; }
+  .bm-tick { flex: 1; max-height: 22px; min-height: 6px; width: 8px;
+    padding: 0; border: 0; border-radius: 3px; cursor: pointer;
+    background: var(--accent); opacity: .35;
+    transition: opacity .15s ease, transform .15s ease; }
+  .bm-tick:hover { opacity: 1; transform: scaleX(1.6); }
+  .jump-flash { animation: jump-flash 1.2s ease; }
+  @keyframes jump-flash {
+    0%, 100% { background: transparent; }
+    25% { background: var(--accent-soft); } }
 
   /* lazy-history scroll-up sentinel */
   .load-older { min-height: 6px; display: flex; justify-content: center; }
