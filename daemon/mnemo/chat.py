@@ -60,6 +60,7 @@ class AgentLoop:
         model: str,
         system: str | None = None,
         project_key: str | None = None,
+        permission_cb=None,
     ):
         self._store = store
         self._provider = provider
@@ -67,6 +68,10 @@ class AgentLoop:
         self._model = model
         self._system = system or DEFAULT_SYSTEM
         self._project_key = project_key
+        # permission_cb(req: dict) -> 'allow_once'|'allow_always'|'deny'.
+        # None = no decision channel; non-safe tools then default-deny
+        # (the model gets a recoverable error tool_result, design S4).
+        self._permission_cb = permission_cb
 
     # --- provider context reconstruction ---------------------------------
 
@@ -182,8 +187,35 @@ class AgentLoop:
                 spec = TOOLS.get(name)
                 if spec is None:
                     result = {"error": f"unknown tool: {name!r}"}
-                else:
+                elif spec.risk == "safe" or self._store.is_permission_granted(
+                    project_key=self._project_key, tool_name=name
+                ):
                     result = spec.fn(ctx, **args)
+                else:
+                    allow_always_ok = spec.risk != "danger"
+                    req = {
+                        "type": "permission_request",
+                        "id": tc["id"],
+                        "tool_name": name,
+                        "tool_args": args,
+                        "risk": spec.risk,
+                        "rationale": f"Mnem wants to run {name} ({spec.risk}).",
+                        "auto_grant_options": (
+                            ["always", "once"] if allow_always_ok else ["once"]
+                        ),
+                    }
+                    yield req
+                    decision = (
+                        self._permission_cb(req) if self._permission_cb else "deny"
+                    )
+                    if decision == "deny":
+                        result = {"error": f"user denied permission for {name}"}
+                    else:
+                        if decision == "allow_always" and allow_always_ok:
+                            self._store.grant_permission(
+                                project_key=self._project_key, tool_name=name
+                            )
+                        result = spec.fn(ctx, **args)
                 self._store.append_message(
                     conv_id,
                     role="tool_call",
