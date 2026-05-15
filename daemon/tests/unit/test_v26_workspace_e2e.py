@@ -425,15 +425,16 @@ def test_nebula_file_tree_has_base_only_copy(client: TestClient) -> None:
 
 
 def test_nebula_template_has_status_chip(client: TestClient) -> None:
-    """v2.6.0 polish: the truncation banner was replaced with a
-    always-on status chip in the lower-right. Shows '<count> nodes ·
-    <workspace>' without overlapping the pan/zoom hint or scope
-    chip in the top row."""
+    """v2.6.0 polish: the truncation banner was replaced with an
+    always-on status chip in the lower-right. v2.6.2 (Cosmograph
+    renderer, no cap) renamed the count field to ``canvasTotal``
+    (+ ``edgeTotal``) since the canvas now shows the FULL graph --
+    the chip is an honest total, not a capped subset."""
     resp = client.get("/graph")
     body = resp.text
     assert "nebula-status" in body
     assert "nebula-status-ws" in body
-    assert "shownNodeCount" in body
+    assert "canvasTotal" in body
 
 
 def test_nebula_template_reads_active_workspace_in_init(
