@@ -1,7 +1,23 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Mnem waiting">
-  <circle cx="32" cy="32" r="28" fill="#ffcf6e"/>
-  <circle cx="24" cy="28" r="3.2" fill="#06121f"/>
-  <circle cx="40" cy="28" r="3.2" fill="#06121f"/>
-  <path d="M26 42 h12" stroke="#06121f" stroke-width="3" fill="none" stroke-linecap="round"/>
-  <path d="M44 14 v10" stroke="#06121f" stroke-width="3" fill="none" stroke-linecap="round"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Mnem waiting for a decision">
+  <defs>
+    <radialGradient id="mg" cx="38%" cy="32%" r="78%">
+      <stop offset="0" stop-color="#2a2620"/>
+      <stop offset="0.55" stop-color="#15130f"/>
+      <stop offset="1" stop-color="#0b0d10"/>
+    </radialGradient>
+    <linearGradient id="mw" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f0c79c"/>
+      <stop offset="1" stop-color="#d97757"/>
+    </linearGradient>
+  </defs>
+  <circle cx="32" cy="32" r="30" fill="url(#mg)"/>
+  <circle cx="32" cy="32" r="30" fill="none" stroke="#d97757" stroke-opacity="0.4" stroke-width="1.6"/>
+  <line x1="32" y1="30" x2="32" y2="15" stroke="url(#mw)" stroke-width="1.4" stroke-opacity="0.5"/>
+  <circle cx="32" cy="13" r="3" fill="url(#mw)"/>
+  <circle cx="32" cy="13" r="6" fill="none" stroke="url(#mw)" stroke-opacity="0.4" stroke-width="1.2"/>
+  <circle cx="26" cy="33" r="3" fill="#f0c79c" fill-opacity="0.92"/>
+  <circle cx="38" cy="33" r="3" fill="#f0c79c" fill-opacity="0.92"/>
+  <circle cx="25.3" cy="32.3" r="0.85" fill="#fff3e8"/>
+  <circle cx="37.3" cy="32.3" r="0.85" fill="#fff3e8"/>
+  <path d="M27 43 h10" stroke="#f0c79c" stroke-opacity="0.7" stroke-width="1.8" fill="none" stroke-linecap="round"/>
 </svg>

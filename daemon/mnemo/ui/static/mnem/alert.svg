@@ -1,7 +1,24 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Mnem alert">
-  <circle cx="32" cy="32" r="28" fill="#ff7a7a"/>
-  <circle cx="24" cy="29" r="3.2" fill="#06121f"/>
-  <circle cx="40" cy="29" r="3.2" fill="#06121f"/>
-  <path d="M24 44 q8 -6 16 0" stroke="#06121f" stroke-width="3" fill="none" stroke-linecap="round"/>
-  <path d="M32 10 v8" stroke="#06121f" stroke-width="3" stroke-linecap="round"/>
+  <defs>
+    <radialGradient id="mg" cx="38%" cy="32%" r="78%">
+      <stop offset="0" stop-color="#2e201c"/>
+      <stop offset="0.55" stop-color="#170f0d"/>
+      <stop offset="1" stop-color="#0b0d10"/>
+    </radialGradient>
+    <linearGradient id="mr" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f3a98c"/>
+      <stop offset="1" stop-color="#d97757"/>
+    </linearGradient>
+  </defs>
+  <circle cx="32" cy="32" r="30" fill="url(#mg)"/>
+  <circle cx="32" cy="32" r="30" fill="none" stroke="#d97757" stroke-opacity="0.55" stroke-width="1.8"/>
+  <g stroke="url(#mr)" stroke-width="1.3" stroke-linecap="round" opacity="0.5">
+    <path d="M18 22 L30 18 M46 22 L34 18"/>
+  </g>
+  <circle cx="26" cy="32" r="3.1" fill="#f3a98c"/>
+  <circle cx="38" cy="32" r="3.1" fill="#f3a98c"/>
+  <circle cx="26.8" cy="32.8" r="0.9" fill="#1a0f0c"/>
+  <circle cx="38.8" cy="32.8" r="0.9" fill="#1a0f0c"/>
+  <path d="M27 44 q5 -4 10 0" stroke="#f3a98c" stroke-width="1.9" fill="none" stroke-linecap="round"/>
+  <circle cx="32" cy="50" r="1.6" fill="url(#mr)"/>
 </svg>
