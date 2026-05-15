@@ -95,6 +95,7 @@ class OpenAIProvider(BaseProvider):
         model: str,
         system: str | None = None,
         max_output_tokens: int = 4096,
+        compact: bool = False,  # native compaction is Anthropic-only
     ) -> Iterator[ProviderEvent]:
         kwargs: dict[str, Any] = {
             "model": model,

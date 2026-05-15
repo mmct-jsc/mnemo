@@ -26,7 +26,14 @@ import re
 from collections.abc import Iterator
 
 from mnemo.agent_tools import TOOLS, ToolContext
+from mnemo.compaction import (
+    TRIGGER_TOKENS_DEFAULT,
+    should_compact,
+    summarize_prefix,
+    supports_native_compaction,
+)
 from mnemo.providers import (
+    EV_COMPACT,
     EV_STOP,
     EV_TEXT,
     EV_TOOL_CALL,
@@ -68,6 +75,7 @@ class AgentLoop:
         system: str | None = None,
         project_key: str | None = None,
         permission_cb=None,
+        compaction_trigger_tokens: int = TRIGGER_TOKENS_DEFAULT,
     ):
         self._store = store
         self._provider = provider
@@ -75,6 +83,7 @@ class AgentLoop:
         self._model = model
         self._system = system or DEFAULT_SYSTEM
         self._project_key = project_key
+        self._compaction_trigger = compaction_trigger_tokens
         # permission_cb(req: dict) -> 'allow_once'|'allow_always'|'deny'.
         # None = no decision channel; non-safe tools then default-deny
         # (the model gets a recoverable error tool_result, design S4).
@@ -91,6 +100,12 @@ class AgentLoop:
             if msg.role == "user":
                 pmsgs.append({"role": "user", "content": c.get("text", "")})
             elif msg.role == "assistant":
+                # Native-compaction turns persist the provider's FULL
+                # content (compaction blocks included) under "raw" -- it
+                # MUST be replayed verbatim (the claude-api rule).
+                if c.get("raw"):
+                    pmsgs.append({"role": "assistant", "content": c["raw"]})
+                    continue
                 blocks: list[dict] = []
                 if c.get("text"):
                     blocks.append({"type": "text", "text": c["text"]})
@@ -130,18 +145,39 @@ class AgentLoop:
         self._store.append_message(conv_id, role="user", content={"text": user_text})
         pmsgs = self._history_to_provider(conv_id)
         tools = list(TOOLS.values())
+        native = supports_native_compaction(self._provider.name, self._model)
+        native_announced = False
 
         for it in range(MAX_ITERS):
             yield {"type": "thinking", "iter": it}
+
+            # Compaction (design S3.3): keep the MODEL's context bounded
+            # (UI history pagination is a separate concern). Re-checked
+            # each iteration because tool results grow pmsgs.
+            compact_flag = False
+            if should_compact(pmsgs, trigger_tokens=self._compaction_trigger):
+                if native:
+                    compact_flag = True
+                    if not native_announced:
+                        native_announced = True
+                        yield {"type": "compaction", "mode": "native"}
+                else:
+                    pmsgs, summary = summarize_prefix(self._provider, self._model, pmsgs)
+                    if summary:
+                        self._store.set_conversation_summary(conv_id, {"summary": summary})
+                        yield {"type": "compaction", "mode": "summarize"}
+
+            stream_kwargs: dict = {"model": self._model, "system": self._system}
+            if compact_flag:
+                stream_kwargs["compact"] = True
 
             text_parts: list[str] = []
             tool_calls: list[dict] = []
             stop_reason = "end_turn"
             usage: dict | None = None
+            raw_content: list | None = None
             try:
-                for kind, payload in self._provider.stream(
-                    pmsgs, tools, model=self._model, system=self._system
-                ):
+                for kind, payload in self._provider.stream(pmsgs, tools, **stream_kwargs):
                     if kind == EV_TEXT:
                         text_parts.append(payload)
                         yield {"type": "text_delta", "text": payload}
@@ -149,6 +185,8 @@ class AgentLoop:
                         tool_calls.append(payload)
                     elif kind == EV_USAGE:
                         usage = payload
+                    elif kind == EV_COMPACT:
+                        raw_content = payload
                     elif kind == EV_STOP:
                         stop_reason = payload
             except ProviderError as exc:
@@ -164,6 +202,10 @@ class AgentLoop:
                     {"id": t["id"], "name": t["name"], "args": t.get("args", {})}
                     for t in tool_calls
                 ]
+            if raw_content is not None:
+                # Native compaction: persist the FULL provider content so
+                # _history_to_provider replays it verbatim next turn.
+                content["raw"] = raw_content
             tok_in = usage.get("input_tokens") if usage else None
             tok_out = usage.get("output_tokens") if usage else None
             tok_cache = usage.get("cache_read_input_tokens") if usage else None

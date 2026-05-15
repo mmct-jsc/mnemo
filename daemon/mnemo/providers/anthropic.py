@@ -22,6 +22,7 @@ from typing import Any
 import anthropic
 
 from mnemo.providers import (
+    EV_COMPACT,
     EV_STOP,
     EV_TEXT,
     EV_TOOL_CALL,
@@ -30,6 +31,33 @@ from mnemo.providers import (
     ProviderEvent,
     _usage_event,
 )
+
+# Native server-side compaction (v3.1, claude-api skill). Capable
+# models only (Opus 4.7/4.6, Sonnet 4.6) -- the loop gates on
+# compaction.supports_native_compaction before passing compact=True.
+_COMPACT_BETA = "compact-2026-01-12"
+_CONTEXT_MANAGEMENT = {"edits": [{"type": "compact_20260112"}]}
+
+
+def _block_to_dict(block: Any) -> dict:
+    """Serialize one final-message content block to a plain dict so the
+    loop can persist + replay it verbatim (compaction blocks MUST be
+    preserved -- the claude-api critical rule)."""
+    bt = getattr(block, "type", None)
+    if bt == "text":
+        return {"type": "text", "text": getattr(block, "text", "")}
+    if bt == "tool_use":
+        return {
+            "type": "tool_use",
+            "id": getattr(block, "id", ""),
+            "name": getattr(block, "name", ""),
+            "input": getattr(block, "input", {}) or {},
+        }
+    # compaction / unknown future blocks: keep type + id opaquely.
+    out: dict = {"type": bt}
+    if getattr(block, "id", None) is not None:
+        out["id"] = block.id
+    return out
 
 
 def _to_anthropic_messages(messages: list[dict]) -> list[dict]:
@@ -100,12 +128,16 @@ class AnthropicProvider(BaseProvider):
         model: str,
         system: str | None = None,
         max_output_tokens: int = 4096,
+        compact: bool = False,
     ) -> Iterator[ProviderEvent]:
         kwargs: dict[str, Any] = {
             "model": model,
             "max_tokens": max_output_tokens,
             "messages": _to_anthropic_messages(messages),
         }
+        if compact:
+            kwargs["betas"] = [_COMPACT_BETA]
+            kwargs["context_management"] = _CONTEXT_MANAGEMENT
         if tools:
             kwargs["tools"] = [
                 {
@@ -123,8 +155,9 @@ class AnthropicProvider(BaseProvider):
                     "cache_control": {"type": "ephemeral"},
                 }
             ]
+        streamer = self._client.beta.messages.stream if compact else self._client.messages.stream
         try:
-            with self._client.messages.stream(**kwargs) as stream:
+            with streamer(**kwargs) as stream:
                 for event in stream:
                     if (
                         getattr(event, "type", None) == "content_block_delta"
@@ -144,6 +177,10 @@ class AnthropicProvider(BaseProvider):
                     EV_TOOL_CALL,
                     {"id": block.id, "name": block.name, "args": block.input},
                 )
+        if compact:
+            # Preserve the FULL content (compaction blocks included) so
+            # the loop can replay it verbatim next turn.
+            yield (EV_COMPACT, [_block_to_dict(b) for b in final.content])
         usage = getattr(final, "usage", None)
         if usage is not None:
             ev = _usage_event(
