@@ -9,7 +9,8 @@ Design 2026-05-15-mnemo-v3.1 S3.3, decided fork 2:
     included) is preserved verbatim and replayed next turn (the
     claude-api critical rule).
   * fallback path -- any other provider/model: summarize the oldest
-    turns into one pinned ``system`` message, keep the recent tail.
+    turns into one pinned ``user`` message (mid-list ``system`` is
+    dropped by every translator), keep the recent tail.
 
 All offline: scripted providers + an injected fake Anthropic client.
 """
@@ -86,11 +87,34 @@ def test_summarize_prefix_pins_summary_and_keeps_recent_tail() -> None:
     new_msgs, summary = summarize_prefix(prov, "m", msgs, keep_recent=3)
 
     assert "SUMMARY" in summary
-    # one pinned system message + exactly the last 3 turns
-    assert new_msgs[0]["role"] == "system"
+    # one pinned message + exactly the last 3 turns. The pin rides as a
+    # USER turn, not 'system' -- the normalised provider protocol only
+    # delivers user/assistant/tool (see the survives-translation test).
+    assert new_msgs[0]["role"] == "user"
     assert "summary" in new_msgs[0]["content"].lower()
     assert [m["content"] for m in new_msgs[1:]] == ["turn 7", "turn 8", "turn 9"]
     assert len(new_msgs) == 4
+
+
+def test_summarized_pin_survives_every_provider_translation() -> None:
+    """Regression: a {'role':'system'} message mid-list is SILENTLY
+    DROPPED by every translator, so the compaction summary must ride a
+    delivered role. This guards the whole point of the fallback."""
+    from mnemo.providers.anthropic import _to_anthropic_messages
+    from mnemo.providers.google import _to_google_contents
+    from mnemo.providers.openai import _to_openai_messages
+
+    prov = _ScriptedProvider(["SUM keeps n1 [mnemo:n1]"])
+    msgs = [{"role": "user", "content": f"t{i}"} for i in range(8)]
+    new_msgs, _ = summarize_prefix(prov, "m", msgs, keep_recent=2)
+
+    for blob in (
+        str(_to_anthropic_messages(new_msgs)),
+        str(_to_openai_messages(new_msgs, None)),
+        str(_to_google_contents(new_msgs)),
+    ):
+        assert "earlier conversation summary" in blob
+        assert "SUM keeps n1" in blob
 
 
 def test_summarize_prefix_noop_when_already_short() -> None:
@@ -197,7 +221,10 @@ def test_loop_summarizes_when_over_threshold(store: Store) -> None:
     assert events[-1]["type"] == "done"
     # provider saw the summarize call first, then the bounded answer call
     assert len(prov.seen) == 2
-    assert any(m.get("role") == "system" for m in prov.seen[1])
+    assert any(
+        m.get("role") == "user" and "earlier conversation summary" in str(m.get("content", ""))
+        for m in prov.seen[1]
+    )
     # summary persisted on the conversation
     refreshed = store.get_conversation(conv.id)
     assert refreshed.summary_json is not None
