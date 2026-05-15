@@ -90,6 +90,7 @@ class GoogleProvider(BaseProvider):
         model: str,
         system: str | None = None,
         max_output_tokens: int = 4096,
+        compact: bool = False,  # native compaction is Anthropic-only
     ) -> Iterator[ProviderEvent]:
         config: dict[str, Any] = {"max_output_tokens": max_output_tokens}
         if system:

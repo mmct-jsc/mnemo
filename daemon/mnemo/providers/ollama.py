@@ -113,6 +113,7 @@ class OllamaProvider(BaseProvider):
         model: str,
         system: str | None = None,
         max_output_tokens: int = 4096,
+        compact: bool = False,  # native compaction is Anthropic-only
     ) -> Iterator[ProviderEvent]:
         native = any(model.startswith(p) for p in _NATIVE_TOOL_PREFIXES)
         sys_prompt = system

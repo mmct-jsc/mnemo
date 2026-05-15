@@ -37,6 +37,11 @@ from typing import Any
 EV_TEXT = "text_delta"
 EV_TOOL_CALL = "tool_call"
 EV_USAGE = "usage"
+# v3.1 native compaction: the FULL final content (compaction blocks
+# included) as a list of plain dicts, so the loop can persist + replay
+# it verbatim (the claude-api "preserve response.content" rule). Only
+# the Anthropic provider in compact mode yields this.
+EV_COMPACT = "compaction"
 EV_STOP = "stop"
 
 
@@ -101,6 +106,7 @@ class BaseProvider:
         model: str,
         system: str | None = None,
         max_output_tokens: int = 4096,
+        compact: bool = False,
     ) -> Iterator[ProviderEvent]:
         raise NotImplementedError("provider must implement stream()")
 

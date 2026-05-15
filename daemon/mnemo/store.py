@@ -2136,6 +2136,16 @@ class Store:
             )
             self.conn.commit()
 
+    def set_conversation_summary(self, conv_id: str, data: dict | None) -> None:
+        """Persist the compaction state / running summary (v3.1 phase 3,
+        the provider-agnostic fallback path). ``None`` clears it."""
+        with self._lock:
+            self.conn.execute(
+                "UPDATE chat_conversations SET summary_json = ? WHERE id = ?",
+                (json.dumps(data) if data is not None else None, conv_id),
+            )
+            self.conn.commit()
+
     # --- Bookmarks (v3.1) -------------------------------------------------
 
     def add_bookmark(
