@@ -770,6 +770,7 @@ class Store:
         type: str | None = None,
         project_key: str | None = None,
         limit: int = 100,
+        offset: int = 0,
         include_base: bool = True,
     ) -> list[Node]:
         """List nodes with optional filters.
@@ -778,8 +779,31 @@ class Store:
         project_key matches **plus** any BASE-flagged nodes (since BASE
         knowledge applies to every project). Pass ``include_base=False``
         to suppress that union (admin / debugging use only).
+
+        v2.6.7: ``offset`` enables real SQL pagination (``LIMIT ?
+        OFFSET ?``) so the UI fetches exactly one page instead of
+        loading 10 000 rows and slicing in Python. Pair with
+        ``count_nodes_total`` for the (uncapped) page count.
         """
         sql = "SELECT * FROM nodes"
+        clauses, params = self._node_filter_sql(
+            type=type, project_key=project_key, include_base=include_base
+        )
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY updated_at DESC LIMIT ? OFFSET ?"
+        params.append(limit)
+        params.append(offset)
+        with self._lock:
+            rows = self.conn.execute(sql, params).fetchall()
+        return [self._row_to_node(r) for r in rows]
+
+    @staticmethod
+    def _node_filter_sql(
+        *, type: str | None, project_key: str | None, include_base: bool
+    ) -> tuple[list[str], list[object]]:
+        """Shared WHERE builder for list_nodes / count_nodes_total so
+        the page list and its total can never drift out of sync."""
         clauses: list[str] = []
         params: list[object] = []
         if type is not None:
@@ -787,19 +811,44 @@ class Store:
             params.append(type)
         if project_key is not None:
             if include_base:
-                # Project's nodes OR any BASE node, regardless of project.
                 clauses.append("(project_key = ? OR base = 1)")
                 params.append(project_key)
             else:
                 clauses.append("project_key = ?")
                 params.append(project_key)
+        return clauses, params
+
+    def count_nodes_total(
+        self,
+        *,
+        type: str | None = None,
+        project_key: str | None = None,
+        include_base: bool = True,
+    ) -> int:
+        """Scalar ``SELECT COUNT(*)`` honoring the SAME filters as
+        ``list_nodes``. No LIMIT -> the real total, never capped at
+        10 000 (the v2.6.7 fix for "Showing 1-25 of 10000")."""
+        sql = "SELECT COUNT(*) AS n FROM nodes"
+        clauses, params = self._node_filter_sql(
+            type=type, project_key=project_key, include_base=include_base
+        )
         if clauses:
             sql += " WHERE " + " AND ".join(clauses)
-        sql += " ORDER BY updated_at DESC LIMIT ?"
-        params.append(limit)
         with self._lock:
-            rows = self.conn.execute(sql, params).fetchall()
-        return [self._row_to_node(r) for r in rows]
+            row = self.conn.execute(sql, params).fetchone()
+        return int(row["n"]) if row else 0
+
+    def list_project_keys(self) -> list[str]:
+        """Distinct non-NULL ``project_key`` values, sorted. Feeds the
+        nodes-browse project dropdown -- previously derived from a
+        capped ``list_nodes(limit=10_000)`` scan that silently
+        dropped projects beyond the first 10 000 rows."""
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT DISTINCT project_key FROM nodes "
+                "WHERE project_key IS NOT NULL ORDER BY project_key"
+            ).fetchall()
+        return [r["project_key"] for r in rows]
 
     def delete_node(self, node_id: str) -> None:
         # Vec rows are not FK-linked (virtual table), so clean them up explicitly
@@ -1235,12 +1284,15 @@ class Store:
             self.conn.commit()
         return qid
 
-    def recent_queries(self, limit: int = 50) -> list[Query]:
+    def recent_queries(self, limit: int = 50, *, offset: int = 0) -> list[Query]:
         # ts has 1-second resolution, so ties within the same second fall back
         # to rowid order (SQLite's monotonic insertion order).
+        # v2.6.7: ``offset`` enables real SQL pagination for the audit
+        # page (was: fetch 10 000 + slice in Python -> capped + slow).
         with self._lock:
             rows = self.conn.execute(
-                "SELECT * FROM queries ORDER BY ts DESC, rowid DESC LIMIT ?", (limit,)
+                "SELECT * FROM queries ORDER BY ts DESC, rowid DESC LIMIT ? OFFSET ?",
+                (limit, offset),
             ).fetchall()
         return [
             Query(
@@ -1254,6 +1306,58 @@ class Store:
             )
             for r in rows
         ]
+
+    def count_queries(self) -> int:
+        """Scalar total of audit rows -- the uncapped page count for
+        /audit-page (was: ``len(recent_queries(limit=10_000))``)."""
+        with self._lock:
+            row = self.conn.execute("SELECT COUNT(*) AS n FROM queries").fetchone()
+        return int(row["n"]) if row else 0
+
+    def query_audit_stats(self) -> dict[str, object]:
+        """One-pass audit summary for the /audit-page side cards.
+
+        v2.6.7: the cards used to be derived from a 10 000-row
+        load-all (``all_q``) the pagination rewrite removed. Numeric
+        stats now come from a single SQL aggregate (json1's
+        ``json_array_length`` sums hit counts without materialising
+        rows). The tag histogram still scans the log, but only the
+        short ``intent_tags`` column -- far lighter than rebuilding
+        full Query objects -- so it stays correct + uncapped.
+        Returns ``{total_queries, total_hits, first_ts, last_ts,
+        top_tags}`` (top_tags = list[(tag, n)] desc, "none" kept;
+        the route filters it).
+        """
+        with self._lock:
+            agg = self.conn.execute(
+                """
+                SELECT COUNT(*) AS n,
+                       COALESCE(SUM(json_array_length(retrieved_ids)), 0) AS hits,
+                       COALESCE(MIN(ts), 0) AS first_ts,
+                       COALESCE(MAX(ts), 0) AS last_ts
+                FROM queries
+                """
+            ).fetchone()
+            tag_rows = self.conn.execute(
+                "SELECT intent_tags FROM queries WHERE intent_tags IS NOT NULL"
+            ).fetchall()
+        counter: dict[str, int] = {}
+        for r in tag_rows:
+            try:
+                tags = json.loads(r["intent_tags"]) if r["intent_tags"] else []
+            except (ValueError, TypeError):
+                continue
+            for t in tags:
+                if t:
+                    counter[t] = counter.get(t, 0) + 1
+        top_tags = sorted(counter.items(), key=lambda kv: (-kv[1], kv[0]))
+        return {
+            "total_queries": int(agg["n"]) if agg else 0,
+            "total_hits": int(agg["hits"]) if agg else 0,
+            "first_ts": int(agg["first_ts"]) if agg else 0,
+            "last_ts": int(agg["last_ts"]) if agg else 0,
+            "top_tags": top_tags,
+        }
 
     def recent_queries_with_embeddings(
         self, *, window_seconds: int = 300, limit: int = 100
