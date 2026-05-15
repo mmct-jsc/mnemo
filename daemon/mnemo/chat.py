@@ -26,7 +26,14 @@ import re
 from collections.abc import Iterator
 
 from mnemo.agent_tools import TOOLS, ToolContext
-from mnemo.providers import EV_STOP, EV_TEXT, EV_TOOL_CALL, BaseProvider, ProviderError
+from mnemo.providers import (
+    EV_STOP,
+    EV_TEXT,
+    EV_TOOL_CALL,
+    EV_USAGE,
+    BaseProvider,
+    ProviderError,
+)
 from mnemo.store import Store
 
 MAX_ITERS = 8
@@ -130,6 +137,7 @@ class AgentLoop:
             text_parts: list[str] = []
             tool_calls: list[dict] = []
             stop_reason = "end_turn"
+            usage: dict | None = None
             try:
                 for kind, payload in self._provider.stream(
                     pmsgs, tools, model=self._model, system=self._system
@@ -139,6 +147,8 @@ class AgentLoop:
                         yield {"type": "text_delta", "text": payload}
                     elif kind == EV_TOOL_CALL:
                         tool_calls.append(payload)
+                    elif kind == EV_USAGE:
+                        usage = payload
                     elif kind == EV_STOP:
                         stop_reason = payload
             except ProviderError as exc:
@@ -154,7 +164,27 @@ class AgentLoop:
                     {"id": t["id"], "name": t["name"], "args": t.get("args", {})}
                     for t in tool_calls
                 ]
-            self._store.append_message(conv_id, role="assistant", content=content)
+            tok_in = usage.get("input_tokens") if usage else None
+            tok_out = usage.get("output_tokens") if usage else None
+            tok_cache = usage.get("cache_read_input_tokens") if usage else None
+            self._store.append_message(
+                conv_id,
+                role="assistant",
+                content=content,
+                token_in=tok_in,
+                token_out=tok_out,
+                cache_read=tok_cache,
+            )
+            if usage is not None:
+                self._store.bump_tokens(conv_id, delta=(tok_in or 0) + (tok_out or 0))
+                conv = self._store.get_conversation(conv_id)
+                yield {
+                    "type": "usage",
+                    "input_tokens": tok_in or 0,
+                    "output_tokens": tok_out or 0,
+                    "cache_read": tok_cache or 0,
+                    "tokens_total": conv.tokens_total if conv else 0,
+                }
 
             blocks: list[dict] = []
             if assistant_text:

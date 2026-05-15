@@ -8,6 +8,11 @@ Event protocol (design S2) -- ``stream()`` yields tuples:
 
   * ``('text_delta', str)``                -- assistant text chunk
   * ``('tool_call', {id, name, args})``    -- the model wants a tool
+  * ``('usage', {input_tokens, output_tokens,
+        cache_read_input_tokens})``        -- v3.1: per-turn token
+        usage, yielded AT MOST ONCE directly before ('stop', ...).
+        Omitted when the provider/transport didn't surface counts (a
+        mocked client without usage stays a pure text/tool/stop stream).
   * ``('stop', reason)``                   -- 'end_turn' | 'tool_use'
                                               | 'max_tokens' | ...
 
@@ -31,7 +36,36 @@ from typing import Any
 
 EV_TEXT = "text_delta"
 EV_TOOL_CALL = "tool_call"
+EV_USAGE = "usage"
 EV_STOP = "stop"
+
+
+def _usage_event(
+    input_tokens: int | None,
+    output_tokens: int | None,
+    cache_read_input_tokens: int | None = 0,
+) -> tuple[str, dict] | None:
+    """Build the ``('usage', {...})`` event, or None when the provider
+    surfaced no usable counts (so the loop stays a text/tool/stop
+    stream -- design S3.2). Counts coerce to non-negative ints."""
+    if input_tokens is None and output_tokens is None:
+        return None
+
+    def _n(v: object) -> int:
+        try:
+            return max(0, int(v))  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return 0
+
+    return (
+        EV_USAGE,
+        {
+            "input_tokens": _n(input_tokens),
+            "output_tokens": _n(output_tokens),
+            "cache_read_input_tokens": _n(cache_read_input_tokens),
+        },
+    )
+
 
 ProviderEvent = tuple[str, Any]
 

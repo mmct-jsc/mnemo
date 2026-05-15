@@ -12,7 +12,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 
 from mnemo.chat import MAX_ITERS, AgentLoop
-from mnemo.providers import EV_STOP, EV_TEXT, EV_TOOL_CALL, BaseProvider, ProviderError
+from mnemo.providers import EV_STOP, EV_TEXT, EV_TOOL_CALL, EV_USAGE, BaseProvider, ProviderError
 from mnemo.store import Node, Store
 from tests.conftest import FakeEmbedder
 
@@ -140,6 +140,52 @@ def test_multiple_citations_extracted_in_order(store: Store) -> None:
     events = _run(_loop(store, prov), conv.id, "q")
     cites = [e["node_id"] for e in events if e["type"] == "citation"]
     assert cites == ["abc", "def"]
+
+
+def test_usage_event_recorded_on_message_and_conversation(store: Store) -> None:
+    """v3.1 phase 2: the loop captures ('usage', ...), stamps the
+    assistant row's token_in/out/cache_read, runs the conversation
+    token counter, and surfaces a 'usage' SSE event before 'done'."""
+    conv = store.create_conversation(name="c", provider="fake", model="m")
+    prov = FakeProvider(
+        [
+            [
+                (EV_TEXT, "answer"),
+                (
+                    EV_USAGE,
+                    {"input_tokens": 100, "output_tokens": 20, "cache_read_input_tokens": 60},
+                ),
+                (EV_STOP, "end_turn"),
+            ]
+        ]
+    )
+    events = _run(_loop(store, prov), conv.id, "q")
+
+    usage_ev = next(e for e in events if e["type"] == "usage")
+    assert usage_ev["input_tokens"] == 100
+    assert usage_ev["output_tokens"] == 20
+    assert usage_ev["tokens_total"] == 120
+    # 'usage' precedes the terminal 'done' so events[-1] stays 'done'
+    assert events[-1]["type"] == "done"
+
+    asst = store.list_messages(conv.id)[-1]
+    assert asst.role == "assistant"
+    assert asst.token_in == 100
+    assert asst.token_out == 20
+    assert asst.cache_read == 60
+    assert store.get_conversation(conv.id).tokens_total == 120
+
+
+def test_no_usage_event_when_provider_omits_it(store: Store) -> None:
+    """Providers that don't surface usage keep the loop's old shape --
+    no 'usage' SSE event, token columns stay NULL."""
+    conv = store.create_conversation(name="c", provider="fake", model="m")
+    prov = FakeProvider([[(EV_TEXT, "hi"), (EV_STOP, "end_turn")]])
+    events = _run(_loop(store, prov), conv.id, "q")
+    assert not any(e["type"] == "usage" for e in events)
+    asst = store.list_messages(conv.id)[-1]
+    assert asst.token_in is None
+    assert store.get_conversation(conv.id).tokens_total == 0
 
 
 def test_base_provider_stream_is_abstract() -> None:

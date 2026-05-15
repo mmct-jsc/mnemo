@@ -28,6 +28,7 @@ from mnemo.providers import (
     BaseProvider,
     ProviderError,
     ProviderEvent,
+    _usage_event,
 )
 
 
@@ -143,4 +144,13 @@ class AnthropicProvider(BaseProvider):
                     EV_TOOL_CALL,
                     {"id": block.id, "name": block.name, "args": block.input},
                 )
+        usage = getattr(final, "usage", None)
+        if usage is not None:
+            ev = _usage_event(
+                getattr(usage, "input_tokens", None),
+                getattr(usage, "output_tokens", None),
+                getattr(usage, "cache_read_input_tokens", 0),
+            )
+            if ev is not None:
+                yield ev
         yield (EV_STOP, final.stop_reason or "end_turn")
