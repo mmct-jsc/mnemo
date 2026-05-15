@@ -1,10 +1,30 @@
 {% extends "base.html" %}
 {% block title %} - Nebula{% endblock %}
 {% block head_extra %}
-<script src="https://unpkg.com/cytoscape@3.30.4/dist/cytoscape.min.js"></script>
-<script src="https://unpkg.com/layout-base/layout-base.js"></script>
-<script src="https://unpkg.com/cose-base/cose-base.js"></script>
-<script src="https://unpkg.com/cytoscape-fcose/cytoscape-fcose.js"></script>
+<!-- v2.6.2: Nebula renders on Cosmograph -- a GPU force-simulation
+     graph engine. Cytoscape's canvas renderer physically could not
+     paint 10 k+ sharp nodes per frame (proven across 3 measured
+     tuning attempts in v2.6.1), forcing a 2 k degree cap that
+     misled the future v3 chat companion + broke tree navigation.
+     Cosmograph runs the many-body + link-spring simulation on the
+     GPU and holds 60 fps at 10 k-1 M nodes -- the organic drifting
+     point cloud IS the "nebula" the design asked for. Loaded as a
+     native ESM module from a CDN (no Node build step -- same
+     delivery model as the old cytoscape <script src>). The module
+     publishes the API on window + fires `cosmograph:ready` so the
+     classic Alpine factory below can await it. -->
+<script type="module">
+  // @cosmos.gl/graph is the lean GPU graph engine that powers
+  // Cosmograph. We use it directly (NOT the @cosmograph/cosmograph
+  // wrapper, which drags in duckdb-wasm + supabase + mosaic -- multi-
+  // MB and wrong for a local-first tool). This bundle is just
+  // luma.gl (WebGL) + d3 math. Low-level API: typed-array buffers,
+  // GPU force simulation, selection + camera helpers.
+  import { Graph }
+    from 'https://esm.sh/@cosmos.gl/graph@3.0.0-beta.8';
+  window.__CosmographAPI = { Graph };
+  window.dispatchEvent(new Event('cosmograph:ready'));
+</script>
 <!-- Prism is loaded site-wide from base.html; no per-page setup. -->
 {% endblock %}
 {% block layout %}
@@ -101,58 +121,26 @@
 
     <!-- Center: canvas -->
     <div class="nebula-canvas">
+      <!-- Cosmograph mounts its WebGL canvas into this div. -->
       <div id="cy-nebula"></div>
 
-      <!-- v2.2.6: layout-change veil. When the user picks a
-           different layout we snap positions synchronously; the
-           veil fades opaque -> snap -> transparent so the user
-           sees a smooth cross-fade. The prior implementation
-           animated cy.elements() opacity, which wrote inline
-           bypasses that overrode the .dim class rule (killing
-           the focus blur after a layout change while a node was
-           selected). Pipeline 18 -- DOM overlay over canvas-
-           library effects. -->
-      <div class="nebula-layout-veil" :class="{ on: layoutFading }"
-           aria-hidden="true"></div>
-
-      <!-- v2.2.4: DOM-overlay heart-beat ring. Replaces the
-           cy.animate-based pulse that depended on cytoscape's
-           internal animation queue (which was unreliable across
-           click paths). The anchor is positioned absolutely above
-           the canvas; its left/top/width/height track the selected
-           node's RENDERED position + size via cy.on('pan zoom')
-           and node.on('position'). The inner ring is a pure CSS
-           @keyframes animation -- guaranteed to render regardless
-           of cytoscape's animation state. -->
-      <div class="nebula-pulse-anchor" x-show="selected" x-cloak
-           x-ref="pulseAnchor"
-           :style="pulseAnchorStyle">
-        <div class="nebula-pulse-ring"></div>
+      <!-- v2.6.2: loading shimmer while the GPU simulation warms
+           up (Cosmograph uploads buffers + runs the first force
+           ticks). Cleared the moment the first frame settles. -->
+      <div class="nebula-booting" x-show="booting" x-cloak>
+        <span class="nebula-booting-orb"></span>
+        <span x-text="bootMsg"></span>
       </div>
 
       <div class="nebula-hint">
         scroll to zoom · drag to pan · click a node
       </div>
 
-      <!-- v2.6.0 polish: status chip in the lower-right. Shows the
-           current render size + workspace name without overlapping
-           the top-row hint / scope chip. Always visible (no
-           x-show) so the user can sanity-check completeness at a
-           glance. -->
+      <!-- v2.6.2: status chip -- the canvas now shows the FULL
+           graph (no cap), so this is an honest total. -->
       <div class="nebula-status">
-        <!-- v2.6.1: when the canvas is degree-capped, say so plainly
-             and point at the tree. The bare "10,845 nodes" while only
-             2 000 paint read as a bug; this makes the curation
-             explicit + tells the user the full corpus is in the
-             file tree (which v3 chat references). -->
-        <template x-if="canvasCapped">
-          <span class="nebula-status-count"
-                x-text="'top ' + canvasShown.toLocaleString() + ' of ' + canvasTotal.toLocaleString() + ' nodes · full list in tree'"></span>
-        </template>
-        <template x-if="!canvasCapped">
-          <span class="nebula-status-count"
-                x-text="canvasTotal.toLocaleString() + ' nodes'"></span>
-        </template>
+        <span class="nebula-status-count"
+              x-text="canvasTotal.toLocaleString() + ' nodes · ' + edgeTotal.toLocaleString() + ' links'"></span>
         <span class="nebula-status-sep" x-show="contextWorkspaceName" x-cloak>·</span>
         <span class="nebula-status-ws" x-show="contextWorkspaceName" x-cloak
               x-text="contextWorkspaceName"></span>
@@ -208,20 +196,13 @@
           <p class="ndesc" x-show="selected.description" x-cloak
              x-text="selected.description"></p>
           <!-- v2.2.7: type-aware body preview via mnemoRenderBody.
-               Previously this was a hardcoded ``<pre><code>`` shell
-               + ``streamBodyToCode``, which streamed plain text and
-               called Prism.highlightElement at the end -- so EVERY
-               body (markdown memory entries, project docs, session
-               summaries, etc.) rendered through the code path and
-               appeared as monospace source. Now the side panel
-               delegates to ``window.mnemoRenderBody`` which already
-               does the three-branch decision (code_* -> Prism,
-               commit -> escaped pre, everything else -> marked
-               markdown) AND owns streaming + cancellation since
-               v2.2.5. The ``.is-code`` modifier mirrors node.html's
-               same affordance so code bodies get the dark code
-               chrome and markdown bodies get the typographic md
-               style. -->
+               Delegates to ``window.mnemoRenderBody`` which does the
+               three-branch decision (code_* -> Prism, commit ->
+               escaped pre, everything else -> marked markdown) AND
+               owns streaming + cancellation since v2.2.5. The
+               ``.is-code`` modifier mirrors node.html's affordance so
+               code bodies get the dark code chrome and markdown
+               bodies get the typographic md style. -->
           <div x-show="selected.body" x-cloak
                class="nebula-body md-body"
                :class="{ 'is-code': bodyMode === 'code' }"
@@ -289,29 +270,19 @@
                 x-show="minConfidence > 0" x-cloak
                 title="reset to 0">×</button>
       </label>
-      <label class="nebula-hops" x-show="contextNodeId" x-cloak>
-        hops
-        <select x-model.number="hops" @change="reload()">
-          <option :value="1">1</option>
-          <option :value="2">2</option>
-          <option :value="3">3</option>
-        </select>
-      </label>
-      <!-- v2.6.1: the four-layout switcher (force / rings / tree /
-           grid) is gone. fcose on 10 k+ nodes froze the tab for
-           30 s, so the buttons were a foot-gun. We now ship one
-           polished layout (concentric, log-bucketed by degree)
-           for every workspace size. -->
-      <!-- v2.2.3: edge + label visibility toggles. Both default to
-           ON; tapping each flips a class on the matching cytoscape
-           selector (.edges-off / .labels-off) inside a cy.batch so
-           the canvas redraws once. -->
+      <!-- v2.6.2: no hops selector / layout switcher. Cosmograph
+           renders the full graph with one organic force layout;
+           clicking any node (canvas or tree) flies the camera to
+           it WITHOUT swapping to an ego-sub-graph, so there is no
+           "drill depth" to choose and no layout to pick. -->
+      <!-- Edge + label visibility toggles. Both default ON. They
+           flip Cosmograph render flags via setConfig. -->
       <div class="nebula-toggle-buttons">
         <button type="button"
                 class="nebula-toggle"
                 :class="{ off: !edgesVisible }"
                 @click="toggleEdges()"
-                title="Show / hide edges">
+                title="Show / hide links">
           <span class="nebula-toggle-dot"></span>
           <span>edges</span>
         </button>
@@ -334,25 +305,22 @@
 // (daemon/mnemo/ui/palette.py, exposed via base.html as
 // window.MNEMO_TYPE_COLORS). Keeping the alias TYPE_COLORS for the
 // rest of this file so the existing call sites don't have to change.
-// New node types now show up in the canvas the moment they land in
-// palette.py -- no per-file edits required.
 const TYPE_COLORS = window.MNEMO_TYPE_COLORS || {};
 const TYPE_COLOR_FALLBACK = window.MNEMO_TYPE_COLOR_FALLBACK || '#7ee7e0';
 
 // Edge palette: each relation gets a color that matches its
 // conceptual "weight" in the graph. Brighter = more semantic.
 const REL_COLORS = {
-  calls:                '#c084fc',  // purple -- the runtime flow
-  routes_to:            '#fb923c',  // amber -- request routing
-  at_endpoint:          '#4ade80',  // emerald -- cross-stack join
-  renders:              '#c084fc',  // violet -- UI composition
-  imports:              '#06b6d4',  // cyan -- module dep
-  defines:              '#5fa8ff',  // blue -- structural
-  method_of:            '#5fa8ff',  // blue -- structural
-  references_function:  '#f43f5e',  // crimson -- provenance touch
+  calls:                '#c084fc',
+  routes_to:            '#fb923c',
+  at_endpoint:          '#4ade80',
+  renders:              '#c084fc',
+  imports:              '#06b6d4',
+  defines:              '#5fa8ff',
+  method_of:            '#5fa8ff',
+  references_function:  '#f43f5e',
   motivated_by:         '#f43f5e',
   closed_by:            '#f43f5e',
-  // v1 memory relations
   applies_to:           '#22d3ee',
   derived_from:         '#22d3ee',
   contradicts:          '#ff8a4c',
@@ -363,127 +331,69 @@ const REL_COLORS = {
 
 function nebula() {
   return {
-    cy: null,
+    // --- Cosmograph + graph state ----------------------------------
+    cg: null,                    // Cosmograph instance
+    _points: [],                 // index-aligned point records
+    _idIndex: {},                // node id -> Cosmograph point index
+    _pointById: {},              // node id -> point record
+    _adj: {},                    // node id -> [{ id, rel, confidence }]
+    booting: false,              // GPU warm-up shimmer
+    bootMsg: 'warming the nebula',
+
     selected: null,
     neighbors: [],
     treeRoot: null,
-    treeRows: [],                 // v2.6.0: flat indented rows for arbitrary depth
-    expandedPaths: {},            // v2.6.0: { 'D:/Repository': true, ... }
-    visibleTreeRows: [],          // v2.6.0 perf: memoized; recomputed only when treeRows / expandedPaths change
+    treeRows: [],
+    expandedPaths: {},
+    visibleTreeRows: [],
     nodeTypes: [],
     typeFilters: {},
     filterText: '',
     minConfidence: 0,
-    hops: 2,
     dragging: null,
-    contextProject: null,        // legacy ?project=<key> deep-link single key
-    contextProjectKeys: null,    // v2.6.0: array from active workspace.project_keys
-    contextBaseOnly: false,      // v2.6.0: true when no workspace is active
-    contextWorkspaceName: null,  // v2.6.0: shown in the scope chip
-    contextNodeId: null,
-    truncated: false,            // v2.6.0: deprecated -- always false after we removed the cap
-    totalInScope: 0,             // v2.6.0: total nodes the workspace covers (== shown for status chip)
-    shownNodeCount: 0,           // v2.6.0: nodes painted on canvas
-    canvasCapped: false,         // v2.6.1: true when canvas shows top-N-by-degree (tree still full)
-    canvasShown: 0,              // v2.6.1: node count actually on the canvas
-    canvasTotal: 0,              // v2.6.1: node count in scope (canvas + capped-out, all in tree)
-    treeModules: [],             // v2.6.0: unbounded module list for left-panel tree
+    contextProject: null,        // legacy ?project=<key> deep-link
+    contextProjectKeys: null,    // active workspace.project_keys
+    contextBaseOnly: false,      // true when no workspace is active
+    contextWorkspaceName: null,
+    contextNodeId: null,         // ?node=<id> deep-link -> select in FULL graph
+    canvasTotal: 0,              // node count (status chip)
+    edgeTotal: 0,                // link count (status chip)
     _eventSource: null,
     stats: '',
     rawElements: [],
-    currentLayout: 'fcose',
-    // v2.2.3: user-toggleable canvas affordances. Both default to ON
-    // (preserve pre-2.2.3 behavior). When the user flips one OFF,
-    // toggleEdges / toggleLabels add a class on the matching
-    // cytoscape selector inside a cy.batch so the redraw is one frame.
     edgesVisible: true,
     labelsVisible: true,
-    // v2.2.7: which mnemoRenderBody path the side-panel body used
-    // on the most recent render. The .is-code class hangs off this
-    // so code bodies get the dark monospace chrome and markdown
-    // bodies get the typographic md style. Mirrors node.html's
-    // ``lastRenderedAs`` affordance.
     bodyMode: 'markdown',
-    // v2.2.6: drives the .nebula-layout-veil opacity during a
-    // layout change. relayout() flips this on, waits for the CSS
-    // transition to settle behind the veil, snaps positions, then
-    // flips it off so the new layout fades back in. Cytoscape's
-    // own opacity is never touched -- so .hl / .dim class rules
-    // keep owning the focus visual through the whole transition.
-    layoutFading: false,
-    // v2.2.4: inline style for the DOM-overlay pulse anchor.
-    // ``_updatePulseAnchor`` recomputes this whenever the selected
-    // node's rendered position or size changes (pan, zoom, layout,
-    // initial select). When ``selected`` is null the anchor is
-    // ``x-show``-hidden anyway, so we can leave the style stale.
-    pulseAnchorStyle: '',
 
-    // Single source of truth for ANY in-DOM type color (filter chips,
-    // neighbor dots, detail-panel ntype pill). Reads from the same
-    // window.MNEMO_TYPE_COLORS dict that the Cytoscape canvas uses,
-    // so chip color and node color stay in lockstep -- editing
-    // palette.py updates BOTH at once.
     typeColor(t) {
       return TYPE_COLORS[t] || TYPE_COLOR_FALLBACK;
     },
 
-    // v2.6.1: edges toggle now ACTUALLY adds / removes edges from
-    // the cytoscape model. The v2.2.3 design relied on a
-    // .edges-off CSS class (display: none) which collided with the
-    // .hl class selectFromCanvas added to the closed neighborhood
-    // -- you'd toggle edges off, click a node, and the
-    // "neighborhood" edges would visually pop back in. With actual
-    // removal there's nothing in cy to paint, so off truly is off.
-    //
-    // On heavy graphs we still default to "off" (15 k edges
-    // re-added to a 10 k-node canvas is a 30 s freeze), but the
-    // toggle remains available if the user really wants them.
+    // v2.6.2: edges/labels are Cosmograph render flags now (no more
+    // .edges-off CSS class that collided with selection highlight).
     toggleEdges() {
       this.edgesVisible = !this.edgesVisible;
-      if (!this.cy) return;
-      this.cy.batch(() => {
-        if (this.edgesVisible) {
-          // Re-attach from the stash if cy is currently edge-less.
-          if (this.cy.edges().length === 0 && this._allEdges?.length) {
-            this.cy.add(this._allEdges);
-          }
-        } else {
-          this.cy.edges().remove();
-        }
-      });
+      if (this.cg && this.cg.setConfig) {
+        try { this.cg.setConfig({ renderLinks: this.edgesVisible }); } catch (_) {}
+      }
       this._persistState();
     },
+    // cosmos.gl (low-level) has no text labels -- that's a feature of
+    // the heavyweight @cosmograph/cosmograph wrapper we deliberately
+    // didn't pull in. The toggle still persists intent + flips the
+    // chip so the bar stays consistent; the engine call is a no-op.
     toggleLabels() {
       this.labelsVisible = !this.labelsVisible;
-      if (!this.cy) return;
-      this.cy.batch(() => {
-        if (this.labelsVisible) this.cy.nodes().removeClass('labels-off');
-        else this.cy.nodes().addClass('labels-off');
-      });
       this._persistState();
     },
 
     // v2.2.7: side-panel body render. Delegates to
-    // ``window.mnemoRenderBody`` so the three-branch decision
-    // (code_* -> Prism, commit -> escaped pre, everything else ->
-    // marked markdown) runs the SAME way it does on /node/<id>
-    // and in the search popover. mnemoRenderBody itself owns
-    // streaming + cancellation since v2.2.5 -- it attaches a
-    // ``_mnemoStreamCancel`` handle to the target element and
-    // cancels any prior reveal before starting a new one when the
-    // same target gets re-rendered.
-    //
-    // The previous helper ``streamBodyToCode`` hardcoded the body
-    // through a ``<pre><code>`` shell with Prism.highlightElement,
-    // so markdown memory entries / project docs / session
-    // summaries rendered as monospace source instead of HTML.
-    // Reported 2026-05-14; full case study lives in the v2.2.7
-    // CHANGELOG entry.
+    // ``window.mnemoRenderBody`` (code_* -> Prism, commit -> escaped
+    // pre, everything else -> marked markdown). mnemoRenderBody owns
+    // streaming + cancellation since v2.2.5.
     renderSelectedBody(el, body, type, sourcePath) {
       if (!el) return;
       if (!window.mnemoRenderBody) {
-        // Cold-load fallback: paint plain text + retry next frame.
-        // Keeps the panel usable even if app.js is mid-hydration.
         el.textContent = body || '';
         requestAnimationFrame(() => this.renderSelectedBody(el, body, type, sourcePath));
         return;
@@ -492,31 +402,22 @@ function nebula() {
         type: type,
         sourcePath: sourcePath,
       });
-      // Default to 'markdown' so the cosmetic .is-code class only
-      // attaches when we actually picked the code path.
       this.bodyMode = mode || 'markdown';
     },
 
-    // v2.2 phase 4: neighbors list staggered reveal. Replaces the
-    // old <template x-for> path so items appear paced instead of
-    // popping in together. Cancellation prevents racing reveals
-    // when the user clicks several neighbors in quick succession.
+    // v2.2 phase 4: neighbors list staggered reveal.
     renderNeighborsList(ul, items) {
       if (!ul) return;
       if (this._neighborReveal && this._neighborReveal.cancel) {
         try { this._neighborReveal.cancel(); } catch (_) {}
       }
       this._neighborReveal = null;
-      // Always clear the list before re-rendering. Saves us from
-      // de-duping at insert time.
       while (ul.firstChild) ul.removeChild(ul.firstChild);
 
       const slice = (items || []).slice(0, 20);
       if (slice.length === 0) return;
 
       if (!window.mnemoStaggeredReveal) {
-        // Fallback: synchronous render. Keeps the panel functional
-        // when app.js hasn't loaded.
         for (let i = 0; i < slice.length; i++) {
           ul.appendChild(this._neighborItemEl(slice[i]));
         }
@@ -529,9 +430,6 @@ function nebula() {
       });
     },
 
-    // Builds one <li> for the neighbor list. Pulled out so both
-    // the staggered + fallback paths share the markup -- they
-    // were diverging when inlined.
     _neighborItemEl(nb) {
       const li = document.createElement('li');
       const btn = document.createElement('button');
@@ -555,47 +453,62 @@ function nebula() {
       return li;
     },
 
+    // --- Cosmograph readiness -------------------------------------
+    // The renderer is an ESM module loaded in <head>. It may resolve
+    // before OR after Alpine boots this factory, so init() awaits a
+    // promise that resolves either immediately (already on window)
+    // or on the `cosmograph:ready` event.
+    _whenCosmographReady() {
+      return new Promise((resolve, reject) => {
+        if (window.__CosmographAPI) { resolve(window.__CosmographAPI); return; }
+        const t = setTimeout(
+          () => reject(new Error('Cosmograph module failed to load')),
+          15000,
+        );
+        window.addEventListener('cosmograph:ready', () => {
+          clearTimeout(t);
+          resolve(window.__CosmographAPI);
+        }, { once: true });
+      });
+    },
+
     async init() {
-      // Read query string for ?project= and ?node= so /code cards
-      // can deep-link into this page with context.
       const params = new URLSearchParams(window.location.search);
       this.contextProject = params.get('project') || null;
       this.contextNodeId = params.get('node') || null;
-      if (params.get('hops')) this.hops = parseInt(params.get('hops'), 10) || 2;
 
-      // v2.6.0 polish: when no explicit ?project= deep-link is set,
-      // mirror the active workspace's scope on /ui/graph-data. If no
-      // workspace is active, drop into BASE-only mode (matches the
-      // rest of the UI). The workspace pointer wins over an explicit
-      // deep-link only when the deep-link is absent.
       if (!this.contextProject) {
         await this._loadWorkspaceScope();
       }
 
-      // Restore panel widths from localStorage.
       const left = localStorage.getItem('nebula.left');
       const right = localStorage.getItem('nebula.right');
       const shell = document.querySelector('.nebula-shell');
       if (left && shell)  shell.style.setProperty('--nebula-left', left);
       if (right && shell) shell.style.setProperty('--nebula-right', right);
 
-      // v2.2.4: restore filter / layout / toggle state from
-      // localStorage so user choices survive a reload. We do this
-      // BEFORE reload() so the cytoscape style is correct from
-      // first paint -- particularly important for edgesVisible /
-      // labelsVisible (no flash of edges before they're hidden).
       this._loadPersistedState();
 
-      if (window.cytoscape && window.cytoscapeFcose) {
-        cytoscape.use(cytoscapeFcose);
+      this.booting = true;
+      try {
+        await this._whenCosmographReady();
+      } catch (e) {
+        this.booting = false;
+        this.bootMsg = '';
+        window.toast && window.toast(
+          'Graph engine failed to load (offline?). ' + e.message, 'error');
+        return;
       }
       await this.reload();
 
-      // v2.6.0 polish: keep the canvas in sync across tabs. When the
-      // user switches workspaces from any open browser tab, /v1/events
-      // pushes a workspace_* frame and we re-fetch the scope + the
-      // graph data. The deep-link ?project= path skips this -- we
-      // assume the user wants the explicit scope they URL'd in.
+      // Esc anywhere clears the focused node (always a way back).
+      window.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && this.selected) {
+          e.preventDefault();
+          this.deselect();
+        }
+      });
+
       if (!this.contextProject) {
         this._subscribeWorkspaceEvents();
       }
@@ -612,12 +525,10 @@ function nebula() {
           this.contextBaseOnly = false;
           this.contextWorkspaceName = ws.name;
         } else if (ws) {
-          // Empty-project workspace -- treat as BASE-only.
           this.contextProjectKeys = null;
           this.contextBaseOnly = true;
           this.contextWorkspaceName = ws.name;
         } else {
-          // No active workspace at all -- BASE-only mode.
           this.contextProjectKeys = null;
           this.contextBaseOnly = true;
           this.contextWorkspaceName = null;
@@ -630,50 +541,34 @@ function nebula() {
         const es = new EventSource('/v1/events');
         this._eventSource = es;
         const refresh = async () => {
-          // v2.6.0 polish: clear any focused node + DOM-overlay pulse
-          // before re-fetching. Without this the old selected node
-          // pulses on top of the new (post-switch) canvas even after
-          // its underlying cytoscape node is gone -- the pulse anchor
-          // is a DOM div whose x-show is governed by ``selected``;
-          // clearing both ``selected`` + ``_pulseNode`` collapses the
-          // overlay before reload() rebuilds the graph.
-          this._stopPulse();
           this.selected = null;
           this.neighbors = [];
-          if (this.cy) {
-            this.cy.elements().stop(true, false);
-            this.cy.batch(() => this.cy.elements().removeClass('hl dim'));
-          }
           await this._loadWorkspaceScope();
           await this.reload();
         };
         es.addEventListener('workspace_activated', refresh);
         es.addEventListener('workspace_cleared', refresh);
         es.addEventListener('workspace_deleted', refresh);
-      } catch (_) { /* EventSource unavailable -- next page load picks up the new scope */ }
+      } catch (_) { /* EventSource unavailable */ }
     },
 
     destroy() {
       if (this._eventSource) {
-        try { this._eventSource.close(); } catch (_) { /* ignore */ }
+        try { this._eventSource.close(); } catch (_) {}
         this._eventSource = null;
+      }
+      if (this.cg) {
+        try { this.cg.destroy(); } catch (_) {}
+        this.cg = null;
       }
     },
 
-    // v2.2.4: persistence boundary. ``_loadPersistedState`` runs
-    // ONCE at init() and pulls every "user choice" knob out of
-    // localStorage. ``_persistState`` runs whenever any of those
-    // knobs change and writes them back. Both centralize the
-    // set of persisted keys so adding a new one is a single-place
-    // edit. Keys live under the ``nebula.`` namespace.
+    // v2.6.2: persistence is just filters + toggles now (no layout --
+    // there is only one layout).
     _loadPersistedState() {
       try {
-        const layout = localStorage.getItem('nebula.layout');
-        if (layout && ['fcose', 'concentric', 'breadthfirst', 'grid'].includes(layout)) {
-          this.currentLayout = layout;
-        }
         const minConf = parseFloat(localStorage.getItem('nebula.minConfidence'));
-        if (!Number.isNaN(minConf)) this.minConfidence = Math.max(0, Math.min(1, minConf));
+        if (!Number.isNaN(minConf)) this.minConfidence = Math.max(0, Math.min(100, minConf));
         const edges = localStorage.getItem('nebula.edgesVisible');
         if (edges === 'true' || edges === 'false') this.edgesVisible = edges === 'true';
         const labels = localStorage.getItem('nebula.labelsVisible');
@@ -681,29 +576,23 @@ function nebula() {
         const filtersRaw = localStorage.getItem('nebula.typeFilters');
         if (filtersRaw) {
           const parsed = JSON.parse(filtersRaw);
-          if (parsed && typeof parsed === 'object') {
-            // Stored as { [type]: bool }. We can't merge with nodeTypes
-            // yet (cytoscape isn't booted) -- buildTypeFilters reads
-            // this._persistedFilters once it knows the node types.
-            this._persistedFilters = parsed;
-          }
+          if (parsed && typeof parsed === 'object') this._persistedFilters = parsed;
         }
-      } catch (_) { /* localStorage disabled / corrupted -- silently fall back to defaults */ }
+      } catch (_) { /* localStorage disabled */ }
     },
     _persistState() {
       try {
-        localStorage.setItem('nebula.layout', this.currentLayout);
         localStorage.setItem('nebula.minConfidence', String(this.minConfidence));
         localStorage.setItem('nebula.edgesVisible', String(this.edgesVisible));
         localStorage.setItem('nebula.labelsVisible', String(this.labelsVisible));
         localStorage.setItem('nebula.typeFilters', JSON.stringify(this.typeFilters));
-      } catch (_) { /* quota / disabled -- fail silently */ }
+      } catch (_) { /* quota / disabled */ }
     },
 
     async reload() {
       const qs = new URLSearchParams();
       // Scope precedence:
-      //   1. explicit ?project= deep-link (legacy /code -> Nebula path)
+      //   1. explicit ?project= deep-link (legacy /code -> Nebula)
       //   2. workspace project_keys CSV
       //   3. base_only=1 when no workspace is active
       if (this.contextProject) {
@@ -713,55 +602,39 @@ function nebula() {
       } else if (this.contextBaseOnly) {
         qs.set('base_only', '1');
       }
-      if (this.contextNodeId) {
-        qs.set('node', this.contextNodeId);
-        qs.set('hops', String(this.hops));
+      // v2.6.2: NO ?node=/hops. The full graph is always rendered;
+      // a ?node= deep-link is resolved client-side to a point index
+      // and the camera flies there -- we never fetch an ego-subgraph.
+      let data;
+      try {
+        const r = await fetch('/ui/graph-data?' + qs.toString());
+        data = await r.json();
+      } catch (e) {
+        this.booting = false;
+        window.toast && window.toast('Graph data fetch failed: ' + e, 'error');
+        return;
       }
-      const r = await fetch('/ui/graph-data?' + qs.toString());
-      const data = await r.json();
-      this.rawElements = data.elements;
-      // v2.6.0 polish: when a workspace exceeds the canvas cap the
-      // response carries total_in_scope > shown_node_count + a
-      // truncated flag. The banner appears just above the canvas
-      // so the user knows to drill into a module for the full
-      // ego-network.
-      this.truncated = !!data.truncated;
-      this.totalInScope = data.total_in_scope || 0;
-      this.shownNodeCount = data.shown_node_count || 0;
-      // v2.6.0 polish: the unbounded module list for the file tree
-      // (independent of the canvas cap). The tree is the navigation
-      // surface -- ever module in the workspace must show up here.
+      this.rawElements = data.elements || [];
+      // tree_modules is the full module list (server-side, no cap);
+      // the canvas now also shows everything so they agree.
       this.treeModules = Array.isArray(data.tree_modules) ? data.tree_modules : [];
-      this.renderCanvas();
+
+      this._buildGraphModel();
+      await this.renderCanvas();
       this.buildTree();
       this.buildTypeFilters();
-
-      // v2.6.1: edges visibility is now baked into renderCanvas
-      // (canvasEls excludes edges when !edgesVisible), so there's
-      // nothing to do for the persisted edge state here. Labels
-      // still ride on a CSS class because they're per-node-style,
-      // not whether-to-paint-the-element-at-all.
-      if (this.cy && !this.labelsVisible) {
-        this.cy.batch(() => this.cy.nodes().addClass('labels-off'));
-      }
-      // Restored filter chips also need to feed into the actual
-      // node hide/show -- applyFilters handles it but is otherwise
-      // only triggered by user interaction.
       this.applyFilters();
 
-      // If we came in with ?node=, pre-select it. The camera pan +
-      // zoom-up live inside selectFromCanvas now (v2.2.2), so this
-      // path no longer needs its own cy.animate call.
-      if (this.contextNodeId && this.cy) {
-        const target = this.cy.getElementById(this.contextNodeId);
-        if (target && target.length) {
-          this.selectFromCanvas(target);
-        }
+      // Deep-link: ?node=<id> selects that node WITHIN the full graph
+      // (camera fly + ring), never an ego swap.
+      if (this.contextNodeId && this._idIndex[this.contextNodeId] !== undefined) {
+        this.selectByIndex(this._idIndex[this.contextNodeId]);
       }
     },
 
-    renderCanvas() {
-      // Compute degree on the fly so node size scales with connectivity.
+    // Split rawElements into Cosmograph point + link records and
+    // precompute the lookups the selection / neighbor paths need.
+    _buildGraphModel() {
       const degree = {};
       for (const e of this.rawElements) {
         if (e.data.source) {
@@ -769,448 +642,311 @@ function nebula() {
           degree[e.data.target] = (degree[e.data.target] || 0) + 1;
         }
       }
-      const allNodes = this.rawElements
-        .filter(e => e.data.id !== undefined)
-        .map(e => ({ data: { ...e.data, deg: degree[e.data.id] || 0 } }));
-      const allEdges = this.rawElements
-        .filter(e => e.data.source !== undefined)
-        .map(e => ({ data: { ...e.data } }));
-
-      // v2.6.1: ONE LAYOUT + DEGREE-CAPPED CANVAS.
-      //
-      // The hard limit we hit: cytoscape's canvas renderer cannot
-      // paint 10 k+ sharp nodes per frame smoothly. Every config
-      // knob is a trade -- low pixelRatio is fast but blurry,
-      // textureOnViewport is sharp but stutters ~2 s on every
-      // pan-past-the-cached-region, no-texture full-res is a flat
-      // 2 s freeze per frame. Three same-family fixes all failed;
-      // that means the architecture (render-everything) is wrong,
-      // not the tuning.
-      //
-      // Resolution: the CANVAS is a visual overview, the FILE TREE
-      // is the navigator. The tree (left panel, fed by the
-      // unbounded tree_modules side-channel) already lists EVERY
-      // module, and that -- not the canvas -- is what v3 chat
-      // references. So we cap the canvas to the GRAPH_CANVAS_CAP
-      // most-connected nodes (degree desc). The user gets a silky,
-      // sharp star-map of the important hubs; the complete corpus
-      // stays one click away in the tree.
-      //
-      // Edges are kept only between surviving nodes, then held in
-      // this._allEdges so toggleEdges() / the selection neighbors
-      // list work without the edges being painted by default.
-      const GRAPH_CANVAS_CAP = 2000;
-      const totalNodeCount = allNodes.length;
-      const capped = totalNodeCount > GRAPH_CANVAS_CAP;
-      this._heavyGraph = capped;
-      this.canvasCapped = capped;
-      this.canvasShown = capped ? GRAPH_CANVAS_CAP : totalNodeCount;
-      this.canvasTotal = totalNodeCount;
-
-      let keptNodes = allNodes;
-      if (capped) {
-        keptNodes = allNodes
-          .slice()
-          .sort((a, b) => (b.data.deg || 0) - (a.data.deg || 0))
-          .slice(0, GRAPH_CANVAS_CAP);
+      const points = [];
+      const idIndex = {};
+      const byId = {};
+      let idx = 0;
+      for (const e of this.rawElements) {
+        if (e.data.id === undefined) continue;
+        const d = e.data;
+        const deg = degree[d.id] || 0;
+        const rec = {
+          id: d.id,
+          name: d.name || d.id,
+          type: d.type || 'unknown',
+          source_path: d.source_path || '',
+          project: d.project || '',
+          color: TYPE_COLORS[d.type] || TYPE_COLOR_FALLBACK,
+          // gentle log-ish size ramp: hubs read bigger without
+          // swamping the field.
+          size: 2 + Math.min(9, Math.sqrt(deg) * 1.4),
+          deg: deg,
+        };
+        idIndex[d.id] = idx;
+        byId[d.id] = rec;
+        points.push(rec);
+        idx += 1;
       }
-      const keptIds = new Set(keptNodes.map(n => n.data.id));
-      // Only edges whose BOTH endpoints survived the cap.
-      this._allEdges = allEdges.filter(
-        e => keptIds.has(e.data.source) && keptIds.has(e.data.target),
-      );
-      this._stashedEdges = this._allEdges;  // legacy alias for select path
+      const linkPairs = [];      // [srcIdx, tgtIdx, ...] for the GPU
+      const adj = {};
+      let linkCount = 0;
+      for (const e of this.rawElements) {
+        if (e.data.source === undefined) continue;
+        const s = e.data.source, t = e.data.target;
+        if (idIndex[s] === undefined || idIndex[t] === undefined) continue;
+        const rel = e.data.relation || 'related';
+        const conf = e.data.confidence ?? 1.0;
+        linkPairs.push(idIndex[s], idIndex[t]);
+        linkCount += 1;
+        (adj[s] = adj[s] || []).push({ id: t, rel, confidence: conf });
+        (adj[t] = adj[t] || []).push({ id: s, rel, confidence: conf });
+      }
 
-      // Edges paint only when the user has them toggled on. Default
-      // for a capped (still ~2 k-node) canvas is off so the first
-      // paint is instant; the toggle adds them back on demand.
-      const wantEdgesOnCanvas = this.edgesVisible && !capped;
-      const canvasEls = wantEdgesOnCanvas
-        ? [...keptNodes, ...this._allEdges]
-        : keptNodes;
+      // --- GPU typed-array buffers (@cosmos.gl/graph) --------------
+      const n = points.length;
+      const positions = new Float32Array(n * 2);
+      const colors = new Float32Array(n * 4);
+      const sizes = new Float32Array(n);
+      // Seed positions in a disc so the force sim relaxes outward
+      // into the organic "nebula" cloud rather than from a point.
+      const R = Math.max(200, Math.sqrt(n) * 22);
+      for (let i = 0; i < n; i++) {
+        const ang = Math.random() * Math.PI * 2;
+        const rad = Math.sqrt(Math.random()) * R;
+        positions[i * 2]     = Math.cos(ang) * rad;
+        positions[i * 2 + 1] = Math.sin(ang) * rad;
+        const rgba = this._hexToRGBA(points[i].color);
+        colors[i * 4]     = rgba[0];
+        colors[i * 4 + 1] = rgba[1];
+        colors[i * 4 + 2] = rgba[2];
+        colors[i * 4 + 3] = rgba[3];
+        sizes[i] = points[i].size;
+      }
 
-      if (this.cy) this.cy.destroy();
-      this.cy = cytoscape({
-        container: document.getElementById('cy-nebula'),
-        elements: canvasEls,
-        minZoom: 0.12,
-        maxZoom: 4,
-        // Capped to <=2 k nodes now -- texture capture is cheap and
-        // makes pan/zoom buttery, so keep it on everywhere.
-        textureOnViewport: true,
-        hideEdgesOnViewport: false,
-        hideLabelsOnViewport: true,
-        // No pixelRatio override -- cytoscape defaults to
-        // window.devicePixelRatio so HiDPI screens stay crisp.
-        wheelSensitivity: 0.18,  // slow, silky scroll-zoom
-        motionBlur: true,
-        motionBlurOpacity: 0.18,
-        userPanningEnabled: true,
-        autounselectify: false,
-        style: [
-          // Nodes -----------------------------------------------------
-          // Nebula: ALL nodes are circles. Color, glow + size carry
-          // the type info; the user gets a calmer, more readable
-          // canvas than a zoo of shapes.
-          { selector: 'node', style: {
-              shape: 'ellipse',
-              label: 'data(label)',
-              'background-color': (n) => TYPE_COLORS[n.data('type')] || TYPE_COLOR_FALLBACK,
-              'background-opacity': 1.0,
-              // Inner glow / halo: ``underlay`` paints BEHIND the node
-              // so the color bleeds outward like a star -- the
-              // "nebula" feel the design asked for.
-              // v2.6.1: the canvas is now capped at <=2 000 nodes
-              // (the tree carries the full corpus) so we can afford
-              // the underlay glow on every node again -- it's the
-              // signature "nebula" look and 2 k composites paint
-              // well within frame budget.
-              'underlay-color': (n) => TYPE_COLORS[n.data('type')] || TYPE_COLOR_FALLBACK,
-              'underlay-opacity': 0.32,
-              'underlay-padding': 8,
-              'underlay-shape': 'ellipse',
-              'border-width': 1,
-              'border-color': '#0a0d14',
-              color: '#e6edf3',
-              'font-size': '11px',
-              'font-weight': 500,
-              'font-family': 'ui-monospace, Menlo, Consolas, monospace',
-              'text-valign': 'bottom',
-              'text-margin-y': 7,
-              'text-outline-color': '#0a0d14',
-              'text-outline-width': 3,
-              'text-max-width': '140px',
-              'text-opacity': 0,  // hidden by default; revealed in higher-zoom selector below
-              'overlay-padding': 8,
-              width:  (n) => 14 + Math.min(40, (n.data('deg') || 0) * 1.6),
-              height: (n) => 14 + Math.min(40, (n.data('deg') || 0) * 1.6),
-              // PERFORMANCE: only transition properties that change on
-              // the ONE-or-few selected nodes (border-width + underlay-
-              // padding for the "lifted" effect). ``opacity`` and
-              // ``underlay-opacity`` are deliberately NOT transitioned --
-              // they're the properties .dim toggles across the entire
-              // graph (471+ nodes), and 220ms of simultaneous opacity
-              // tweens with motion-blur on is the source of the lag the
-              // user feels when deselecting.
-              'transition-property': 'border-width, underlay-padding',
-              'transition-duration': '220ms',
-          }},
-          // Labels appear when the user zooms in -- keeps the
-          // overview clean.
-          { selector: 'node:visible', style: { 'text-opacity': 1 }},
-          { selector: 'node.hl', style: {
-              'border-width': 2,
-              'border-color': '#7ee7e0',
-              'underlay-color': '#7ee7e0',
-              'underlay-opacity': 0.6,
-              'underlay-padding': 14,
-              'z-index': 10,
-          }},
-          { selector: 'node.dim',   style: { opacity: 0.12, 'underlay-opacity': 0.04 }},
-          { selector: 'node.hide',  style: { display: 'none' }},
-          // v2.2 phase 4: chunked initial paint. Right after the
-          // fcose layout, every node gets ``.preload-hidden`` so the
-          // canvas reads as empty. ``_renderCanvasChunked`` then
-          // removes the class in batches of CHUNK_SIZE by descending
-          // degree, producing the "densest cluster appears first,
-          // rest fade in waves" effect. ``opacity: 0`` is scoped to
-          // this class only -- the base node selector still has the
-          // v2.1.2 transition-property list (border-width +
-          // underlay-padding only) so dim/un-dim later doesn't
-          // re-introduce the fanout lag we fixed there.
-          { selector: 'node.preload-hidden', style: { opacity: 0, 'underlay-opacity': 0 }},
-
-          // Edges. Brighter base, gradient-ready, with arrow caps on
-          // directional relations.
-          { selector: 'edge', style: {
-              width: (e) => 1.0 + Math.min(2.8, (e.data('confidence') || 1.0) * 2.0),
-              'line-color': (e) => REL_COLORS[e.data('relation')] || '#88a',
-              'line-opacity': (e) => {
-                const c = e.data('confidence') ?? 1.0;
-                return 0.45 + c * 0.4;
-              },
-              'curve-style': 'straight',
-              'target-arrow-color': (e) => REL_COLORS[e.data('relation')] || '#88a',
-              'target-arrow-shape': (e) =>
-                ['calls', 'routes_to', 'imports', 'method_of', 'references_function',
-                 'motivated_by', 'closed_by'].includes(e.data('relation')) ? 'triangle-backcurve' : 'none',
-              'arrow-scale': 0.9,
-              'transition-property': 'opacity, width, line-color',
-              'transition-duration': '200ms',
-          }},
-          // Lower-confidence edges -> dashed / dotted.
-          { selector: 'edge[confidence < 0.9]', style: { 'line-style': 'dashed' }},
-          { selector: 'edge[confidence < 0.7]', style: { 'line-style': 'dotted', 'line-opacity': 0.45 }},
-          { selector: 'edge.dim',  style: { 'line-opacity': 0.03 }},
-          { selector: 'edge.hl',   style: {
-              'line-opacity': 1.0,
-              width: 2.6,
-              // marching-ants effect on highlighted edges so the eye
-              // follows the direction of the call / route / import.
-              'line-style': 'dashed',
-              'line-dash-pattern': [6, 4],
-              'line-dash-offset': 0,
-          }},
-          { selector: 'edge.hide', style: { display: 'none' }},
-          // v2.2.3: edges hidden during the chunked initial paint.
-          // Pre-v2.2.3 the user saw a frame of "edges only, no
-          // nodes" because edges between two .preload-hidden
-          // (opacity:0) nodes still drew the connecting line.
-          // Hiding edges via display:none until the node reveal
-          // completes makes the cold paint read as "nodes first,
-          // then connections".
-          { selector: 'edge.preload-hidden', style: { display: 'none' }},
-          // v2.2.3: user-toggleable edge + label visibility. Both
-          // are bound to the new filter-bar buttons (edgesVisible /
-          // labelsVisible) via Alpine; the toggles add/remove these
-          // classes in a cy.batch so the canvas redraws once.
-          { selector: 'edge.edges-off', style: { display: 'none' }},
-          { selector: 'node.labels-off', style: { 'text-opacity': 0 }},
-        ],
-        // v2.6.1: ONE layout, polished. Concentric arranges nodes in
-        // rings; we bucket the degree on a log scale so hubs land
-        // on the inner rings and leaves spread to the outer ones.
-        // The result reads as a star map: the most-connected ideas
-        // sit in the bright center, peripheral references orbit
-        // outside. Way more legible than the v2.6.0 "every distinct
-        // degree gets its own ring" config (which produced hundreds
-        // of paper-thin rings indistinguishable from each other).
-        layout: {
-          name: 'concentric',
-          concentric: (n) => {
-            const d = n.data('deg') || 0;
-            if (d >= 51) return 5;   // mega-hubs
-            if (d >= 16) return 4;   // major hubs
-            if (d >= 5)  return 3;   // small hubs
-            if (d >= 2)  return 2;   // connected
-            if (d >= 1)  return 1;   // pendants
-            return 0;                // isolates (outer ring)
-          },
-          levelWidth: () => 1,
-          // v2.6.1 polish: wider spacing so the canvas breathes.
-          // 4 (the v2.6.0 value) crammed nodes into a dense annulus
-          // that read as a blob; 12 separates them cleanly.
-          minNodeSpacing: 12,
-          animate: false,
-          fit: true,
-          padding: 40,
-        },
-      });
-
-      // v2.6.1: layout is always concentric. The toolbar switcher
-      // is gone; this line keeps the persisted-state read happy.
-      this.currentLayout = 'concentric';
-
-      this.cy.on('tap', 'node', (evt) => {
-        // Suppress the canvas-tap that fires alongside a node-tap on
-        // some platforms (which would deselect immediately).
-        evt.stopPropagation && evt.stopPropagation();
-        this.selectFromCanvas(evt.target);
-      });
-      this.cy.on('tap', (evt) => {
-        // Empty-space tap means the target is the Cytoscape CORE, not
-        // a node/edge collection. The intuitive check ``evt.target ===
-        // this.cy`` fails in minified builds because the core is
-        // wrapped in an obfuscated class (e.g. ``Os``) that isn't
-        // referentially equal to ``cy``. Capability-test instead:
-        // only collections expose ``isNode``; the core does not. So
-        // ``typeof target.isNode !== 'function'`` reliably means
-        // "the tap landed on empty canvas, deselect".
-        const t = evt.target;
-        if (!t || typeof t.isNode !== 'function') {
-          this.deselect();
-        }
-      });
-      // Escape key + body click outside the canvas also deselect.
-      // The canvas-only tap handler can't see clicks outside its
-      // container, so a global keydown is the reliable second path.
-      window.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape' && this.selected) {
-          e.preventDefault();
-          this.deselect();
-        }
-      });
-
-      // Silky hover: lift the underlay padding briefly when the
-      // cursor enters a node so it "blooms" without committing the
-      // selection. v2.6.1: the canvas is capped at <=2 000 nodes so
-      // the per-event restyle is affordable on every workspace --
-      // no more heavy-graph special case.
-      this.cy.on('mouseover', 'node', (evt) => {
-        const n = evt.target;
-        if (!n.hasClass('hl')) {
-          n.style('underlay-padding', 12);
-          n.style('underlay-opacity', 0.55);
-        }
-        document.body.style.cursor = 'pointer';
-      });
-      this.cy.on('mouseout', 'node', (evt) => {
-        const n = evt.target;
-        if (!n.hasClass('hl')) {
-          n.removeStyle('underlay-padding');
-          n.removeStyle('underlay-opacity');
-        }
-        document.body.style.cursor = '';
-      });
-
-      // v2.2.4: keep the pulse-ring overlay aligned with the
-      // selected node through every viewport change.
-      //   - 'pan zoom' fires while the user drags / scroll-zooms
-      //   - 'position' fires when a node's position changes
-      //     (e.g. fcose layout is still settling, or user drags
-      //     the selected node itself)
-      //   - 'render' is the catch-all that fires on every redraw,
-      //     useful for catching cytoscape-internal animations the
-      //     other events miss (camera-pan from selectFromCanvas).
-      this.cy.on('pan zoom render', () => {
-        if (this._pulseNode) this._updatePulseAnchor();
-      });
-      this.cy.on('position', 'node', (evt) => {
-        if (this._pulseNode && evt.target.id() === this._pulseNode.id()) {
-          this._updatePulseAnchor();
-        }
-      });
-
-      // Detect edges by ``source`` presence -- Cytoscape auto-assigns
-      // ``id`` to edges after init, so filtering by ``id !== undefined``
-      // double-counts.
-      const edgeCount = this.rawElements.filter(e => e.data.source !== undefined).length;
-      const nodeCount = this.rawElements.length - edgeCount;
-      this.stats = nodeCount + ' nodes / ' + edgeCount + ' edges';
-
-      // SNAPSHOT the initial fcose positions so the "force" button
-      // always returns to the same arrangement the user first saw.
-      // Without this, subsequent "force" clicks after switching to
-      // rings/tree/grid produce a different layout because fcose
-      // (with randomize: false) relaxes from the current positions
-      // -- not the original random seed.
-      this._forceSnapshot = {};
-      this.cy.nodes().forEach((n) => {
-        const p = n.position();
-        this._forceSnapshot[n.id()] = { x: p.x, y: p.y };
-      });
-
-      // v2.2 phase 4: chunked initial reveal. After the snapshot is
-      // captured (so positions are final), hide every node, then
-      // un-hide in batches of CHUNK_SIZE by descending degree. The
-      // user sees the densest cluster of the graph appear first,
-      // then the rest of the components fade in waves.
-      // v2.6.1: the canvas is capped at <=2 000 nodes so the reveal
-      // is a bounded ~3 s wave (40 chunks * 80 ms) -- a pleasant
-      // "star map igniting" effect, not the 16 s churn the old
-      // 10 k-node path produced. Runs for every workspace now.
-      this._renderCanvasChunked();
+      this._points = points;
+      this._idIndex = idIndex;
+      this._pointById = byId;
+      this._adj = adj;
+      this._positions = positions;
+      this._colors = colors;
+      this._sizes = sizes;
+      this._linkArray = new Float32Array(linkPairs);
+      this.canvasTotal = n;
+      this.edgeTotal = linkCount;
+      this.stats = n + ' nodes / ' + linkCount + ' links';
     },
 
-    // CHUNK_SIZE = 50 nodes per batch. Tuned for ~480-node graphs:
-    // gives ~9 chunks at 80ms cadence = ~720ms full reveal, which
-    // reads as "smoothly fast" without batches blurring together.
-    // (See design doc § 4.)
-    _renderCanvasChunked() {
-      if (!this.cy) return;
-      const reduced = typeof window.mnemoPrefersReducedMotion === 'function'
-        && window.mnemoPrefersReducedMotion();
-      if (reduced) {
-        // Honor the a11y floor -- snap everything to visible at once.
+    // '#rrggbb' (or shorthand) -> [r, g, b, a] in 0..1 for the GPU.
+    _hexToRGBA(hex) {
+      let h = (hex || '').replace('#', '').trim();
+      if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+      const r = parseInt(h.slice(0, 2), 16) / 255;
+      const g = parseInt(h.slice(2, 4), 16) / 255;
+      const b = parseInt(h.slice(4, 6), 16) / 255;
+      if (Number.isNaN(r) || Number.isNaN(g) || Number.isNaN(b)) {
+        return [0.49, 0.91, 0.88, 1];  // TYPE_COLOR_FALLBACK-ish
+      }
+      return [r, g, b, 1];
+    },
+
+    async renderCanvas() {
+      const { Graph } = window.__CosmographAPI;
+      const container = document.getElementById('cy-nebula');
+      if (!container) return;
+
+      if (this.cg) {
+        try { this.cg.destroy && this.cg.destroy(); } catch (_) {}
+        this.cg = null;
+      }
+      container.innerHTML = '';
+
+      if (this._points.length === 0) {
+        this.booting = false;
         return;
       }
 
-      const CHUNK = 50;
-      const REVEAL_INTERVAL_MS = 80;
-      const FADE_IN_DURATION_MS = 260;
+      this.booting = true;
+      this.bootMsg = 'forming ' + this._points.length.toLocaleString() + ' nodes';
 
-      // v2.2.3: hide EDGES too while we paint nodes. Pre-v2.2.3
-      // the user saw a frame of "all edges drawn between empty
-      // space" because edges between two ``.preload-hidden``
-      // (opacity:0) nodes still drew their connecting lines.
-      // Edges only reveal once every node chunk has landed, so
-      // the cold paint reads as "nodes first, then connections".
-      this.cy.batch(() => {
-        this.cy.nodes().addClass('preload-hidden');
-        this.cy.edges().addClass('preload-hidden');
-      });
+      const config = {
+        // -- Nebula aesthetic: transparent so the .nebula-shell
+        //    starfield CSS shows through; faint teal link web;
+        //    glowing points greyed (not hidden) on focus.
+        backgroundColor: [0, 0, 0, 0],
+        spaceSize: 8192,
+        pointGreyoutOpacity: 0.12,
+        pointGreyoutColor: '#1b2230',
+        pointOpacity: 0.92,
+        pointSizeScale: 1.0,
+        scalePointsOnZoom: true,
+        renderLinks: this.edgesVisible,
+        linkDefaultColor: 'rgba(126, 231, 224, 0.11)',
+        linkOpacity: 0.5,
+        linkWidth: 0.45,
+        renderHoveredPointRing: true,
+        hoveredPointRingColor: '#7ee7e0',
+        focusedPointRingColor: '#7ee7e0',
+        // -- Organic force simulation: the "nebula" motion. Hubs
+        //    repel into separated clusters; springs hold families
+        //    together; gentle gravity + centering stop infinite
+        //    drift. Decay lets it cool to a calm settle.
+        simulationGravity: 0.18,
+        simulationCenter: 0.5,
+        simulationRepulsion: 1.0,
+        simulationRepulsionTheta: 1.15,
+        simulationLinkSpring: 0.6,
+        simulationLinkDistance: 14,
+        simulationFriction: 0.86,
+        simulationDecay: 3000,
+        onClick: (index) => {
+          if (index === undefined || index === null) this.deselect();
+          else this.selectByIndex(index);
+        },
+        onSimulationEnd: () => {
+          this.booting = false;
+          try { this.cg.fitView(700); } catch (_) {}
+        },
+      };
 
-      // Sort by degree DESC so the cluster center appears first.
-      const sorted = this.cy.nodes()
-        .toArray()
-        .sort((a, b) => b.degree() - a.degree());
-      const ids = sorted.map(n => n.id());
-      const chunkCount = Math.ceil(ids.length / CHUNK);
-
-      // Schedule each chunk on a setTimeout cadence. Each chunk does
-      // one cy.batch() so cytoscape only re-renders once per chunk.
-      for (let i = 0; i < ids.length; i += CHUNK) {
-        const slice = ids.slice(i, i + CHUNK);
-        const chunkIdx = i / CHUNK;
-        const isLastChunk = chunkIdx === chunkCount - 1;
-        setTimeout(() => {
-          if (!this.cy) return; // panel disposed mid-reveal
-          this.cy.batch(() => {
-            for (const id of slice) {
-              const node = this.cy.getElementById(id);
-              if (node && node.length) {
-                node.removeClass('preload-hidden').addClass('fade-in');
-              }
-            }
-          });
-          // After the fade-in transition is "done", strip the class
-          // so subsequent .dim/.hl class changes can't re-trigger an
-          // opacity transition we don't want (the v2.1.2 lag fix).
-          setTimeout(() => {
-            if (!this.cy) return;
-            this.cy.batch(() => {
-              for (const id of slice) {
-                const node = this.cy.getElementById(id);
-                if (node && node.length) node.removeClass('fade-in');
-              }
-            });
-          }, FADE_IN_DURATION_MS);
-
-          // v2.2.3: once the FINAL node chunk has landed, fade in
-          // every edge. Done in one batch with the .fade-in class
-          // so the transition feels coherent (a wave of edges
-          // appears over ~260ms after the last node wave).
-          if (isLastChunk) {
-            setTimeout(() => {
-              if (!this.cy) return;
-              this.cy.batch(() => {
-                this.cy.edges().removeClass('preload-hidden').addClass('fade-in');
-              });
-              setTimeout(() => {
-                if (!this.cy) return;
-                this.cy.batch(() => this.cy.edges().removeClass('fade-in'));
-              }, FADE_IN_DURATION_MS);
-            }, REVEAL_INTERVAL_MS);
-          }
-        }, chunkIdx * REVEAL_INTERVAL_MS);
+      try {
+        // cosmos.gl v3: the constructor IGNORES a config argument
+        // (verified -- passing it leaves every sim param at default,
+        // points collapse coincident at space-center where repulsion
+        // has no direction and never separate). Config MUST go
+        // through setConfig() after construction.
+        this.cg = new Graph(container);
+        this.cg.setConfig(config);
+        this.cg.setPointPositions(this._positions);
+        this.cg.setPointColors(this._colors);
+        this.cg.setPointSizes(this._sizes);
+        if (this._linkArray.length) this.cg.setLinks(this._linkArray);
+        this.cg.render();
+        if (this.cg.start) this.cg.start();
+      } catch (e) {
+        this.booting = false;
+        window.toast && window.toast('Graph render failed: ' + e, 'error');
+        return;
       }
+
+      // Safety net: if onSimulationEnd never fires (a perpetually
+      // jiggling component) drop the shimmer + fit anyway so the
+      // canvas is never permanently veiled.
+      setTimeout(() => {
+        if (this.booting) {
+          this.booting = false;
+          try { this.cg.fitView(700); } catch (_) {}
+        }
+      }, 8000);
     },
 
+    // --- Selection: highlight (NOT hide) + camera fly --------------
+    selectByIndex(index) {
+      if (!this.cg || index === undefined || index === null) return;
+      const rec = this._points[index];
+      if (!rec) return;
+
+      // cosmos.gl greys unrelated points by OPACITY (pointGreyout
+      // Opacity), never display:none -- the nebula stays whole, the
+      // user's "don't make others disappear" requirement. Select the
+      // node + its 1-hop neighbourhood so the local web stays bright.
+      try {
+        const adjIdx = (this.cg.getAdjacentIndices &&
+                        this.cg.getAdjacentIndices(index)) || [];
+        const focusSet = [index, ...adjIdx];
+        if (this.cg.selectPointsByIndices) {
+          this.cg.selectPointsByIndices(focusSet);
+        } else if (this.cg.selectPointByIndex) {
+          this.cg.selectPointByIndex(index);
+        }
+        if (this.cg.setFocusedPointByIndex) this.cg.setFocusedPointByIndex(index);
+        if (this.cg.zoomToPointByIndex) this.cg.zoomToPointByIndex(index, 700, 5, false);
+      } catch (_) { /* engine mid-rebuild -- selection is best-effort */ }
+
+      this.selected = { ...rec };
+      // Neighbors: full real adjacency from the precomputed map
+      // (every connection, dedup by best confidence).
+      const seen = {};
+      for (const a of (this._adj[rec.id] || [])) {
+        const od = this._pointById[a.id];
+        if (!od) continue;
+        if (!seen[a.id] || a.confidence > seen[a.id].confidence) {
+          seen[a.id] = {
+            id: a.id, name: od.name, type: od.type,
+            rel: a.rel, confidence: a.confidence,
+          };
+        }
+      }
+      this.neighbors = Object.values(seen);
+
+      // Hydrate body/description from /v1/nodes/<id> a frame later
+      // so the click feels instant.
+      const wantId = rec.id;
+      requestAnimationFrame(() => {
+        fetch('/v1/nodes/' + wantId)
+          .then((r) => (r.ok ? r.json() : null))
+          .then((full) => {
+            if (full && this.selected && this.selected.id === wantId) {
+              this.selected = { ...this.selected, ...full };
+            }
+          })
+          .catch(() => {});
+      });
+    },
+
+    // File-tree + neighbor-list entry point. Every node is always
+    // in the full graph now, so this NEVER reloads / ego-fetches /
+    // collapses the tree -- it just flies to the node.
+    focusNode(id) {
+      const idx = this._idIndex[id];
+      if (idx === undefined) {
+        window.toast && window.toast('Node not in current scope', 'info');
+        return;
+      }
+      this.selectByIndex(idx);
+    },
+
+    deselect() {
+      if (this.cg) {
+        try {
+          if (this.cg.unselectPoints) this.cg.unselectPoints();
+          if (this.cg.setFocusedPointByIndex) this.cg.setFocusedPointByIndex(undefined);
+          if (this.cg.fitView) this.cg.fitView(500);
+        } catch (_) {}
+      }
+      this.selected = null;
+      this.neighbors = [];
+      // Re-assert any active filter highlight after a plain deselect.
+      this.applyFilters();
+    },
+
+    // --- Filters: type chips + text + min-confidence --------------
+    // Implemented as a Cosmograph point selection so non-matching
+    // points GREY OUT (still visible -- consistent with the "don't
+    // disappear" rule) without re-simulating the layout. An empty
+    // filter clears the selection so the full bright cloud returns.
+    applyFilters() {
+      if (!this.cg) return;
+      const text = this.filterText.trim().toLowerCase();
+      const anyTypeOff = this.nodeTypes.some(t => this.typeFilters[t] === false);
+      const filterActive = !!text || anyTypeOff;
+      if (!filterActive) {
+        // Nothing to filter -- but don't stomp a click-selection.
+        if (!this.selected) {
+          try { this.cg.unselectPoints && this.cg.unselectPoints(); } catch (_) {}
+        }
+        return;
+      }
+      const matched = [];
+      for (let i = 0; i < this._points.length; i++) {
+        const p = this._points[i];
+        const okType = this.typeFilters[p.type] !== false;
+        const okText = !text ||
+          (p.name || '').toLowerCase().includes(text) ||
+          (p.type || '').toLowerCase().includes(text);
+        if (okType && okText) matched.push(i);
+      }
+      try {
+        if (matched.length && this.cg.selectPointsByIndices) {
+          this.cg.selectPointsByIndices(matched);
+        } else if (this.cg.unselectPoints) {
+          this.cg.unselectPoints();
+        }
+      } catch (_) {}
+    },
+
+    // --- File tree (unchanged structure; always full now) ---------
     buildTree() {
-      // v2.6.0 polish: tree builds from the UNBOUNDED ``treeModules``
-      // side-channel, not from ``rawElements``. The canvas may cap
-      // at 3 000 + drop isolates, but the tree must surface EVERY
-      // in-scope module so navigation isn't hidden. Clicking a tree
-      // entry whose id is missing from the canvas triggers an ego-
-      // network fetch via ?node=.
-      //
-      // ``declCounts`` still comes from rawElements -- it counts the
-      // function/class/method declarations whose module is in the
-      // rendered set. Missing declarations just leave the count at 0
-      // until the user drills into the ego-network.
       const renderedNodes = this.rawElements.filter(
         e => e.data.source === undefined && e.data.source_path,
       );
       const declCounts = {};
       for (const n of renderedNodes) {
         if (n.data.type !== 'code_module' && n.data.source_path) {
-          // Strip the line-range suffix to find the owning module path.
           const filePath = n.data.source_path.replace(/:\d+-\d+(#.+)?$/, '');
           declCounts[filePath] = (declCounts[filePath] || 0) + 1;
         }
       }
       const root = { children: {}, isDir: true };
-      // Modules from the unbounded tree side-channel.
       const moduleList = (this.treeModules && this.treeModules.length)
         ? this.treeModules
         : renderedNodes.filter(n => n.data.type === 'code_module').map(n => ({
@@ -1237,25 +973,10 @@ function nebula() {
           childCount: declCounts[path] || 0,
         };
       }
-      // Collapse single-child chains so deep paths render compactly:
-      // src -> mnemo -> ui -> templates becomes src/mnemo/ui/templates.
       this._collapseTree(root);
-      // Also: build a `.leaves` accessor on each directory level so
-      // the template can iterate its files in one pass.
       this._annotateLeaves(root);
       this.treeRoot = root;
-      // v2.6.0 polish: flatten to indented rows so arbitrary-depth
-      // trees render in a single x-for loop. Previous nested-template
-      // approach capped at 3 levels deep -- aibox-prod-all's
-      // backend/services/asset-service/src/... path was invisible.
       this.treeRows = this._flattenTreeRows(root);
-      // v2.6.0 polish + perf: auto-expand the top 3 levels of
-      // directories so the user sees projects + their top-level
-      // packages on first paint, without forcing 3 000+ rows into
-      // the initial DOM (which lagged interaction for ~2 seconds).
-      // Power users click to drill deeper; the tree side-channel
-      // carries every module so a deeper click resolves locally
-      // without an extra fetch.
       const auto = {};
       for (const row of this.treeRows) {
         if (row.isDir && row.depth < 3) auto[row.path] = true;
@@ -1265,17 +986,10 @@ function nebula() {
     },
 
     _flattenTreeRows(root) {
-      // Walk the tree depth-first, emitting flat rows. Each row
-      // carries an ``ancestors`` array of every parent directory's
-      // ``path`` so visibleTreeRows can check "every ancestor must be
-      // expanded" without splitting strings -- _collapseTree may have
-      // produced names like "D:/Repository/aibox-prod-all/.tmp" that
-      // contain the separator character and break naive split logic.
       const rows = [];
       const walk = (node, depth, parentPath, ancestors) => {
         if (!node.children) return;
         const entries = Object.entries(node.children);
-        // Sort: directories first, then files; both alphabetical.
         entries.sort((a, b) => {
           const [an, av] = a;
           const [bn, bv] = b;
@@ -1315,23 +1029,12 @@ function nebula() {
       return total;
     },
 
-    // v2.6.0 perf: ``visibleTreeRows`` is a plain memoized field,
-    // not a getter. Alpine re-evaluates expressions in x-for / x-if
-    // on every reactivity tick (selection change, hover, etc.). With
-    // 3 000+ tree rows the getter was running the full filter loop
-    // hundreds of times per second -- the single biggest source of
-    // ``laggy`` interactions on the aibox + edge workspace. The
-    // computed snapshot is updated only when the source changes
-    // (buildTree, toggleTreeDir).
     _computeVisibleTreeRows() {
       const out = [];
       for (const row of this.treeRows) {
         let allOpen = true;
         for (const ancestor of row.ancestors) {
-          if (!this.expandedPaths[ancestor]) {
-            allOpen = false;
-            break;
-          }
+          if (!this.expandedPaths[ancestor]) { allOpen = false; break; }
         }
         if (allOpen) out.push(row);
       }
@@ -1375,10 +1078,6 @@ function nebula() {
         if (e.data.source === undefined && e.data.type) types.add(e.data.type);
       }
       this.nodeTypes = Array.from(types).sort();
-      // v2.2.4: restore the user's per-type on/off preferences if
-      // they were persisted in a previous session. Anything NOT in
-      // the persisted set falls back to default "on" (so new types
-      // added later are visible by default).
       const restored = this._persistedFilters || {};
       for (const t of this.nodeTypes) {
         if (this.typeFilters[t] === undefined) {
@@ -1387,270 +1086,63 @@ function nebula() {
       }
     },
 
-    applyFilters() {
-      if (!this.cy) return;
-      const text = this.filterText.trim().toLowerCase();
-      const minConf = this.minConfidence / 100;
-      this.cy.batch(() => {
-        this.cy.nodes().forEach(n => {
-          const t = n.data('type');
-          const matchesType = this.typeFilters[t] !== false;
-          const matchesText = !text ||
-            (n.data('name') || '').toLowerCase().includes(text) ||
-            (t || '').toLowerCase().includes(text);
-          if (matchesType && matchesText) n.removeClass('hide');
-          else n.addClass('hide');
-        });
-        this.cy.edges().forEach(e => {
-          const conf = e.data('confidence') ?? 1.0;
-          const endpointsVisible =
-            !e.source().hasClass('hide') && !e.target().hasClass('hide');
-          if (conf >= minConf && endpointsVisible) e.removeClass('hide');
-          else e.addClass('hide');
-        });
-      });
-    },
-
-    selectFromCanvas(node) {
-      const d = { ...node.data() };
-      this.selected = d;
-      this.neighbors = [];
-
-      // Stop any prior pulse loop before we touch the canvas.
-      this._stopPulse();
-
-      // v2.2.2: ALWAYS frame the selected node. Pre-v2.2.2 this
-      // only happened on the file-tree click path (via focusNode);
-      // direct canvas taps got no camera motion, so the selection
-      // had no visible feedback beyond the side-panel update -- the
-      // 6px ``_startPulse`` bloom on the node itself was too subtle
-      // to see at typical zoom + the node could be in a corner.
-      // Now every entry into selectFromCanvas frames the node:
-      //   - pan: center it (always)
-      //   - zoom: bump UP to 1.4 if currently lower, otherwise keep
-      //           the user's current zoom (don't yank them OUT when
-      //           they've zoomed in already).
-      // Duration 350ms matches the file-tree path so the feel is
-      // identical no matter how the click arrived.
-      const currentZoom = this.cy.zoom();
-      const targetZoom = Math.max(1.4, currentZoom);
-      this.cy.animate(
-        { center: { eles: node }, zoom: targetZoom },
-        { duration: 350, easing: 'ease-out' },
-      );
-
-      // v2.6.1 perf: split fast and slow paths.
-      //
-      // HEAVY (>3 k nodes): the canvas holds nodes only and a hub
-      // can have 971 connections. The previous "highlight the whole
-      // 1-hop neighborhood" approach blew up two ways at this scale:
-      // (1) cy.elements().removeClass('hl dim') walks all 10 k+
-      // elements every select, (2) cy.add(971 edges) per hub is a
-      // full restyle pass. Both produced 14 s hangs on selection.
-      // Instead: just hl the ONE selected node (targeted class swap
-      // via _lastHl) and build the neighbors list from the edge
-      // stash. Visual signal is the single bright glow + the side-
-      // panel list -- canvas edges stay out.
-      //
-      // LIGHT (<=3 k): keep the v2.2 closed-neighborhood + dim
-      // behavior -- it's cheap and the prettier focus effect.
-      if (this._heavyGraph) {
-        if (this._lastHl) this._lastHl.removeClass('hl');
-        node.addClass('hl');
-        this._lastHl = node;
-
-        const seen = {};
-        for (const e of this._stashedEdges) {
-          const eSrc = e.data.source;
-          const eTgt = e.data.target;
-          const otherId = eSrc === d.id ? eTgt : eTgt === d.id ? eSrc : null;
-          if (!otherId) continue;
-          const other = this.cy.getElementById(otherId);
-          if (!other.length) continue;
-          const od = other.data();
-          const rel = e.data.relation;
-          const conf = e.data.confidence ?? 1.0;
-          if (!seen[otherId] || conf > seen[otherId].confidence) {
-            seen[otherId] = {
-              id: otherId, name: od.name, type: od.type, rel, confidence: conf,
-            };
-          }
-        }
-        this.neighbors = Object.values(seen);
-      } else {
-        const neighborhood = node.closedNeighborhood();
-        this.cy.batch(() => {
-          this.cy.elements().removeClass('hl dim');
-          this.cy.elements().not(neighborhood).addClass('dim');
-          neighborhood.addClass('hl');
-        });
-      }
-
-      // Hydrate body from /v1/nodes/<id> -- defer the fetch a frame
-      // so the click feels instant. The DOM updates from this.selected
-      // happen on the next Alpine tick regardless.
-      requestAnimationFrame(() => {
-        fetch('/v1/nodes/' + d.id)
-          .then((r) => (r.ok ? r.json() : null))
-          .then((full) => {
-            if (full && this.selected && this.selected.id === d.id) {
-              this.selected = { ...this.selected, ...full };
-            }
-          })
-          .catch(() => {});
-      });
-
-      // Build neighbors list (deduped by node id, keep best relation).
-      // v2.6.1 perf: heavy mode already built this.neighbors inline
-      // from the stash above; skip the cy.connectedEdges path (which
-      // would walk the absent edges anyway).
-      if (!this._heavyGraph) {
-        const seen = {};
-        node.connectedEdges().forEach((e) => {
-          const other = e.source().id() === d.id ? e.target() : e.source();
-          const od = other.data();
-          const rel = e.data('relation');
-          const conf = e.data('confidence') ?? 1.0;
-          if (!seen[od.id] || conf > seen[od.id].confidence) {
-            seen[od.id] = { id: od.id, name: od.name, type: od.type, rel, confidence: conf };
-          }
-        });
-        this.neighbors = Object.values(seen);
-      }
-
-      // PERFORMANCE: replace the old 60ms-tick setInterval pulse
-      // (which re-styled the selected node + every highlighted edge
-      // on every tick) with Cytoscape's own animation scheduler.
-      // It uses requestAnimationFrame and only animates the ONE
-      // selected node, not its edges.
-      this._startPulse(node);
-    },
-
-    // v2.2.4: DOM-overlay pulse. The previous cy.animate-based
-    // pulse went through cytoscape's internal animation queue and
-    // never reliably surfaced on direct canvas taps (3 fix
-    // attempts later). The new pulse is a CSS @keyframes
-    // animation on a div positioned above the canvas at the
-    // selected node's rendered center -- decoupled from
-    // cytoscape's animation state entirely.
-    //
-    // ``_startPulse`` now just remembers which node is "active"
-    // and triggers a position update. The CSS keyframe in
-    // app.css does the rest. ``_updatePulseAnchor`` is wired to
-    // cy.on('pan zoom render') and the node's position event so
-    // the overlay tracks the node through any viewport change.
-    _startPulse(node) {
-      this._pulseNode = node;
-      this._updatePulseAnchor();
-    },
-
-    _stopPulse() {
-      // No cy.animate to cancel; no inline styles to clean up.
-      // Just clear the anchor (CSS keyframes stop because the
-      // anchor goes x-show:false the moment selected becomes null).
-      this._pulseNode = null;
-      this.pulseAnchorStyle = '';
-    },
-
-    // Recomputes the .nebula-pulse-anchor position + size so the
-    // CSS-animated ring tracks the selected node. Cytoscape's
-    // ``renderedPosition()`` returns canvas-space coordinates
-    // relative to the cy container's top-left, which is exactly
-    // what our absolutely-positioned anchor (inside the same
-    // ``.nebula-canvas`` parent) wants for ``left`` / ``top``.
-    // ``renderedOuterWidth()`` gives the on-screen pixel diameter
-    // including border + underlay; we add padding so the ring sits
-    // OUTSIDE the node halo.
-    _updatePulseAnchor() {
-      if (!this.cy || !this._pulseNode || !this.selected) {
-        this.pulseAnchorStyle = '';
-        return;
-      }
-      try {
-        const node = this._pulseNode;
-        const pos = node.renderedPosition();
-        const size = Math.max(node.renderedOuterWidth(), node.renderedOuterHeight());
-        const ringSize = size + 22; // 11px halo around node
-        this.pulseAnchorStyle =
-          'left: ' + pos.x + 'px;' +
-          'top: ' + pos.y + 'px;' +
-          'width: ' + ringSize + 'px;' +
-          'height: ' + ringSize + 'px;';
-      } catch (_) {
-        this.pulseAnchorStyle = '';
-      }
-    },
-
-    deselect() {
-      // ORDER MATTERS:
-      //   1. Stop the pulse first so its in-flight animate() chain
-      //      doesn't keep rewriting underlay styles AFTER we clear
-      //      classes (which would re-trigger redraws).
-      //   2. ``cy.elements().stop(true, false)`` cancels any other
-      //      queued animations (e.g. the camera pan that
-      //      selectFromCanvas may have started).
-      //   3. Then the bulk removeClass inside cy.batch() -- one
-      //      Cytoscape redraw for the lot.
-      // The combined effect is that deselect on a 470+ node graph
-      // returns control synchronously in ~5-15ms and there are no
-      // lingering tweens to chew frames afterwards.
-      this._stopPulse();
-      if (this.cy) {
-        this.cy.elements().stop(true, false);
-        // v2.6.1 perf: in heavy mode only the single hl node was
-        // styled, so a targeted removeClass is O(1) vs O(N) for the
-        // bulk path. Same for the no-op edges.remove (heavy mode
-        // doesn't add edges to cy anymore).
-        if (this._heavyGraph) {
-          if (this._lastHl) {
-            this._lastHl.removeClass('hl');
-            this._lastHl = null;
-          }
-        } else {
-          this.cy.batch(() => this.cy.elements().removeClass('hl dim'));
-        }
-      }
-      this.selected = null;
-      this.neighbors = [];
-    },
-
     fileExt(name) {
       const m = (name || '').toLowerCase().match(/\.([a-z0-9]+)$/);
       return m ? m[1] : 'unknown';
     },
 
+    // v2.6.2: VS Code-style, language-specific file icons. Each known
+    // extension gets a distinct rounded-tile glyph with a language
+    // brand color + a short mono label, so the tree reads like the
+    // VS Code explorer at a glance. Unknown extensions fall back to a
+    // neutral page glyph; non-file nodes get a small "memory" dot.
     fileIcon(name) {
-      // VSCode-style file icons via inline SVG. Each language gets a
-      // small "page" glyph with a colored corner accent. Returns
-      // raw SVG markup for x-html.
       const ext = this.fileExt(name);
-      const color = ({
-        py: '#3776ab', pyi: '#3776ab',
-        js: '#f7df1e', mjs: '#f7df1e', cjs: '#f7df1e', jsx: '#f7df1e',
-        ts: '#3178c6', tsx: '#3178c6',
-        go: '#00add8',
-        rs: '#dea584', java: '#b07219', kt: '#a97bff',
-        rb: '#cc342d', php: '#777bb4',
-        cs: '#178600', swift: '#fa7343',
-        c: '#555555', h: '#888888', cpp: '#f34b7d', hpp: '#888888',
-        json: '#fbbf24', yaml: '#cb171e', yml: '#cb171e', toml: '#9c4221',
-        md: '#5fa8ff', sh: '#89e051', bash: '#89e051',
-        html: '#e34c26', css: '#264de4',
-      })[ext] || '#94a3b8';
-      // Page glyph + colored fold corner. Keeps a consistent silhouette
-      // across types while the corner color signals language at a glance.
+      const SPEC = {
+        py:   ['#3776ab', 'py'],  pyi: ['#3776ab', 'py'],
+        js:   ['#f7df1e', 'js'],  mjs: ['#f7df1e', 'js'],
+        cjs:  ['#f7df1e', 'js'],  jsx: ['#61dafb', 'jsx'],
+        ts:   ['#3178c6', 'ts'],  tsx: ['#3178c6', 'tsx'],
+        go:   ['#00add8', 'go'],
+        rs:   ['#dea584', 'rs'],
+        java: ['#e76f00', 'jv'],  kt:  ['#a97bff', 'kt'],
+        rb:   ['#cc342d', 'rb'],  php: ['#777bb4', 'php'],
+        cs:   ['#9b4f96', 'cs'],  swift: ['#fa7343', 'sw'],
+        c:    ['#5c6bc0', 'c'],   h:   ['#8d99ae', 'h'],
+        cpp:  ['#f34b7d', 'c++'], hpp: ['#8d99ae', 'h+'],
+        json: ['#fbbf24', '{}'],  yaml:['#cb171e', 'yml'],
+        yml:  ['#cb171e', 'yml'], toml:['#9c4221', 'tml'],
+        md:   ['#5fa8ff', 'md'],  txt: ['#94a3b8', 'txt'],
+        sh:   ['#89e051', 'sh'],  bash:['#89e051', 'sh'],
+        html: ['#e34c26', '<>'],  css: ['#264de4', 'css'],
+        scss: ['#cf649a', 'sc'],  sql: ['#e38c00', 'sql'],
+        gd:   ['#478cbf', 'gd'],
+      };
+      const spec = SPEC[ext];
+      if (!spec) {
+        // Unknown / non-file node: neutral page with a soft dot.
+        return (
+          '<svg viewBox="0 0 16 16" class="vscode-icon" aria-hidden="true">' +
+          '<rect x="2.5" y="1.5" width="11" height="13" rx="2" fill="#2a3340"/>' +
+          '<circle cx="8" cy="8" r="2.4" fill="#94a3b8"/>' +
+          '</svg>'
+        );
+      }
+      const [color, glyph] = spec;
+      // Rounded tile in the language color + the mono glyph in dark
+      // ink -- the VS Code Seti vibe without a webfont dependency.
       return (
-        '<svg viewBox="0 0 16 16" class="vscode-icon">' +
-        '<path fill="#2a3340" d="M3 1.5h6.5L13 5v9.5H3z"/>' +
-        '<path fill="' + color + '" d="M9.5 1.5L13 5h-3.5z"/>' +
+        '<svg viewBox="0 0 16 16" class="vscode-icon" aria-hidden="true">' +
+        '<rect x="1.5" y="1.5" width="13" height="13" rx="3" fill="' + color + '"/>' +
+        '<text x="8" y="11" text-anchor="middle"' +
+        ' font-family="ui-monospace,Menlo,Consolas,monospace"' +
+        ' font-size="6.5" font-weight="700" fill="#0a0d14">' +
+        glyph + '</text>' +
         '</svg>'
       );
     },
 
     bodyLanguage(sourcePath) {
-      // Map a source_path's file extension to a Prism language hint.
-      // Returns "none" for paths without a recognized extension --
-      // Prism just leaves those as plain text, no error.
       if (!sourcePath) return 'none';
       const clean = sourcePath.replace(/:\d+-\d+(#.+)?$/, '').toLowerCase();
       const m = clean.match(/\.([a-z0-9]+)$/);
@@ -1660,175 +1152,14 @@ function nebula() {
         py: 'python', pyi: 'python',
         js: 'javascript', mjs: 'javascript', cjs: 'javascript', jsx: 'jsx',
         ts: 'typescript', tsx: 'tsx',
-        go: 'go',
-        rs: 'rust',
-        java: 'java', kt: 'kotlin',
-        rb: 'ruby', php: 'php',
-        cs: 'csharp',
-        swift: 'swift',
+        go: 'go', rs: 'rust', java: 'java', kt: 'kotlin',
+        rb: 'ruby', php: 'php', cs: 'csharp', swift: 'swift',
         c: 'c', h: 'c', cpp: 'cpp', hpp: 'cpp', cc: 'cpp',
         json: 'json', yaml: 'yaml', yml: 'yaml', toml: 'toml',
         md: 'markdown', sh: 'bash', bash: 'bash',
         html: 'html', css: 'css', scss: 'scss',
         gd: 'gdscript',
       })[ext] || 'none';
-    },
-
-    focusNode(id) {
-      if (!this.cy) return;
-      const target = this.cy.getElementById(id);
-      if (!target || target.length === 0) {
-        // Node isn't in the current view -- reload with that as focus.
-        this.contextNodeId = id;
-        this.reload();
-        return;
-      }
-      // v2.2.2: selectFromCanvas now owns the camera pan+zoom for
-      // ALL entry paths -- this used to be duplicated here.
-      this.selectFromCanvas(target);
-    },
-
-    relayout(name) {
-      if (!this.cy) return;
-      this.currentLayout = name;
-      this._persistState();
-      // Operate on visible elements only -- a layout run on hidden
-      // nodes wastes work and produces a sparse result when most of
-      // the graph is filtered out.
-      const visible = this.cy.elements().not('.hide');
-
-      // SMOOTHNESS via DOM VEIL (v2.2.6, pipeline 18).
-      // The prior implementation cross-faded by calling
-      // ``cy.elements().animate({ style: { opacity: 0.3 -> 1.0 } })``
-      // which writes an INLINE BYPASS on every node. After the
-      // animation completed, the bypass at opacity:1.0 overrode the
-      // .dim class's stylesheet ``opacity: 0.12`` rule -- so
-      // changing layout while a node was selected silently killed
-      // the blur-others focus effect. Reported 2026-05-14.
-      //
-      // The fix moves the cross-fade off cytoscape's style cascade
-      // entirely: a translucent ``.nebula-layout-veil`` <div> above
-      // the canvas fades to opaque, holds while we snap positions,
-      // then fades back to transparent. Cytoscape's elements are
-      // never opacity-touched, so .hl and .dim class rules keep
-      // owning the focus visual throughout. Same pattern as the
-      // v2.2.4 pulse rewrite (pipeline 18).
-      const FADE_MS = 140;
-      const veilDelay = window.mnemoPrefersReducedMotion &&
-                        window.mnemoPrefersReducedMotion() ? 0 : FADE_MS;
-      this.layoutFading = true;
-
-      // CONSISTENT FORCE LAYOUT: snapshot the initial fcose
-      // positions on first run and restore them when the user
-      // returns to "force". Without this, switching to rings/tree
-      // then back to force converges to a different layout because
-      // fcose with randomize: false relaxes from the current
-      // (non-force) positions.
-      //
-      // The layout name passed in here is the cytoscape plugin
-      // name (``fcose``) -- NOT the user-facing button label
-      // (``force``). Earlier versions checked ``name === 'force'``,
-      // which never matched, so the snapshot branch was dead code
-      // and every "force" click after a layout switch produced a
-      // fresh re-relax from the current positions.
-      const runForceSnapshot = name === 'fcose' && this._forceSnapshot;
-
-      // PERFORMANCE: interpolating positions over 400ms for 400+
-      // nodes is the lag source. Snap synchronously inside cy.batch
-      // and animate only the camera.
-      const baseOpts = { animate: false, padding: 40, fit: false };
-      const perLayout = {
-        fcose: {
-          nodeRepulsion: 6500,
-          idealEdgeLength: 90,
-          randomize: false,
-        },
-        concentric: {
-          // Higher-degree nodes go in the inner ring -- "rings" puts
-          // hubs at the center, leaves at the edge.
-          concentric: (n) => n.degree(),
-          levelWidth: () => 1,
-          minNodeSpacing: 28,
-        },
-        breadthfirst: {
-          directed: true,
-          spacingFactor: 1.2,
-          // RADIAL fan around each component's root rather than the
-          // default row-by-row layout. With a typical code graph the
-          // row layout collapses to a straight horizontal line
-          // because most nodes have only one or two siblings per
-          // BFS level; circle: true turns each tree into a fan.
-          circle: true,
-          // One root per connected component, picked as the highest-
-          // degree node in that component. Without this, BFS only
-          // walks the seed's component and dumps everything else into
-          // a leftover row -- the "straight line" the user saw.
-          roots: (() => {
-            const ids = [];
-            visible.components().forEach((comp) => {
-              let best = null;
-              let max = -1;
-              comp.nodes().forEach((n) => {
-                const d = n.degree();
-                if (d > max) {
-                  max = d;
-                  best = n;
-                }
-              });
-              if (best) ids.push(best.id());
-            });
-            return ids;
-          })(),
-          // Squeeze siblings closer to the root so each fan has
-          // visible structure rather than a single dense ring.
-          avoidOverlap: true,
-          avoidOverlapPadding: 12,
-        },
-        grid: {
-          condense: true,
-          avoidOverlap: true,
-          avoidOverlapPadding: 16,
-        },
-      };
-      const opts = { name, ...baseOpts, ...(perLayout[name] || {}) };
-
-      // Wait one fade cycle for the veil to become opaque, then
-      // snap positions inside cy.batch (single redraw) and animate
-      // ONLY the camera tween. After the camera settles, drop the
-      // veil so the new layout fades in.
-      const snapAndFit = () => {
-        if (runForceSnapshot) {
-          const snap = this._forceSnapshot;
-          this.cy.batch(() => {
-            visible.nodes().forEach((n) => {
-              const p = snap[n.id()];
-              if (p) n.position(p);
-            });
-          });
-        } else {
-          this.cy.batch(() => {
-            visible.layout(opts).run();
-          });
-        }
-        // Animate ONLY the camera to fit the new positions. That's
-        // one tween (the viewport) instead of N tweens (one per
-        // node) -- silky transition without the per-node redraw
-        // cost. ``complete`` drops the veil so the new layout fades
-        // in cleanly.
-        this.cy.animate(
-          { fit: { eles: visible, padding: 60 } },
-          {
-            duration: 320,
-            easing: 'ease-out',
-            complete: () => { this.layoutFading = false; },
-          },
-        );
-      };
-      if (veilDelay > 0) {
-        setTimeout(snapAndFit, veilDelay);
-      } else {
-        snapAndFit();
-      }
     },
 
     copyCitation() {
@@ -1839,7 +1170,7 @@ function nebula() {
       }).catch(e => window.toast('Copy failed: ' + e, 'error'));
     },
 
-    // --- Resizer logic -------------------------------------------------
+    // --- Resizer logic --------------------------------------------
     startResize(evt, side) {
       this.dragging = side;
       evt.preventDefault();
@@ -1864,7 +1195,6 @@ function nebula() {
         this.dragging = null;
         window.removeEventListener('mousemove', onMove);
         window.removeEventListener('mouseup', onUp);
-        if (this.cy) this.cy.resize();
       };
       window.addEventListener('mousemove', onMove);
       window.addEventListener('mouseup', onUp);
