@@ -62,7 +62,8 @@ def test_graph_data_exposes_scope_key_and_fingerprint(client: TestClient, store:
     assert "scope_key" in data
     assert "fingerprint" in data
     assert data["scope_key"] == "keys:P1"
-    assert isinstance(data["fingerprint"], str) and len(data["fingerprint"]) >= 16
+    assert isinstance(data["fingerprint"], str)
+    assert len(data["fingerprint"]) >= 16
 
 
 def test_scope_key_partitions_by_view(client: TestClient, store: Store) -> None:
@@ -160,4 +161,5 @@ def test_graph_layout_round_trips_via_store(client: TestClient, store: Store) ->
     assert cached is not None
     fp, positions_json = cached
     assert fp == "fp"
-    assert "9" in positions_json and "6" in positions_json
+    assert "9" in positions_json
+    assert "6" in positions_json
