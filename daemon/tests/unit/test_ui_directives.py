@@ -54,8 +54,7 @@ def test_loop_emits_ui_action_and_acks(store: Store) -> None:
     prov = _Prov(
         [
             [
-                (EV_TOOL_CALL, {"id": "u1", "name": "mnemo_navigate",
-                                "args": {"path": "/code"}}),
+                (EV_TOOL_CALL, {"id": "u1", "name": "mnemo_navigate", "args": {"path": "/code"}}),
                 (EV_STOP, "tool_use"),
             ],
             [(EV_STOP, "end_turn")],
@@ -72,10 +71,11 @@ def test_loop_emits_ui_action_and_acks(store: Store) -> None:
 
 
 def test_chat_page_dispatches_ui_action() -> None:
-    html = (
-        Path(__file__).resolve().parents[2]
-        / "mnemo" / "ui" / "templates" / "chat.html"
-    ).read_text(encoding="utf-8")
-    assert "ui_action" in html
-    assert "navigate" in html
-    assert "select_node" in html
+    # v3.1 phase 6: the SSE/ui_action handling moved to the shared
+    # static module (one impl for /chat + the dock).
+    js = (Path(__file__).resolve().parents[2] / "mnemo" / "ui" / "static" / "chat.js").read_text(
+        encoding="utf-8"
+    )
+    assert "ui_action" in js
+    assert "navigate" in js
+    assert "select_node" in js

@@ -28,13 +28,7 @@ def client(store: Store, fake_embedder: FakeEmbedder) -> Iterator[TestClient]:
 
 @pytest.fixture(scope="module")
 def chat_html() -> str:
-    path = (
-        Path(__file__).resolve().parents[2]
-        / "mnemo"
-        / "ui"
-        / "templates"
-        / "chat.html"
-    )
+    path = Path(__file__).resolve().parents[2] / "mnemo" / "ui" / "templates" / "chat.html"
     return path.read_text(encoding="utf-8")
 
 
@@ -42,28 +36,26 @@ def test_chat_page_200s_with_shell(client: TestClient) -> None:
     r = client.get("/chat")
     assert r.status_code == 200
     body = r.text
-    assert 'x-data="chatPage()"' in body
+    # v3.1: the page uses the SHARED mnemoChat factory (one impl, two
+    # surfaces) -- the inline chatPage() copy was removed.
+    assert 'x-data="mnemoChat(' in body
     assert "chat-rail" in body  # left conversation rail
     assert "chat-thread" in body  # centre thread
     assert "chat-cite" in body  # right citation panel
 
 
-def test_chat_page_consumes_the_sse_stream(chat_html: str) -> None:
-    # the page must open the in-flight run's event stream
-    assert "/v1/chat/" in chat_html
-    assert "/events" in chat_html
-    # and POST a message to start it
-    assert "/message" in chat_html
+def test_chat_page_loads_the_shared_module(chat_html: str) -> None:
+    assert "/static/chat.js" in chat_html
+    assert "function chatPage()" not in chat_html  # no inline duplicate
 
 
-def test_chat_page_renders_tool_calls_and_citations(chat_html: str) -> None:
+def test_chat_page_renders_tool_calls_and_drafts(chat_html: str) -> None:
     assert "tool_call" in chat_html  # collapsible tool-call rows
-    assert "citation" in chat_html  # citation events -> side panel
-    # the side panel reuses the v2.2 body renderer for full-fidelity
-    assert "mnemoRenderBody" in chat_html
+    assert "draft-card" in chat_html  # mnemo-draft one-click save
+    assert "chat-cite" in chat_html  # citation side panel shell
 
 
 def test_chat_page_has_conversation_rail_and_prompt(chat_html: str) -> None:
     assert "newConversation" in chat_html or "new chat" in chat_html.lower()
-    assert "sendMessage" in chat_html
-    assert "/v1/chat" in chat_html  # list/create conversations
+    assert "sendMessage" in chat_html  # composer @submit
+    assert "load-older" in chat_html  # pinned-thread lazy-history sentinel
