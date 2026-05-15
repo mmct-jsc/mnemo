@@ -18,6 +18,7 @@ from mnemo.providers import (
     BaseProvider,
     ProviderError,
     ProviderEvent,
+    _usage_event,
 )
 
 
@@ -107,12 +108,16 @@ class GoogleProvider(BaseProvider):
                 }
             ]
         saw_tool = False
+        usage_meta = None
         try:
             for chunk in self._client.models.generate_content_stream(
                 model=model,
                 contents=_to_google_contents(messages),
                 config=config,
             ):
+                um = getattr(chunk, "usage_metadata", None)
+                if um is not None:
+                    usage_meta = um
                 txt = getattr(chunk, "text", None)
                 if txt:
                     yield (EV_TEXT, txt)
@@ -132,4 +137,12 @@ class GoogleProvider(BaseProvider):
                             )
         except Exception as exc:
             raise ProviderError(f"google: {exc}") from exc
+        if usage_meta is not None:
+            ev = _usage_event(
+                getattr(usage_meta, "prompt_token_count", None),
+                getattr(usage_meta, "candidates_token_count", None),
+                getattr(usage_meta, "cached_content_token_count", 0),
+            )
+            if ev is not None:
+                yield ev
         yield (EV_STOP, "tool_use" if saw_tool else "end_turn")

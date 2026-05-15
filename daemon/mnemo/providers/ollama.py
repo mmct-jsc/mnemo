@@ -22,6 +22,7 @@ from mnemo.providers import (
     BaseProvider,
     ProviderError,
     ProviderEvent,
+    _usage_event,
 )
 
 # Model name prefixes that support Ollama's native tool API.
@@ -134,8 +135,10 @@ class OllamaProvider(BaseProvider):
 
         saw_tool = False
         text_buf: list[str] = []
+        last_line: dict = {}
         try:
             for line in self._transport(f"{self._base}/api/chat", payload):
+                last_line = line
                 msg = line.get("message") or {}
                 content = msg.get("content")
                 if content:
@@ -164,4 +167,12 @@ class OllamaProvider(BaseProvider):
                     EV_TOOL_CALL,
                     {"id": call["name"], "name": call["name"], "args": call["args"]},
                 )
+        if "prompt_eval_count" in last_line or "eval_count" in last_line:
+            ev = _usage_event(
+                last_line.get("prompt_eval_count"),
+                last_line.get("eval_count"),
+                0,  # Ollama is local -- no prompt cache
+            )
+            if ev is not None:
+                yield ev
         yield (EV_STOP, "tool_use" if saw_tool else "end_turn")

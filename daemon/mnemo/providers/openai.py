@@ -18,6 +18,7 @@ from mnemo.providers import (
     BaseProvider,
     ProviderError,
     ProviderEvent,
+    _usage_event,
 )
 
 _STOP_MAP = {"tool_calls": "tool_use", "stop": "end_turn", "length": "max_tokens"}
@@ -100,6 +101,8 @@ class OpenAIProvider(BaseProvider):
             "messages": _to_openai_messages(messages, system),
             "max_tokens": max_output_tokens,
             "stream": True,
+            # ask for the trailing usage-only chunk (empty choices)
+            "stream_options": {"include_usage": True},
         }
         if tools:
             kwargs["tools"] = [
@@ -115,8 +118,15 @@ class OpenAIProvider(BaseProvider):
             ]
         acc: dict[int, dict] = {}
         stop = "end_turn"
+        usage_obj = None
         try:
             for chunk in self._client.chat.completions.create(**kwargs):
+                u = getattr(chunk, "usage", None)
+                if u is not None:
+                    usage_obj = u
+                # the include_usage trailing chunk has empty choices
+                if not getattr(chunk, "choices", None):
+                    continue
                 choice = chunk.choices[0]
                 delta = choice.delta
                 if getattr(delta, "content", None):
@@ -144,4 +154,13 @@ class OpenAIProvider(BaseProvider):
                 EV_TOOL_CALL,
                 {"id": slot["id"] or "", "name": slot["name"] or "", "args": args},
             )
+        if usage_obj is not None:
+            details = getattr(usage_obj, "prompt_tokens_details", None)
+            ev = _usage_event(
+                getattr(usage_obj, "prompt_tokens", None),
+                getattr(usage_obj, "completion_tokens", None),
+                getattr(details, "cached_tokens", 0) if details is not None else 0,
+            )
+            if ev is not None:
+                yield ev
         yield (EV_STOP, stop)
