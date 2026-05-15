@@ -230,6 +230,11 @@ def mount_ui(
     def graph_page(request: Request) -> Any:
         return templates.TemplateResponse(request, "graph.html", _ctx(page="graph"))
 
+    @app.get("/chat", response_class=HTMLResponse)
+    def chat_page(request: Request) -> Any:
+        # v3 phase 8: the agentic companion surface.
+        return templates.TemplateResponse(request, "chat.html", _ctx(page="chat"))
+
     @app.get("/settings/chat", response_class=HTMLResponse)
     def chat_settings_page(request: Request) -> Any:
         # v3 phase 7: companion / providers / permissions live on their
