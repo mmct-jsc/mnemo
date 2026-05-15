@@ -59,8 +59,7 @@ def test_graph_loads_cosmos_gl_engine(graph_html: str) -> None:
         "force-graph engine that replaced cytoscape in v2.6.2."
     )
     assert 'type="module"' in graph_html, (
-        "Cosmograph is ESM-only; it must load via a <script "
-        'type="module"> tag.'
+        'Cosmograph is ESM-only; it must load via a <script type="module"> tag.'
     )
 
 
@@ -71,17 +70,16 @@ def test_graph_has_no_cytoscape(graph_html: str) -> None:
     *why* we switched away from it -- that's intentional history,
     so we assert on USAGE patterns, not the bare substring.)"""
     usage_markers = (
-        "unpkg.com/cytoscape",      # the old CDN <script src>
-        "cytoscape-fcose",          # the old layout plugin
-        "cytoscape({",              # the factory call
-        "cytoscape.use(",           # plugin registration
-        "this.cy =",                # the old instance handle
-        "cy.elements(",             # cytoscape collection API
+        "unpkg.com/cytoscape",  # the old CDN <script src>
+        "cytoscape-fcose",  # the old layout plugin
+        "cytoscape({",  # the factory call
+        "cytoscape.use(",  # plugin registration
+        "this.cy =",  # the old instance handle
+        "cy.elements(",  # cytoscape collection API
     )
     hits = [m for m in usage_markers if m in graph_html]
     assert not hits, (
-        "v2.6.2 removed cytoscape entirely; found lingering "
-        f"cytoscape usage in graph.html: {hits}"
+        f"v2.6.2 removed cytoscape entirely; found lingering cytoscape usage in graph.html: {hits}"
     )
 
 
@@ -90,8 +88,7 @@ def test_graph_has_no_degree_cap(graph_html: str) -> None:
     renders the FULL graph so the canvas mirrors exactly what the
     v3 chat companion analyzes."""
     assert "GRAPH_CANVAS_CAP" not in graph_html, (
-        "v2.6.2 removed the canvas degree cap; the full graph is "
-        "always rendered now."
+        "v2.6.2 removed the canvas degree cap; the full graph is always rendered now."
     )
 
 
