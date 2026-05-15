@@ -18,6 +18,7 @@ and that is not an error.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 from pathlib import Path
@@ -118,6 +119,50 @@ def resolve_api_key(provider: str, *, dotenv_path: Path | None = None) -> str | 
     if kr:
         return kr
     return _plaintext_key(provider)
+
+
+def _set_keyring_key(provider: str, key: str) -> bool:
+    """Store into the OS keychain. Returns False if keyring is missing
+    or the platform has no Secret Service (Linux fallback path)."""
+    try:
+        import keyring
+    except Exception:
+        return False
+    try:
+        keyring.set_password("mnemo", f"provider:{provider}", key)
+        return True
+    except Exception:
+        return False
+
+
+def set_api_key(provider: str, key: str) -> dict:
+    """Persist a provider key. Keychain first; on failure fall back to
+    a plaintext ``keys.json`` (mode 0600) with a security warning
+    (design S7 Linux fallback chain)."""
+    if _set_keyring_key(provider, key):
+        return {"stored": "keychain", "warning": None}
+    p = _keys_json_path()
+    try:
+        data = json.loads(p.read_text(encoding="utf-8")) if p.is_file() else {}
+    except (OSError, json.JSONDecodeError):
+        data = {}
+    data[provider] = key
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    with contextlib.suppress(OSError):
+        p.chmod(0o600)
+    return {
+        "stored": "plaintext",
+        "warning": (
+            "No OS keychain available; key written to "
+            f"{p} (mode 0600). Prefer a keychain-backed environment."
+        ),
+    }
+
+
+def has_key(provider: str) -> bool:
+    """True if a key resolves for ``provider`` -- without revealing it."""
+    return resolve_api_key(provider) is not None
 
 
 def require_api_key(provider: str, *, dotenv_path: Path | None = None) -> str:

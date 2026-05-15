@@ -691,3 +691,34 @@ class ChatPermitIn(BaseModel):
 
     permission_id: str
     decision: str = Field(pattern="^(allow_once|allow_always|deny)$")
+
+
+class ProvidersPatchIn(BaseModel):
+    """``POST /v1/settings/providers``. ``providers[name].key`` (if
+    present) goes to the keychain and is dropped before persisting;
+    ``model`` persists in settings.json."""
+
+    default_provider: str | None = None
+    providers: dict | None = None
+
+
+class CompanionPatchIn(BaseModel):
+    """``POST /v1/settings/companion`` -- Mnem personality + dock."""
+
+    name: str | None = None
+    tone: str | None = None
+    dock_state: str | None = None
+    proactive: bool | None = None
+    proactive_pages: list[str] | None = None
+    proactive_frequency: str | None = None
+    chat_history_retention_days: int | None = None
+
+
+class SettingsOut(BaseModel):
+    """``GET /v1/settings`` -- never includes key material; per-provider
+    reports ``has_key`` + ``model`` only."""
+
+    default_provider: str
+    providers: dict
+    companion: dict
+    chat_history_retention_days: int | None

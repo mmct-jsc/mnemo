@@ -230,6 +230,13 @@ def mount_ui(
     def graph_page(request: Request) -> Any:
         return templates.TemplateResponse(request, "graph.html", _ctx(page="graph"))
 
+    @app.get("/settings/chat", response_class=HTMLResponse)
+    def chat_settings_page(request: Request) -> Any:
+        # v3 phase 7: companion / providers / permissions live on their
+        # own page so the existing /settings retrieval-tuning view is
+        # untouched (no regression). Cross-linked from there.
+        return templates.TemplateResponse(request, "chat_settings.html", _ctx(page="settings"))
+
     @app.get("/node/{node_id}", response_class=HTMLResponse)
     def node_page(node_id: str, request: Request, s: Store = Depends(get_store)) -> Any:
         node = s.get_node(node_id)
