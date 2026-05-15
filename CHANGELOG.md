@@ -2,6 +2,41 @@
 
 All notable changes to mnemo are documented here.
 
+## [3.1.0] - 2026-05-16
+
+**Mnem becomes a real companion.** v3.1 closes every gap from the
+live review of v3.0 (`docs/plans/2026-05-15-mnemo-v3.1-companion-design.md`).
+
+- **One chat component, two surfaces.** The `/chat` page and the
+  companion dock now share a single `mnemoChat()` factory
+  (`static/chat.js`) -- no duplicated logic. The dock is a full,
+  draggable, edge-snapping mini-chat (compose + stream + tool chips +
+  inline permission), hidden on `/chat`, position persisted in
+  `localStorage`.
+- **Claude-grade streaming + rendering.** SSE text is word-smoothed
+  through `mnemoStreamText` with a real "working" animation; the
+  thread is a fixed bottom-pinned viewport that lazy-loads older turns
+  on scroll-up. Assistant messages and cited-node previews render
+  through the real marked + DOMPurify pipeline (headings / lists /
+  tables / fenced code), not a toy parser.
+- **Hybrid conversation compaction.** Anthropic compaction-capable
+  models use the `compact-2026-01-12` beta (full content preserved);
+  every other provider/model summarizes the oldest turns into a
+  pinned context message. Model context is bounded by compaction; UI
+  history is paginated separately.
+- **Token + bookmark surfaces.** Providers surface per-turn token
+  usage; a running budget bar (vs the per-provider cap) + per-turn
+  counts; server-persisted bookmarks with a star per turn and a
+  jump strip. New paginated `GET /v1/chat/<id>/messages` +
+  `/v1/chat/<id>/bookmarks` CRUD.
+- **Agent can use skills.** `mnemo_list_skills` / `mnemo_run_skill`
+  load a `skills/<name>/SKILL.md` guide into the run.
+- **Branding.** New simplified Mnem mark as the favicon + nav logo.
+- **Fixes from the live review:** invalid-XML SVG comment (blank
+  logo), native image drag-and-drop hijacking the dock drag, the
+  stalling cited-node preview, and asset cache-busting so every
+  static fix actually reaches browsers on the version change.
+
 ## [3.0.0] - 2026-05-15
 
 **Mnem - the agentic companion.** v3 turns mnemo into an agent with
