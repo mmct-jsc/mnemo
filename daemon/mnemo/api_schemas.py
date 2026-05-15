@@ -12,7 +12,15 @@ from pydantic import BaseModel, Field
 from mnemo.compress import CompressedHit
 from mnemo.ingest import ReindexReport
 from mnemo.retrieve import RetrievalResult
-from mnemo.store import ActiveProject, FeedbackEvent, Node, Query, Source
+from mnemo.store import (
+    ActiveProject,
+    ChatMessage,
+    Conversation,
+    FeedbackEvent,
+    Node,
+    Query,
+    Source,
+)
 from mnemo.workspaces import SourceOverride, Workspace
 
 # --- Nodes ----------------------------------------------------------------
@@ -580,3 +588,98 @@ class ReindexReportSectionsOut(BaseModel):
     indexed_count: int
     duration_ms: int
     finished_at: int  # epoch ms when the report event was emitted
+
+
+# --- Chat (v3) ------------------------------------------------------------
+
+
+class ChatCreateIn(BaseModel):
+    """``POST /v1/chat`` body. Everything optional -- provider/model
+    fall back to the design-S4 defaults when omitted."""
+
+    name: str | None = None
+    project_key: str | None = None
+    page_context: dict | None = None
+    provider: str | None = None
+    model: str | None = None
+
+
+class ChatPatchIn(BaseModel):
+    """``PATCH /v1/chat/<id>`` -- rename / change provider or model."""
+
+    name: str | None = None
+    provider: str | None = None
+    model: str | None = None
+    page_context: dict | None = None
+
+
+class MessageCreateIn(BaseModel):
+    """``POST /v1/chat/<id>/message`` body."""
+
+    text: str = Field(min_length=1)
+
+
+class ChatMessageOut(BaseModel):
+    id: str
+    conversation_id: str
+    seq: int
+    role: str
+    content: dict
+    created_at: int
+
+    @classmethod
+    def from_message(cls, m: ChatMessage) -> ChatMessageOut:
+        return cls(
+            id=m.id,
+            conversation_id=m.conversation_id,
+            seq=m.seq,
+            role=m.role,
+            content=m.content,
+            created_at=m.created_at,
+        )
+
+
+class ConversationOut(BaseModel):
+    id: str
+    name: str
+    project_key: str | None
+    page_context: dict | None
+    provider: str
+    model: str
+    created_at: int
+    updated_at: int
+    archived_at: int | None
+
+    @classmethod
+    def from_conversation(cls, c: Conversation) -> ConversationOut:
+        return cls(
+            id=c.id,
+            name=c.name,
+            project_key=c.project_key,
+            page_context=c.page_context,
+            provider=c.provider,
+            model=c.model,
+            created_at=c.created_at,
+            updated_at=c.updated_at,
+            archived_at=c.archived_at,
+        )
+
+
+class ConversationDetailOut(ConversationOut):
+    """``GET /v1/chat/<id>`` -- metadata + the full message log."""
+
+    messages: list[ChatMessageOut]
+
+    @classmethod
+    def from_conversation_and_messages(
+        cls, c: Conversation, messages: list[ChatMessage]
+    ) -> ConversationDetailOut:
+        base = ConversationOut.from_conversation(c).model_dump()
+        return cls(**base, messages=[ChatMessageOut.from_message(m) for m in messages])
+
+
+class MessageAcceptedOut(BaseModel):
+    """``POST /v1/chat/<id>/message`` response -- where to stream."""
+
+    stream_url: str
+    conversation_id: str
