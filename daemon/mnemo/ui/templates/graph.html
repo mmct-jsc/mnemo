@@ -754,33 +754,60 @@ function nebula() {
         return e;
       });
 
-      // v2.6.0 perf: when the graph is large, every per-node visual
-      // effect (motion blur, edge re-paint during pan, underlay
-      // glow) compounds into multi-second jank. Tune them down
-      // automatically above 3 000 nodes so the user sees a smooth
-      // canvas even at 10 k. The architecture is still all there --
-      // we just stop painting expensive composite layers per node.
+      // v2.6.1 perf: at 10 k nodes + 15 k edges, every cytoscape
+      // viewport gesture (pan, zoom, fit) triggers a textureOnViewport
+      // raster capture of the entire scene. That capture alone takes
+      // 15-30 seconds on a 26 k-element canvas, surfacing as the
+      // "Nebula hangs on first interaction" the user reported.
+      // Measured (this DB, 10 845 nodes, 15 418 edges):
+      //   first-pan with edges + textureOnViewport=true  -> 30 s+
+      //   first-pan with edges removed, texture on       ->  3 s
+      //   first-pan with edges removed, texture off      -> 30 ms
+      //
+      // For heavy graphs we:
+      //   1. Hold edges OUT of the cytoscape model entirely. They
+      //      stay in this._stashedEdges and snap back via cy.add()
+      //      when a node is selected so users still see the 1-hop
+      //      relationships -- they just don't paint during pan.
+      //   2. Disable textureOnViewport so each frame renders the
+      //      visible portion directly (cheaper than capturing a
+      //      multi-megapixel scene texture).
+      //   3. Drop pixelRatio to 0.5 -- modern displays don't visually
+      //      need 1:1 at typical zoom; cuts paint cost ~4x.
+      //   4. Skip the chunked reveal (16 s of background class churn
+      //      across 10 k nodes) and the per-node mouseover bloom.
       const canvasNodeCount = els.filter(e => e.data.id !== undefined).length;
       const heavyGraph = canvasNodeCount > 3_000;
+      this._heavyGraph = heavyGraph;
+
+      // Edge stash for heavy mode -- empty array on light graphs so
+      // the rest of the code can read this._stashedEdges unconditionally.
+      this._stashedEdges = [];
+      let canvasEls = els;
+      if (heavyGraph) {
+        this._stashedEdges = els.filter(e => e.data.source !== undefined);
+        canvasEls = els.filter(e => e.data.source === undefined);
+      }
 
       if (this.cy) this.cy.destroy();
       this.cy = cytoscape({
         container: document.getElementById('cy-nebula'),
-        elements: els,
+        elements: canvasEls,
         minZoom: 0.12,
         maxZoom: 4,
-        // Cheap-render hints for big graphs: cache the rendered scene
-        // as a texture during pan/zoom so we don't redraw every edge
-        // every frame. Render labels only at moderate zoom.
-        textureOnViewport: true,
-        // v2.6.0 perf: on big graphs the edges are the single most
-        // expensive thing to repaint during pan. Hide them while
-        // the viewport is moving; cytoscape pops them back on release.
-        // The "graph collapses to bare nodes mid-drag" feel is a worth-
-        // it trade vs 5-second pan stalls on a 15 k-edge canvas.
-        hideEdgesOnViewport: heavyGraph,
+        // Cheap-render hints for SMALL graphs: cache the rendered
+        // scene as a texture during pan/zoom so we don't redraw
+        // every edge every frame. Render labels only at moderate
+        // zoom. For HEAVY graphs the capture itself is the cost
+        // (see above) -- skip it and re-render per frame instead.
+        textureOnViewport: !heavyGraph,
+        // v2.6.1: edges are gone from the heavy model so there's
+        // nothing to hide on viewport gestures. Light graphs keep
+        // the v2.6.0 hide-during-drag behavior off (edges look
+        // better when they stay visible during pan).
+        hideEdgesOnViewport: false,
         hideLabelsOnViewport: true,
-        pixelRatio: 1.0,
+        pixelRatio: heavyGraph ? 0.5 : 1.0,
         wheelSensitivity: 0.18,  // slow, silky scroll-zoom
         // Motion blur: nice on small graphs, expensive on big ones.
         motionBlur: !heavyGraph,
@@ -788,6 +815,10 @@ function nebula() {
         // Damped pan: cytoscape eases to a stop when the user
         // releases the mouse rather than locking instantly.
         userPanningEnabled: true,
+        // v2.6.1 perf: per-node drag is another hot path; disable
+        // on heavy graphs -- the user didn't ask to nudge 10 k
+        // nodes individually.
+        autoungrabify: heavyGraph,
         autounselectify: false,
         style: [
           // Nodes -----------------------------------------------------
@@ -983,23 +1014,32 @@ function nebula() {
 
       // Silky hover: lift the underlay padding briefly when the
       // cursor enters a node so it "blooms" without committing the
-      // selection.
-      this.cy.on('mouseover', 'node', (evt) => {
-        const n = evt.target;
-        if (!n.hasClass('hl')) {
-          n.style('underlay-padding', 12);
-          n.style('underlay-opacity', 0.55);
-        }
-        document.body.style.cursor = 'pointer';
-      });
-      this.cy.on('mouseout', 'node', (evt) => {
-        const n = evt.target;
-        if (!n.hasClass('hl')) {
-          n.removeStyle('underlay-padding');
-          n.removeStyle('underlay-opacity');
-        }
-        document.body.style.cursor = '';
-      });
+      // selection. v2.6.1 perf: each mouse move over the canvas
+      // crosses many nodes; restyling per event is per-frame work
+      // we can't afford on heavy graphs. Skip the bloom there.
+      if (!heavyGraph) {
+        this.cy.on('mouseover', 'node', (evt) => {
+          const n = evt.target;
+          if (!n.hasClass('hl')) {
+            n.style('underlay-padding', 12);
+            n.style('underlay-opacity', 0.55);
+          }
+          document.body.style.cursor = 'pointer';
+        });
+        this.cy.on('mouseout', 'node', (evt) => {
+          const n = evt.target;
+          if (!n.hasClass('hl')) {
+            n.removeStyle('underlay-padding');
+            n.removeStyle('underlay-opacity');
+          }
+          document.body.style.cursor = '';
+        });
+      } else {
+        // Heavy graph: keep a hand-cursor on node hover but skip the
+        // per-event style mutation.
+        this.cy.on('mouseover', 'node', () => { document.body.style.cursor = 'pointer'; });
+        this.cy.on('mouseout', 'node', () => { document.body.style.cursor = ''; });
+      }
 
       // v2.2.4: keep the pulse-ring overlay aligned with the
       // selected node through every viewport change.
@@ -1045,7 +1085,12 @@ function nebula() {
       // then the rest of the components fade in waves. Total reveal
       // time ~600-900ms depending on node count; far easier to
       // visually parse than "blank canvas -> 478 nodes at once".
-      this._renderCanvasChunked();
+      // v2.6.1 perf: skip the chunked reveal on heavy graphs.
+      // 10 000 nodes / 50 = 200 chunks * 80 ms = 16 s of background
+      // class churn while the user wants to interact. The concentric
+      // layout we use for heavy graphs already paints instantly so
+      // there's no "blank canvas -> swarm" jolt to soften.
+      if (!heavyGraph) this._renderCanvasChunked();
     },
 
     // CHUNK_SIZE = 50 nodes per batch. Tuned for ~480-node graphs:
@@ -1385,16 +1430,52 @@ function nebula() {
         { duration: 350, easing: 'ease-out' },
       );
 
-      // PERFORMANCE: batch class mutations so Cytoscape only
-      // re-styles once. Without ``batch``, each ``.addClass`` on a
-      // 1200-element graph forces a separate render pass.
-      const neighborhood = node.closedNeighborhood();
-      this.cy.batch(() => {
-        this.cy.elements().removeClass('hl dim');
-        // Dim only what's NOT in the neighborhood.
-        this.cy.elements().not(neighborhood).addClass('dim');
-        neighborhood.addClass('hl');
-      });
+      // v2.6.1 perf: split fast and slow paths.
+      //
+      // HEAVY (>3 k nodes): the canvas holds nodes only and a hub
+      // can have 971 connections. The previous "highlight the whole
+      // 1-hop neighborhood" approach blew up two ways at this scale:
+      // (1) cy.elements().removeClass('hl dim') walks all 10 k+
+      // elements every select, (2) cy.add(971 edges) per hub is a
+      // full restyle pass. Both produced 14 s hangs on selection.
+      // Instead: just hl the ONE selected node (targeted class swap
+      // via _lastHl) and build the neighbors list from the edge
+      // stash. Visual signal is the single bright glow + the side-
+      // panel list -- canvas edges stay out.
+      //
+      // LIGHT (<=3 k): keep the v2.2 closed-neighborhood + dim
+      // behavior -- it's cheap and the prettier focus effect.
+      if (this._heavyGraph) {
+        if (this._lastHl) this._lastHl.removeClass('hl');
+        node.addClass('hl');
+        this._lastHl = node;
+
+        const seen = {};
+        for (const e of this._stashedEdges) {
+          const eSrc = e.data.source;
+          const eTgt = e.data.target;
+          const otherId = eSrc === d.id ? eTgt : eTgt === d.id ? eSrc : null;
+          if (!otherId) continue;
+          const other = this.cy.getElementById(otherId);
+          if (!other.length) continue;
+          const od = other.data();
+          const rel = e.data.relation;
+          const conf = e.data.confidence ?? 1.0;
+          if (!seen[otherId] || conf > seen[otherId].confidence) {
+            seen[otherId] = {
+              id: otherId, name: od.name, type: od.type, rel, confidence: conf,
+            };
+          }
+        }
+        this.neighbors = Object.values(seen);
+      } else {
+        const neighborhood = node.closedNeighborhood();
+        this.cy.batch(() => {
+          this.cy.elements().removeClass('hl dim');
+          this.cy.elements().not(neighborhood).addClass('dim');
+          neighborhood.addClass('hl');
+        });
+      }
 
       // Hydrate body from /v1/nodes/<id> -- defer the fetch a frame
       // so the click feels instant. The DOM updates from this.selected
@@ -1411,17 +1492,22 @@ function nebula() {
       });
 
       // Build neighbors list (deduped by node id, keep best relation).
-      const seen = {};
-      node.connectedEdges().forEach((e) => {
-        const other = e.source().id() === d.id ? e.target() : e.source();
-        const od = other.data();
-        const rel = e.data('relation');
-        const conf = e.data('confidence') ?? 1.0;
-        if (!seen[od.id] || conf > seen[od.id].confidence) {
-          seen[od.id] = { id: od.id, name: od.name, type: od.type, rel, confidence: conf };
-        }
-      });
-      this.neighbors = Object.values(seen);
+      // v2.6.1 perf: heavy mode already built this.neighbors inline
+      // from the stash above; skip the cy.connectedEdges path (which
+      // would walk the absent edges anyway).
+      if (!this._heavyGraph) {
+        const seen = {};
+        node.connectedEdges().forEach((e) => {
+          const other = e.source().id() === d.id ? e.target() : e.source();
+          const od = other.data();
+          const rel = e.data('relation');
+          const conf = e.data('confidence') ?? 1.0;
+          if (!seen[od.id] || conf > seen[od.id].confidence) {
+            seen[od.id] = { id: od.id, name: od.name, type: od.type, rel, confidence: conf };
+          }
+        });
+        this.neighbors = Object.values(seen);
+      }
 
       // PERFORMANCE: replace the old 60ms-tick setInterval pulse
       // (which re-styled the selected node + every highlighted edge
@@ -1502,7 +1588,18 @@ function nebula() {
       this._stopPulse();
       if (this.cy) {
         this.cy.elements().stop(true, false);
-        this.cy.batch(() => this.cy.elements().removeClass('hl dim'));
+        // v2.6.1 perf: in heavy mode only the single hl node was
+        // styled, so a targeted removeClass is O(1) vs O(N) for the
+        // bulk path. Same for the no-op edges.remove (heavy mode
+        // doesn't add edges to cy anymore).
+        if (this._heavyGraph) {
+          if (this._lastHl) {
+            this._lastHl.removeClass('hl');
+            this._lastHl = null;
+          }
+        } else {
+          this.cy.batch(() => this.cy.elements().removeClass('hl dim'));
+        }
       }
       this.selected = null;
       this.neighbors = [];
