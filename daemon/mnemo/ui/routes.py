@@ -170,7 +170,7 @@ def mount_ui(
                 total_nodes=total_nodes,
                 source_count=len(sources),
                 edge_count=len(edges),
-                query_count=len(s.recent_queries(limit=10_000)),
+                query_count=s.count_queries(),
                 last_indexed=last_indexed,
                 recent_nodes=recent_nodes,
                 recent_queries=recent_queries,
@@ -192,15 +192,25 @@ def mount_ui(
         # nothing) instead of "no filter".
         type = type or None
         project = project or None
-        # Cheap total: list ids only and count.
-        all_for_filter = s.list_nodes(type=type, project_key=project, limit=10_000)
-        pg = _paginate(len(all_for_filter), page, PAGE_SIZE)
-        nodes = all_for_filter[pg["offset"] : pg["offset"] + pg["page_size"]]
+        # v2.6.7: real SQL pagination. Scalar COUNT(*) for the (never
+        # capped) total + LIMIT/OFFSET fetch of exactly one page --
+        # was list_nodes(limit=10_000) + len()/slice which capped the
+        # shown total at 10000 and loaded 10k rows to render 25.
+        total = s.count_nodes_total(type=type, project_key=project)
+        pg = _paginate(total, page, PAGE_SIZE)
+        nodes = s.list_nodes(
+            type=type,
+            project_key=project,
+            limit=pg["page_size"],
+            offset=pg["offset"],
+        )
         # Type counts respect the active project filter -- showing the global
         # count for "project (29)" while filtered to one project misleads.
         counts = s.count_nodes(project_key=project)
-        # Available projects for the filter dropdown (always the full set).
-        projects = sorted({n.project_key for n in s.list_nodes(limit=10_000) if n.project_key})
+        # Available projects for the filter dropdown (full set, distinct
+        # via SQL -- was a capped list_nodes scan that dropped projects
+        # beyond the first 10 000 rows).
+        projects = s.list_project_keys()
         return templates.TemplateResponse(
             request,
             "nodes.html",
@@ -610,12 +620,13 @@ def mount_ui(
 
     @app.get("/audit-page", response_class=HTMLResponse)
     def audit_page(request: Request, page: int = 1, s: Store = Depends(get_store)) -> Any:
-        # Pull a generous slice and paginate in Python; audit log is bounded
-        # in practice (per-user). For very large logs we'd add OFFSET to the
-        # store layer, but it's fine here.
-        all_q = s.recent_queries(limit=10_000)
-        pg = _paginate(len(all_q), page, PAGE_SIZE_AUDIT)
-        queries = all_q[pg["offset"] : pg["offset"] + pg["page_size"]]
+        # v2.6.7: real SQL pagination (the OFFSET the old comment said
+        # "we'd add ... but it's fine here" -- it wasn't: the log
+        # crossed 10 000 and the count + page both broke). Scalar
+        # COUNT(*) total + LIMIT/OFFSET page fetch.
+        total = s.count_queries()
+        pg = _paginate(total, page, PAGE_SIZE_AUDIT)
+        queries = s.recent_queries(limit=pg["page_size"], offset=pg["offset"])
 
         # v2.6.0 polish: resolve hit IDs to {name, description, type}
         # so the audit log shows what was actually returned instead of
@@ -642,19 +653,18 @@ def mount_ui(
                     "type": node.type,
                 }
 
-        # Summary stats over the FULL audit window so the side cards stay
-        # stable across pagination.
-        total_hits = sum(len(q.retrieved_ids) for q in all_q)
-        avg_hits = (total_hits / len(all_q)) if all_q else 0.0
-        first_ts = min((q.ts for q in all_q), default=0)
-        last_ts = max((q.ts for q in all_q), default=0)
-        span_days = max(0, (last_ts - first_ts) // 86400) if all_q else 0
-        tag_counter: Counter[str] = Counter()
-        for q in all_q:
-            for t in q.intent_tags or []:
-                if t and t != "none":
-                    tag_counter[t] += 1
-        top_tags = tag_counter.most_common(6)
+        # v2.6.7: side-card stats over the FULL log via a single SQL
+        # aggregate pass (was a 10 000-row load-all that the
+        # pagination rewrite removed -- and which silently capped the
+        # stats too). Stable across pagination, uncapped, cheap.
+        stats = s.query_audit_stats()
+        total_queries = int(stats["total_queries"])
+        total_hits = int(stats["total_hits"])
+        avg_hits = (total_hits / total_queries) if total_queries else 0.0
+        first_ts = int(stats["first_ts"])
+        last_ts = int(stats["last_ts"])
+        span_days = max(0, (last_ts - first_ts) // 86400) if total_queries else 0
+        top_tags = [(t, n) for t, n in stats["top_tags"] if t and t != "none"][:6]
 
         return templates.TemplateResponse(
             request,
