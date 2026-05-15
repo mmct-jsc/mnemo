@@ -29,14 +29,7 @@ def client(store: Store, fake_embedder: FakeEmbedder) -> Iterator[TestClient]:
 
 
 def _static(name: str) -> Path:
-    return (
-        Path(__file__).resolve().parents[2]
-        / "mnemo"
-        / "ui"
-        / "static"
-        / "mnem"
-        / name
-    )
+    return Path(__file__).resolve().parents[2] / "mnemo" / "ui" / "static" / "mnem" / name
 
 
 def test_dock_present_on_every_page(client: TestClient) -> None:

@@ -99,14 +99,10 @@ def test_purge_conversation_tool(store: Store) -> None:
 
 
 def test_thumbs_feedback_unknown_node_is_error_not_raise(store: Store) -> None:
-    out = TOOLS["mnemo_thumbs_feedback"].fn(
-        _ctx(store), node_id="ghost", direction="up"
-    )
+    out = TOOLS["mnemo_thumbs_feedback"].fn(_ctx(store), node_id="ghost", direction="up")
     assert isinstance(out, dict)  # never raises -- error dict at worst
 
 
 def test_change_settings_updates_config(store: Store, isolated_mnemo_home) -> None:
-    out = TOOLS["mnemo_change_settings"].fn(
-        _ctx(store), patch={"recency_half_life_days": 42.0}
-    )
+    out = TOOLS["mnemo_change_settings"].fn(_ctx(store), patch={"recency_half_life_days": 42.0})
     assert out.get("ok") is True

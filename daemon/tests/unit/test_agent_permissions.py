@@ -52,7 +52,10 @@ def _provider_calls_delete():
     return FakeProvider(
         [
             [
-                (EV_TOOL_CALL, {"id": "t1", "name": "mnemo_delete_node", "args": {"node_id": "n1"}}),
+                (
+                    EV_TOOL_CALL,
+                    {"id": "t1", "name": "mnemo_delete_node", "args": {"node_id": "n1"}},
+                ),
                 (EV_STOP, "tool_use"),
             ],
             [(EV_TEXT, "ok done"), (EV_STOP, "end_turn")],
@@ -76,9 +79,7 @@ def test_deny_blocks_the_tool(store: Store) -> None:
     _seed(store, "n1")
     conv = store.create_conversation(name="c", provider="fake", model="m")
     events = list(
-        _loop(store, _provider_calls_delete(), cb=lambda req: "deny").run(
-            conv.id, "delete n1"
-        )
+        _loop(store, _provider_calls_delete(), cb=lambda req: "deny").run(conv.id, "delete n1")
     )
     pr = next(e for e in events if e["type"] == "permission_request")
     assert pr["tool_name"] == "mnemo_delete_node"
@@ -101,9 +102,7 @@ def test_allow_once_runs_but_does_not_persist(store: Store) -> None:
 
 def test_allow_always_persists_grant(store: Store) -> None:
     _seed(store, "n1")
-    conv = store.create_conversation(
-        name="c", provider="fake", model="m", project_key="P1"
-    )
+    conv = store.create_conversation(name="c", provider="fake", model="m", project_key="P1")
     calls = []
     list(
         _loop(
@@ -111,8 +110,14 @@ def test_allow_always_persists_grant(store: Store) -> None:
             FakeProvider(
                 [
                     [
-                        (EV_TOOL_CALL, {"id": "t1", "name": "mnemo_create_node",
-                                        "args": {"type": "memory_feedback", "name": "x", "body": "y"}}),
+                        (
+                            EV_TOOL_CALL,
+                            {
+                                "id": "t1",
+                                "name": "mnemo_create_node",
+                                "args": {"type": "memory_feedback", "name": "x", "body": "y"},
+                            },
+                        ),
                         (EV_STOP, "tool_use"),
                     ],
                     [(EV_STOP, "end_turn")],
@@ -123,9 +128,7 @@ def test_allow_always_persists_grant(store: Store) -> None:
         ).run(conv.id, "make a note")
     )
     perms = store.list_permissions()
-    assert any(
-        p.tool_name == "mnemo_create_node" and p.project_key == "P1" for p in perms
-    )
+    assert any(p.tool_name == "mnemo_create_node" and p.project_key == "P1" for p in perms)
 
 
 def test_existing_grant_short_circuits_prompt(store: Store) -> None:
@@ -136,9 +139,7 @@ def test_existing_grant_short_circuits_prompt(store: Store) -> None:
     def cb(req):
         raise AssertionError("permission_cb must not be called when granted")
 
-    events = list(
-        _loop(store, _provider_calls_delete(), cb=cb).run(conv.id, "delete n1")
-    )
+    events = list(_loop(store, _provider_calls_delete(), cb=cb).run(conv.id, "delete n1"))
     assert store.get_node("n1") is None  # ran without prompting
     assert not any(e["type"] == "permission_request" for e in events)
 
