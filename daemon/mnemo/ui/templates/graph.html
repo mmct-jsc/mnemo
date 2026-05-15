@@ -376,23 +376,19 @@ function nebula() {
       return TYPE_COLORS[t] || TYPE_COLOR_FALLBACK;
     },
 
-    // v2.6.3: toggling links must NOT re-scatter the layout. cosmos
-    // setConfig() restarts the force simulation, so we snapshot the
-    // settled positions, flip renderLinks, then pin the positions
-    // straight back (dontRescale) and keep the sim paused. The web
-    // appears / disappears in place -- no "forced re-render".
+    // v2.6.4: toggle links by swapping the link-color buffer
+    // (alpha 0.78 <-> 0.0) via setLinkColors. This is a pure paint
+    // change -- it does NOT touch setConfig, which internally
+    // restarts the sim (the v2.6.3 "re-render forcely" + the
+    // measured ~480-unit re-flow on every toggle). No snapshot, no
+    // pause, no re-scatter, no blank canvas: the links just fade
+    // out / in while the nebula keeps drifting.
     toggleEdges() {
       this.edgesVisible = !this.edgesVisible;
-      if (this.cg && this.cg.setConfig) {
+      if (this.cg && this.cg.setLinkColors && this._linkColors) {
         try {
-          let snap = null;
-          try { snap = this.cg.getPointPositions(); } catch (_) {}
-          this.cg.setConfig({ renderLinks: this.edgesVisible });
-          if (snap && snap.length) {
-            this.cg.setPointPositions(snap, true);
-            if (this.cg.pause) this.cg.pause();
-            this.cg.render();
-          }
+          this.cg.setLinkColors(
+            this.edgesVisible ? this._linkColors : this._linkColorsOff);
         } catch (_) {}
       }
       this._persistState();
@@ -739,14 +735,25 @@ function nebula() {
       // routes_to / imports / ...) actually reads on the canvas.
       // The old single faint teal default made edges "barely seen".
       const linkColors = new Float32Array(linkCount * 4);
+      const linkColorsOff = new Float32Array(linkCount * 4);
       for (let i = 0; i < linkCount; i++) {
         const rgba = this._hexToRGBA(REL_COLORS[linkRels[i]] || '#8aa6c8');
         linkColors[i * 4]     = rgba[0];
         linkColors[i * 4 + 1] = rgba[1];
         linkColors[i * 4 + 2] = rgba[2];
-        linkColors[i * 4 + 3] = 0.66;  // visible but not overpowering
+        linkColors[i * 4 + 3] = 0.78;  // visible but not overpowering
+        // v2.6.4: the "edges off" state is the SAME buffer with
+        // alpha 0. toggleEdges swaps between these via
+        // setLinkColors -- a pure paint change, NO setConfig (which
+        // internally re-energises the sim and caused a ~480-unit
+        // re-flow on every toggle).
+        linkColorsOff[i * 4]     = rgba[0];
+        linkColorsOff[i * 4 + 1] = rgba[1];
+        linkColorsOff[i * 4 + 2] = rgba[2];
+        linkColorsOff[i * 4 + 3] = 0.0;
       }
       this._linkColors = linkColors;
+      this._linkColorsOff = linkColorsOff;
 
       // --- GPU typed-array buffers (@cosmos.gl/graph) --------------
       const n = points.length;
@@ -811,10 +818,15 @@ function nebula() {
         return;
       }
 
-      // v2.6.3: cache HIT -> apply settled positions + skip the GPU
-      // simulation entirely (the whole point of the cache: instant
-      // settled nebula, zero warm-up). cache MISS -> run the sim and
-      // PUT the converged layout back so the NEXT visit is instant.
+      // v2.6.3: cache HIT -> apply the persisted layout as the WARM
+      // START (skips the expensive cold convergence from random
+      // scatter). v2.6.4: a hit no longer FREEZES the graph -- the
+      // simulation stays perpetually alive at low energy so the
+      // nebula keeps gently drifting (user: "nodes persist moving")
+      // AND the render loop never halts (cosmos stops repainting a
+      // cooled graph, which is what made a later edge-toggle
+      // "disappear completely"). cache MISS -> full convergence,
+      // then PUT the layout so the NEXT visit is a warm start.
       const cached = this._cachedPositions;
       const useCache = cached && cached.length === this._points.length * 2;
 
@@ -843,25 +855,62 @@ function nebula() {
         // is actually visible (the old 0.11-alpha hairline was
         // "barely seen").
         linkColor: 'rgba(150, 180, 220, 0.45)',
-        linkOpacity: 0.85,
-        linkWidth: 1.4,
+        linkOpacity: 0.9,
+        linkWidth: 1.6,
         linkWidthScale: 1.0,
         linkArrows: false,
         curvedLinks: true,
+        // v2.6.4 issue 3: cosmos fades links by camera distance --
+        // default linkVisibilityDistanceRange [50,150] +
+        // linkVisibilityMinTransparency 0.25 means edges drop to
+        // 25% opacity when you ZOOM IN (camera close), full only
+        // when zoomed out. That's exactly "edge barely seen when
+        // zoomed in". Widen the range to effectively-never-fade and
+        // raise the floor so edges read at EVERY zoom level; scale
+        // link width with zoom so they stay proportional to nodes.
+        linkVisibilityDistanceRange: [1, 1000000],
+        linkVisibilityMinTransparency: 0.9,
+        scaleLinksOnZoom: true,
         renderHoveredPointRing: true,
         hoveredPointRingColor: '#7ee7e0',
         focusedPointRingColor: '#7ee7e0',
-        // -- Organic force simulation: the "nebula" motion. Only
-        //    runs on a cache MISS; a hit pins the cached positions.
-        enableSimulation: !useCache,
-        simulationGravity: 0.18,
-        simulationCenter: 0.5,
-        simulationRepulsion: 1.0,
+        // -- Organic force simulation. v2.6.4: ALWAYS enabled (even
+        //    on a cache hit). cosmos halts its rAF render loop the
+        //    moment the sim is inactive -- a halted loop is why the
+        //    graph "stopped moving" AND why a subsequent toggle
+        //    "disappeared" (no live frame to repaint into). The
+        //    PERPETUAL-MOTION mechanism is the heartbeat below
+        //    (tiny periodic alpha), NOT a slow decay -- decay stays
+        //    moderate so the COLD convergence forms a good layout
+        //    fast enough to cache (the 7 s persist snapshot). Gentle
+        //    forces + heavy friction so the perpetual drift is calm,
+        //    not a re-scatter.
+        // v2.6.4: NEVER-COOL SIM + CACHED SEED (user-chosen).
+        // cosmos.gl is converge-and-stop: it halts its rAF render
+        // loop the instant the simulation cools, which is why the
+        // nebula "stopped moving" and a later toggle could "vanish"
+        // (no live frame). Energy-injecting a COOLED sim never
+        // worked (4 measured attempts). The fix is to never let it
+        // cool: simulationDecay ~= infinity keeps alpha hot for the
+        // whole session -> the loop stays alive -> perpetual gentle
+        // motion. The cached layout is fed as the SEED (not random
+        // scatter) so load is still fast AND we're already near
+        // equilibrium, so "hot" forces only produce a calm orbital
+        // drift around the cached arrangement -- not a re-scatter.
+        // Runs on BOTH hit + miss (always alive).
+        enableSimulation: true,
+        simulationGravity: 0.12,
+        simulationCenter: 0.45,
+        simulationRepulsion: 0.9,
         simulationRepulsionTheta: 1.15,
-        simulationLinkSpring: 0.6,
+        simulationLinkSpring: 0.55,
         simulationLinkDistance: 14,
-        simulationFriction: 0.86,
-        simulationDecay: 3000,
+        // Heavier friction so the never-cooling sim is a slow calm
+        // drift, not a jitter.
+        simulationFriction: 0.9,
+        // ~1e9: alpha decays so slowly it's effectively constant
+        // for any realistic session -> the render loop never stops.
+        simulationDecay: 1000000000,
         onClick: (index) => {
           if (index === undefined || index === null) this.deselect();
           else this.selectByIndex(index);
@@ -875,10 +924,10 @@ function nebula() {
           this._scheduleLabels();
         },
         onSimulationEnd: () => {
+          // With ~infinite decay this effectively never fires; kept
+          // as a belt-and-braces persist path if cosmos ever does
+          // declare the sim ended.
           this.booting = false;
-          try { this.cg.fitView(700); } catch (_) {}
-          // Persist the converged layout so the next visit to this
-          // exact graph (scope + fingerprint) is instant.
           this._persistLayout();
           this._scheduleLabels();
         },
@@ -904,12 +953,15 @@ function nebula() {
           }
         }
         this.cg.render();
+        if (this.cg.start) {
+          // HIT: cached seed is near-equilibrium -> a low alpha is
+          // enough for perpetual gentle drift without re-scatter.
+          // MISS: full energy to converge from the random seed.
+          this.cg.start(useCache ? 0.35 : 1);
+        }
         if (useCache) {
-          // Settled instantly -- no sim. Just frame it + labels.
-          try { this.cg.fitView(0); } catch (_) {}
+          this.booting = false;
           this._scheduleLabels();
-        } else if (this.cg.start) {
-          this.cg.start();
         }
       } catch (e) {
         this.booting = false;
@@ -917,18 +969,18 @@ function nebula() {
         return;
       }
 
-      // Safety net: if onSimulationEnd never fires (a perpetually
-      // jiggling component) drop the shimmer, fit, AND still persist
-      // so a slow-to-converge graph isn't re-simulated every visit.
+      // MISS: ~7 s in, the cold convergence has shaped a good
+      // layout -- persist that snapshot as the warm seed for next
+      // time. We do NOT pause: the never-cool sim keeps the nebula
+      // alive perpetually after convergence too.
       if (!useCache) {
         setTimeout(() => {
-          if (this.booting) {
-            this.booting = false;
-            try { this.cg.fitView(700); } catch (_) {}
-            this._persistLayout();
-            this._scheduleLabels();
-          }
-        }, 8000);
+          if (!this.cg) return;
+          this.booting = false;
+          try { this.cg.fitView(700); } catch (_) {}
+          this._persistLayout();
+          this._scheduleLabels();
+        }, 7000);
       }
     },
 
