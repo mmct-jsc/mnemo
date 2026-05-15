@@ -35,17 +35,34 @@ from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from mnemo import __version__, auto_router, config, ingest, paths, retrieve, workspaces
+from mnemo import (
+    __version__,
+    auto_router,
+    chat,
+    config,
+    ingest,
+    keys,
+    paths,
+    providers,
+    retrieve,
+    workspaces,
+)
 from mnemo.api_schemas import (
     ActivateWorkspaceOut,
     ActiveProjectOut,
     ActiveWorkspaceOut,
+    ChatCreateIn,
+    ChatPatchIn,
+    ConversationDetailOut,
+    ConversationOut,
     FeedbackIn,
     FeedbackOut,
     FsSuggestOut,
     HealthOut,
     KnownProjectItem,
     KnownProjectsOut,
+    MessageAcceptedOut,
+    MessageCreateIn,
     NodeCreateIn,
     NodeOut,
     NodeUpdateIn,
@@ -158,6 +175,19 @@ class AppState:
     # fan-outs to every queue. Slow consumers drop frames (Full).
     event_subscribers: list[queue.Queue] = field(default_factory=list)
     event_subscribers_lock: threading.Lock = field(default_factory=threading.Lock)
+    # v3 phase 3: agentic chat. One in-flight AgentLoop per conversation
+    # -- the per-conv lock is acquired by GET /v1/chat/<id>/events for
+    # the duration of the run; POST .../message 409s if it's held.
+    # ``chat_pending`` stashes the user's text between POST .../message
+    # and the SSE GET that actually runs the loop. ``chat_cancel`` is a
+    # per-conv Event the loop checks between iterations.
+    # ``chat_provider_factory`` defaults to providers.get_provider;
+    # tests inject a scripted provider here (same pattern as the
+    # injectable store/embedder).
+    chat_locks: dict[str, threading.Lock] = field(default_factory=dict)
+    chat_pending: dict[str, str] = field(default_factory=dict)
+    chat_cancel: dict[str, threading.Event] = field(default_factory=dict)
+    chat_provider_factory: object | None = None
 
 
 # v2.6 phase 5: workspace activation caps.
@@ -230,6 +260,27 @@ def _workspace_node_count(store: Store, project_keys: list[str]) -> int:
         per = store.count_nodes(project_key=key, include_base=True)
         total += sum(per.values())
     return total
+
+
+def _chat_lock(state: AppState, conv_id: str) -> threading.Lock:
+    """Per-conversation lock so only one AgentLoop runs at a time for a
+    given conversation (design S5 concurrency). Lazily created; held by
+    GET /v1/chat/<id>/events for the run's duration."""
+    with state.event_subscribers_lock:  # reuse the existing mutex as the registry guard
+        lock = state.chat_locks.get(conv_id)
+        if lock is None:
+            lock = threading.Lock()
+            state.chat_locks[conv_id] = lock
+    return lock
+
+
+def _chat_provider(state: AppState, name: str):
+    """Construct a provider, honoring an injected test factory."""
+    factory = state.chat_provider_factory
+    if factory is not None:
+        return factory(name)
+    api_key = keys.resolve_api_key(name)
+    return providers.get_provider(name, api_key=api_key)
 
 
 def create_app(*, store: Store | None = None, embedder: Embedder | None = None) -> FastAPI:
@@ -1238,6 +1289,144 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
     def reset_config() -> dict:
         config.reset()
         return get_config()
+
+    # --- Chat (v3) --------------------------------------------------------
+
+    @v1.get("/chat", response_model=list[ConversationOut])
+    def list_chat(
+        project_key: str | None = None,
+        include_archived: bool = False,
+        s: Store = Depends(get_store),
+    ) -> list[ConversationOut]:
+        return [
+            ConversationOut.from_conversation(c)
+            for c in s.list_conversations(
+                project_key=project_key, include_archived=include_archived
+            )
+        ]
+
+    @v1.post("/chat", response_model=ConversationOut)
+    def create_chat(body: ChatCreateIn, s: Store = Depends(get_store)) -> ConversationOut:
+        provider = body.provider or "anthropic"
+        model = body.model or providers.DEFAULT_MODELS.get(
+            provider, providers.DEFAULT_MODELS["anthropic"]
+        )
+        conv = s.create_conversation(
+            name=body.name or "New chat",
+            provider=provider,
+            model=model,
+            project_key=body.project_key,
+            page_context=body.page_context,
+        )
+        return ConversationOut.from_conversation(conv)
+
+    @v1.get("/chat/{conv_id}", response_model=ConversationDetailOut)
+    def get_chat(conv_id: str, s: Store = Depends(get_store)) -> ConversationDetailOut:
+        conv = s.get_conversation(conv_id)
+        if conv is None:
+            raise HTTPException(status_code=404, detail="conversation not found")
+        return ConversationDetailOut.from_conversation_and_messages(conv, s.list_messages(conv_id))
+
+    @v1.patch("/chat/{conv_id}", response_model=ConversationOut)
+    def patch_chat(
+        conv_id: str, body: ChatPatchIn, s: Store = Depends(get_store)
+    ) -> ConversationOut:
+        conv = s.rename_conversation(
+            conv_id,
+            name=body.name,
+            provider=body.provider,
+            model=body.model,
+            page_context=body.page_context,
+        )
+        if conv is None:
+            raise HTTPException(status_code=404, detail="conversation not found")
+        return ConversationOut.from_conversation(conv)
+
+    @v1.delete("/chat/{conv_id}")
+    def delete_chat(conv_id: str, s: Store = Depends(get_store)) -> dict:
+        if s.get_conversation(conv_id) is None:
+            raise HTTPException(status_code=404, detail="conversation not found")
+        s.archive_conversation(conv_id)
+        return {"ok": True, "archived": conv_id}
+
+    @v1.post("/chat/{conv_id}/message", response_model=MessageAcceptedOut)
+    def post_message(
+        conv_id: str, body: MessageCreateIn, s: Store = Depends(get_store)
+    ) -> MessageAcceptedOut:
+        if s.get_conversation(conv_id) is None:
+            raise HTTPException(status_code=404, detail="conversation not found")
+        stream_url = f"/v1/chat/{conv_id}/events"
+        lock = _chat_lock(state, conv_id)
+        if lock.locked():
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "a run is already in flight for this conversation",
+                    "stream_url": stream_url,
+                },
+            )
+        # Stash the user's text; the SSE GET runs the loop (which
+        # persists the user message + streams the run).
+        state.chat_pending[conv_id] = body.text
+        return MessageAcceptedOut(stream_url=stream_url, conversation_id=conv_id)
+
+    @v1.get("/chat/{conv_id}/events")
+    def chat_events(conv_id: str, s: Store = Depends(get_store)) -> StreamingResponse:
+        """SSE of the in-flight agent run. Frame format mirrors the
+        reindex stream: ``event: <type>\\ndata: <json>\\n\\n``. One run
+        per conversation -- a second connection while one is live gets a
+        single ``busy`` frame; no pending message gets ``idle``."""
+        conv = s.get_conversation(conv_id)
+        if conv is None:
+            raise HTTPException(status_code=404, detail="conversation not found")
+
+        def encode(name: str, payload: dict) -> bytes:
+            return f"event: {name}\ndata: {json.dumps(payload)}\n\n".encode()
+
+        def gen() -> Iterator[bytes]:
+            lock = _chat_lock(state, conv_id)
+            if not lock.acquire(blocking=False):
+                yield encode("busy", {"conversation_id": conv_id})
+                return
+            cancel = state.chat_cancel.setdefault(conv_id, threading.Event())
+            cancel.clear()
+            try:
+                pending = state.chat_pending.pop(conv_id, None)
+                if pending is None:
+                    yield encode("idle", {"conversation_id": conv_id})
+                    return
+                try:
+                    provider = _chat_provider(state, conv.provider)
+                except Exception as exc:  # key/construction failure
+                    yield encode("error", {"type": "error", "message": str(exc)})
+                    return
+                loop = chat.AgentLoop(
+                    s,
+                    provider,
+                    embedder=state.embedder,
+                    model=conv.model,
+                    project_key=conv.project_key,
+                )
+                for ev in loop.run(conv_id, pending):
+                    yield encode(ev["type"], ev)
+                    if cancel.is_set():
+                        yield encode("cancelled", {"type": "cancelled"})
+                        break
+            finally:
+                lock.release()
+
+        return StreamingResponse(
+            gen(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+        )
+
+    @v1.post("/chat/{conv_id}/cancel")
+    def cancel_chat(conv_id: str, s: Store = Depends(get_store)) -> dict:
+        if s.get_conversation(conv_id) is None:
+            raise HTTPException(status_code=404, detail="conversation not found")
+        state.chat_cancel.setdefault(conv_id, threading.Event()).set()
+        return {"ok": True, "cancelled": conv_id}
 
     app.include_router(v1)
 
