@@ -24,13 +24,15 @@ from __future__ import annotations
 
 import fnmatch
 import json
+import time
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from mnemo import retrieve
-from mnemo.store import NODE_TYPES, Store
+from mnemo import config, retrieve
+from mnemo.store import NODE_TYPES, Node, Store, signal_for_reason
 
 RISK_SAFE = "safe"
 RISK_CONFIRM = "confirm"
@@ -399,3 +401,196 @@ def _mnemo_get_code_lines(ctx: ToolContext, *, source_path: str, start: int, end
         "end": end,
         "lines": "\n".join(slice_),
     }
+
+
+# --- write / exec tools (confirm) ---------------------------------------
+
+
+@_tool(
+    name="mnemo_create_node",
+    risk=RISK_CONFIRM,
+    description="Create a new memory node. Reindex picks it up later.",
+    parameters=_obj(
+        {
+            "type": {"type": "string"},
+            "name": {"type": "string"},
+            "body": {"type": "string"},
+            "frontmatter": {"type": ["object", "null"]},
+            "project_key": {"type": ["string", "null"]},
+        },
+        ["type", "name", "body"],
+    ),
+)
+def _mnemo_create_node(
+    ctx: ToolContext,
+    *,
+    type: str,
+    name: str,
+    body: str,
+    frontmatter: dict | None = None,
+    project_key: str | None = None,
+) -> dict:
+    node = Node.new(
+        type=type,
+        name=name,
+        body=body,
+        source_path=f"mnemo-chat://{uuid.uuid4().hex}.md",
+        source_kind="memory_dir",
+        description=(frontmatter or {}).get("description"),
+        project_key=project_key,
+        frontmatter_json=json.dumps(frontmatter) if frontmatter else None,
+    )
+    ctx.store.upsert_node(node)
+    return {"node_id": node.id, "type": node.type, "name": node.name}
+
+
+@_tool(
+    name="mnemo_update_node",
+    risk=RISK_CONFIRM,
+    description="Patch a node's name / description / body / frontmatter.",
+    parameters=_obj(
+        {"node_id": {"type": "string"}, "fields": {"type": "object"}},
+        ["node_id", "fields"],
+    ),
+)
+def _mnemo_update_node(ctx: ToolContext, *, node_id: str, fields: dict) -> dict:
+    n = ctx.store.get_node(node_id)
+    if n is None:
+        return {"error": "node not found", "node_id": node_id}
+    applied: list[str] = []
+    for key in ("name", "description", "body"):
+        if key in fields:
+            setattr(n, key, fields[key])
+            applied.append(key)
+    if "frontmatter" in fields:
+        n.frontmatter_json = json.dumps(fields["frontmatter"])
+        applied.append("frontmatter")
+    n.updated_at = int(time.time())
+    ctx.store.upsert_node(n)
+    return {"node_id": node_id, "updated": applied}
+
+
+@_tool(
+    name="mnemo_thumbs_feedback",
+    risk=RISK_CONFIRM,
+    description="Register a thumbs up/down on a retrieval hit.",
+    parameters=_obj(
+        {
+            "node_id": {"type": "string"},
+            "direction": {"type": "string", "enum": ["up", "down"]},
+            "query_id": {"type": ["string", "null"]},
+        },
+        ["node_id", "direction"],
+    ),
+)
+def _mnemo_thumbs_feedback(
+    ctx: ToolContext,
+    *,
+    node_id: str,
+    direction: str,
+    query_id: str | None = None,
+) -> dict:
+    if ctx.store.get_node(node_id) is None:
+        return {"error": "node not found", "node_id": node_id}
+    reason = "thumbs_up" if direction == "up" else "thumbs_down"
+    try:
+        ctx.store.log_feedback_event(
+            query_id=query_id or "chat-companion",
+            node_id=node_id,
+            signal=signal_for_reason(reason),
+            reason=reason,
+        )
+        logged = True
+    except Exception:
+        # No backing query row (chat-originated) -> best-effort only.
+        logged = False
+    return {"ok": True, "node_id": node_id, "direction": direction, "logged": logged}
+
+
+@_tool(
+    name="mnemo_add_source",
+    risk=RISK_CONFIRM,
+    description="Register a new indexing source (memory_dir / code_repo / ...).",
+    parameters=_obj(
+        {
+            "path": {"type": "string"},
+            "kind": {"type": "string"},
+            "project_key": {"type": ["string", "null"]},
+        },
+        ["path", "kind"],
+    ),
+)
+def _mnemo_add_source(
+    ctx: ToolContext, *, path: str, kind: str, project_key: str | None = None
+) -> dict:
+    ctx.store.register_source(path, kind, project_key=project_key)
+    return {"ok": True, "path": path, "kind": kind}
+
+
+@_tool(
+    name="mnemo_reindex_source",
+    risk=RISK_CONFIRM,
+    description=(
+        "Acknowledge a reindex request. The actual reindex runs via the "
+        "daemon's /v1/reindex SSE channel (a tool must not block on it)."
+    ),
+    parameters=_obj(
+        {"source_path": {"type": ["string", "null"]}},
+        [],
+    ),
+)
+def _mnemo_reindex_source(
+    ctx: ToolContext, *, source_path: str | None = None
+) -> dict:
+    return {
+        "status": "queued",
+        "source_path": source_path,
+        "note": "trigger /v1/reindex (SSE) to run it; this tool only acknowledges",
+    }
+
+
+# --- danger tools (always prompt, no allow-always) ----------------------
+
+
+@_tool(
+    name="mnemo_delete_node",
+    risk=RISK_DANGER,
+    description="Permanently delete a node (cascades its edges).",
+    parameters=_obj({"node_id": {"type": "string"}}, ["node_id"]),
+)
+def _mnemo_delete_node(ctx: ToolContext, *, node_id: str) -> dict:
+    ctx.store.delete_node(node_id)
+    return {"deleted": node_id}
+
+
+@_tool(
+    name="mnemo_remove_source",
+    risk=RISK_DANGER,
+    description="Unregister a source + cascade-clean its nodes.",
+    parameters=_obj({"path": {"type": "string"}}, ["path"]),
+)
+def _mnemo_remove_source(ctx: ToolContext, *, path: str) -> dict:
+    rows = ctx.store.remove_source(path)
+    return {"removed": path, "rows": rows}
+
+
+@_tool(
+    name="mnemo_purge_conversation",
+    risk=RISK_DANGER,
+    description="Wipe a chat conversation + all its messages.",
+    parameters=_obj({"conv_id": {"type": "string"}}, ["conv_id"]),
+)
+def _mnemo_purge_conversation(ctx: ToolContext, *, conv_id: str) -> dict:
+    ctx.store.purge_conversation(conv_id)
+    return {"purged": conv_id}
+
+
+@_tool(
+    name="mnemo_change_settings",
+    risk=RISK_DANGER,
+    description="Mutate settings.json (scoring / retention / ...).",
+    parameters=_obj({"patch": {"type": "object"}}, ["patch"]),
+)
+def _mnemo_change_settings(ctx: ToolContext, *, patch: dict) -> dict:
+    config.update(patch)
+    return {"ok": True, "applied": sorted(patch.keys())}

@@ -53,6 +53,7 @@ from mnemo.api_schemas import (
     ActiveWorkspaceOut,
     ChatCreateIn,
     ChatPatchIn,
+    ChatPermitIn,
     ConversationDetailOut,
     ConversationOut,
     FeedbackIn,
@@ -188,6 +189,12 @@ class AppState:
     chat_pending: dict[str, str] = field(default_factory=dict)
     chat_cancel: dict[str, threading.Event] = field(default_factory=dict)
     chat_provider_factory: object | None = None
+    # v3 phase 4: permission pause/resume. The /events permission_cb
+    # blocks on chat_permit_event[conv] after the loop yields a
+    # permission_request frame; POST .../permit records the decision
+    # here and signals the Event so the loop resumes the same iteration.
+    chat_permit: dict[str, dict] = field(default_factory=dict)
+    chat_permit_event: dict[str, threading.Event] = field(default_factory=dict)
 
 
 # v2.6 phase 5: workspace activation caps.
@@ -1400,12 +1407,27 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
                 except Exception as exc:  # key/construction failure
                     yield encode("error", {"type": "error", "message": str(exc)})
                     return
+                def permission_cb(req: dict) -> str:
+                    # The loop already yielded the permission_request
+                    # frame; block here until POST .../permit records a
+                    # decision (or cancel denies it). 5 min ceiling.
+                    evt = state.chat_permit_event.setdefault(
+                        conv_id, threading.Event()
+                    )
+                    evt.clear()
+                    if not evt.wait(timeout=300):
+                        return "deny"
+                    return (state.chat_permit.get(conv_id) or {}).get(
+                        "decision", "deny"
+                    )
+
                 loop = chat.AgentLoop(
                     s,
                     provider,
                     embedder=state.embedder,
                     model=conv.model,
                     project_key=conv.project_key,
+                    permission_cb=permission_cb,
                 )
                 for ev in loop.run(conv_id, pending):
                     yield encode(ev["type"], ev)
@@ -1421,11 +1443,31 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
             headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
         )
 
+    @v1.post("/chat/{conv_id}/permit")
+    def permit_chat(
+        conv_id: str, body: ChatPermitIn, s: Store = Depends(get_store)
+    ) -> dict:
+        """Grant or deny a pending permission request. The decision is
+        delivered to the blocked agent loop; ``allow_always`` is
+        persisted to ``chat_permissions`` by the loop itself (design
+        S4)."""
+        if s.get_conversation(conv_id) is None:
+            raise HTTPException(status_code=404, detail="conversation not found")
+        state.chat_permit[conv_id] = {
+            "permission_id": body.permission_id,
+            "decision": body.decision,
+        }
+        state.chat_permit_event.setdefault(conv_id, threading.Event()).set()
+        return {"ok": True, "decision": body.decision}
+
     @v1.post("/chat/{conv_id}/cancel")
     def cancel_chat(conv_id: str, s: Store = Depends(get_store)) -> dict:
         if s.get_conversation(conv_id) is None:
             raise HTTPException(status_code=404, detail="conversation not found")
         state.chat_cancel.setdefault(conv_id, threading.Event()).set()
+        # also release a blocked permission wait with an implicit deny
+        state.chat_permit[conv_id] = {"permission_id": "", "decision": "deny"}
+        state.chat_permit_event.setdefault(conv_id, threading.Event()).set()
         return {"ok": True, "cancelled": conv_id}
 
     app.include_router(v1)

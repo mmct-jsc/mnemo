@@ -132,3 +132,31 @@ def test_events_idle_when_nothing_pending(client: TestClient) -> None:
     ev = client.get(f"/v1/chat/{cid}/events")
     assert ev.status_code == 200
     assert "event: idle" in ev.text
+
+
+def test_permit_records_decision_and_404s_unknown(client: TestClient) -> None:
+    cid = _new_conv(client, name="c")["id"]
+    r = client.post(
+        f"/v1/chat/{cid}/permit",
+        json={"permission_id": "t1", "decision": "allow_always"},
+    )
+    assert r.status_code == 200
+    assert r.json()["decision"] == "allow_always"
+    state = client.app.state.mnemo_state
+    assert state.chat_permit[cid]["decision"] == "allow_always"
+
+    assert (
+        client.post(
+            "/v1/chat/nope/permit",
+            json={"permission_id": "x", "decision": "deny"},
+        ).status_code
+        == 404
+    )
+    # schema rejects an invalid decision
+    assert (
+        client.post(
+            f"/v1/chat/{cid}/permit",
+            json={"permission_id": "x", "decision": "maybe"},
+        ).status_code
+        == 422
+    )

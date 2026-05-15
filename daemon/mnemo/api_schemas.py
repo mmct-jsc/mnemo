@@ -683,3 +683,11 @@ class MessageAcceptedOut(BaseModel):
 
     stream_url: str
     conversation_id: str
+
+
+class ChatPermitIn(BaseModel):
+    """``POST /v1/chat/<id>/permit`` -- grant or deny a pending
+    permission request (design S4)."""
+
+    permission_id: str
+    decision: str = Field(pattern="^(allow_once|allow_always|deny)$")

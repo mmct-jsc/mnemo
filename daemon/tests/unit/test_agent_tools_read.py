@@ -70,9 +70,13 @@ def test_registry_exposes_exactly_the_six_safe_read_tools() -> None:
         assert callable(spec.fn)
 
 
-def test_only_safe_tools_in_phase1() -> None:
-    """Phase 1 ships read-only. No confirm/danger tools yet (phase 4)."""
-    assert {s.risk for s in TOOLS.values()} == {"safe"}
+def test_read_tools_are_all_safe() -> None:
+    """The 6 read tools are always ``safe`` (auto-run, never prompted).
+    Phase 4 added confirm/danger tools, so the registry now spans all
+    three tiers -- but every read tool stays safe."""
+    for name in SAFE_READ_TOOLS:
+        assert TOOLS[name].risk == "safe", name
+    assert {s.risk for s in TOOLS.values()} == {"safe", "confirm", "danger"}
 
 
 def test_every_tool_output_is_json_serialisable(store: Store) -> None:
