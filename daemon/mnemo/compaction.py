@@ -11,9 +11,11 @@ Two paths, picked by the agent loop:
     ``AgentLoop`` -- this module only owns the *decision* + the
     provider-agnostic fallback.
   * **fallback** -- everything else: summarize the oldest turns into a
-    single pinned ``system`` message and keep the recent tail. Bounded,
-    deterministic, model-agnostic. This is the workhorse (the project
-    default model ``claude-sonnet-4-5`` is NOT compaction-capable).
+    single pinned ``user`` message (a ``system``-role message mid-list
+    is silently dropped by every provider translator) and keep the
+    recent tail. Bounded, deterministic, model-agnostic. This is the
+    workhorse (the default model ``claude-sonnet-4-5`` is NOT
+    compaction-capable).
 
 UI history pagination and model-context compaction are SEPARATE
 concerns (design decided fork 3): this only bounds what the model
@@ -109,8 +111,13 @@ def summarize_prefix(
         for m in prefix
     )
     summary = _collect_text(provider, model, serialized)
+    # The pin MUST ride a role the provider protocol actually delivers.
+    # A mid-list {'role':'system'} message is silently dropped by every
+    # translator (Anthropic/OpenAI/Google/Ollama only emit
+    # user/assistant/tool), which would defeat the whole fallback. Use a
+    # user turn with an explicit bracket marker.
     pinned = {
-        "role": "system",
+        "role": "user",
         "content": f"[earlier conversation summary]\n{summary}",
     }
     return [pinned, *tail], summary
