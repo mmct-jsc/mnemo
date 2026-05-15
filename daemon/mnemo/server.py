@@ -51,6 +51,8 @@ from mnemo.api_schemas import (
     ActivateWorkspaceOut,
     ActiveProjectOut,
     ActiveWorkspaceOut,
+    ChatBookmarkIn,
+    ChatBookmarkOut,
     ChatCreateIn,
     ChatPatchIn,
     ChatPermitIn,
@@ -65,6 +67,7 @@ from mnemo.api_schemas import (
     KnownProjectsOut,
     MessageAcceptedOut,
     MessageCreateIn,
+    MessagesPageOut,
     NodeCreateIn,
     NodeOut,
     NodeUpdateIn,
@@ -207,6 +210,11 @@ class AppState:
 # Settings.workspaces section.
 DEFAULT_SOFT_CAP_NODES = 75_000
 DEFAULT_HARD_CAP_NODES = 200_000
+
+# v3.1: chat history is paginated -- GET /chat/<id> returns the latest
+# window, /chat/<id>/messages pages older turns (the model context is
+# bounded separately by compaction).
+CHAT_PAGE_DEFAULT = 30
 
 
 def _broadcast_event(state: AppState, name: str, payload: dict) -> None:
@@ -1335,7 +1343,65 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
         conv = s.get_conversation(conv_id)
         if conv is None:
             raise HTTPException(status_code=404, detail="conversation not found")
-        return ConversationDetailOut.from_conversation_and_messages(conv, s.list_messages(conv_id))
+        # v3.1: only the LATEST window (the model context is bounded
+        # separately by compaction). Older turns load via /messages.
+        total = s.count_messages(conv_id)
+        window = s.list_messages(conv_id, limit=CHAT_PAGE_DEFAULT)
+        bm = {b.message_seq for b in s.list_bookmarks(conv_id)}
+        return ConversationDetailOut.from_conversation_and_messages(
+            conv,
+            window,
+            total=total,
+            has_more=total > len(window),
+            bookmarked_seqs=bm,
+        )
+
+    @v1.get("/chat/{conv_id}/messages", response_model=MessagesPageOut)
+    def get_chat_messages(
+        conv_id: str,
+        before: int | None = None,
+        limit: int = CHAT_PAGE_DEFAULT,
+        s: Store = Depends(get_store),
+    ) -> MessagesPageOut:
+        """One older page (oldest-first) for lazy scroll-up. ``before``
+        = the oldest seq currently shown; omit for the latest window.
+        Paginates in SQL per reference_mnemo_pagination.md."""
+        if s.get_conversation(conv_id) is None:
+            raise HTTPException(status_code=404, detail="conversation not found")
+        limit = max(1, min(limit, 200))
+        page = s.list_messages(conv_id, before_seq=before, limit=limit)
+        bm = {b.message_seq for b in s.list_bookmarks(conv_id)}
+        # seq is contiguous (0..total-1; purge drops the whole conv), so
+        # an older page exists iff the oldest returned seq is not 0.
+        has_more = bool(page) and page[0].seq > 0
+        return MessagesPageOut.build(
+            page,
+            total=s.count_messages(conv_id),
+            has_more=has_more,
+            bookmarked_seqs=bm,
+        )
+
+    @v1.get("/chat/{conv_id}/bookmarks", response_model=list[ChatBookmarkOut])
+    def list_chat_bookmarks(conv_id: str, s: Store = Depends(get_store)) -> list[ChatBookmarkOut]:
+        if s.get_conversation(conv_id) is None:
+            raise HTTPException(status_code=404, detail="conversation not found")
+        return [ChatBookmarkOut.from_bookmark(b) for b in s.list_bookmarks(conv_id)]
+
+    @v1.post("/chat/{conv_id}/bookmarks", response_model=ChatBookmarkOut)
+    def add_chat_bookmark(
+        conv_id: str, body: ChatBookmarkIn, s: Store = Depends(get_store)
+    ) -> ChatBookmarkOut:
+        if s.get_conversation(conv_id) is None:
+            raise HTTPException(status_code=404, detail="conversation not found")
+        bm = s.add_bookmark(conv_id, message_seq=body.message_seq, label=body.label)
+        return ChatBookmarkOut.from_bookmark(bm)
+
+    @v1.delete("/chat/{conv_id}/bookmarks/{bookmark_id}")
+    def delete_chat_bookmark(conv_id: str, bookmark_id: str, s: Store = Depends(get_store)) -> dict:
+        if s.get_conversation(conv_id) is None:
+            raise HTTPException(status_code=404, detail="conversation not found")
+        s.delete_bookmark(bookmark_id)
+        return {"ok": True, "deleted": bookmark_id}
 
     @v1.patch("/chat/{conv_id}", response_model=ConversationOut)
     def patch_chat(

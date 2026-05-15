@@ -14,6 +14,7 @@ from mnemo.ingest import ReindexReport
 from mnemo.retrieve import RetrievalResult
 from mnemo.store import (
     ActiveProject,
+    ChatBookmark,
     ChatMessage,
     Conversation,
     FeedbackEvent,
@@ -626,9 +627,15 @@ class ChatMessageOut(BaseModel):
     role: str
     content: dict
     created_at: int
+    # v3.1: per-turn provider usage (NULL on legacy/unmeasured rows)
+    # + whether the user has bookmarked this turn.
+    token_in: int | None = None
+    token_out: int | None = None
+    cache_read: int | None = None
+    bookmarked: bool = False
 
     @classmethod
-    def from_message(cls, m: ChatMessage) -> ChatMessageOut:
+    def from_message(cls, m: ChatMessage, *, bookmarked: bool = False) -> ChatMessageOut:
         return cls(
             id=m.id,
             conversation_id=m.conversation_id,
@@ -636,7 +643,34 @@ class ChatMessageOut(BaseModel):
             role=m.role,
             content=m.content,
             created_at=m.created_at,
+            token_in=m.token_in,
+            token_out=m.token_out,
+            cache_read=m.cache_read,
+            bookmarked=bookmarked,
         )
+
+
+class ChatBookmarkOut(BaseModel):
+    id: str
+    conversation_id: str
+    message_seq: int
+    label: str | None
+    created_at: int
+
+    @classmethod
+    def from_bookmark(cls, b: ChatBookmark) -> ChatBookmarkOut:
+        return cls(
+            id=b.id,
+            conversation_id=b.conversation_id,
+            message_seq=b.message_seq,
+            label=b.label,
+            created_at=b.created_at,
+        )
+
+
+class ChatBookmarkIn(BaseModel):
+    message_seq: int = Field(ge=0)
+    label: str | None = None
 
 
 class ConversationOut(BaseModel):
@@ -649,6 +683,7 @@ class ConversationOut(BaseModel):
     created_at: int
     updated_at: int
     archived_at: int | None
+    tokens_total: int = 0  # v3.1: running token counter (budget chip)
 
     @classmethod
     def from_conversation(cls, c: Conversation) -> ConversationOut:
@@ -662,20 +697,62 @@ class ConversationOut(BaseModel):
             created_at=c.created_at,
             updated_at=c.updated_at,
             archived_at=c.archived_at,
+            tokens_total=c.tokens_total,
         )
 
 
 class ConversationDetailOut(ConversationOut):
-    """``GET /v1/chat/<id>`` -- metadata + the full message log."""
+    """``GET /v1/chat/<id>`` -- metadata + the LATEST window of messages
+    (v3.1: paginated; older turns load via /messages). ``total`` /
+    ``has_more`` describe the full log so the UI can lazy scroll-up."""
 
     messages: list[ChatMessageOut]
+    total: int = 0
+    has_more: bool = False
 
     @classmethod
     def from_conversation_and_messages(
-        cls, c: Conversation, messages: list[ChatMessage]
+        cls,
+        c: Conversation,
+        messages: list[ChatMessage],
+        *,
+        total: int | None = None,
+        has_more: bool = False,
+        bookmarked_seqs: set[int] | None = None,
     ) -> ConversationDetailOut:
         base = ConversationOut.from_conversation(c).model_dump()
-        return cls(**base, messages=[ChatMessageOut.from_message(m) for m in messages])
+        bset = bookmarked_seqs or set()
+        return cls(
+            **base,
+            total=len(messages) if total is None else total,
+            has_more=has_more,
+            messages=[ChatMessageOut.from_message(m, bookmarked=m.seq in bset) for m in messages],
+        )
+
+
+class MessagesPageOut(BaseModel):
+    """``GET /v1/chat/<id>/messages?before=&limit=`` -- one older page,
+    oldest-first, plus the full-log counters."""
+
+    messages: list[ChatMessageOut]
+    total: int
+    has_more: bool
+
+    @classmethod
+    def build(
+        cls,
+        messages: list[ChatMessage],
+        *,
+        total: int,
+        has_more: bool,
+        bookmarked_seqs: set[int] | None = None,
+    ) -> MessagesPageOut:
+        bset = bookmarked_seqs or set()
+        return cls(
+            total=total,
+            has_more=has_more,
+            messages=[ChatMessageOut.from_message(m, bookmarked=m.seq in bset) for m in messages],
+        )
 
 
 class MessageAcceptedOut(BaseModel):

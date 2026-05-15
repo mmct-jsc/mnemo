@@ -160,3 +160,95 @@ def test_permit_records_decision_and_404s_unknown(client: TestClient) -> None:
         ).status_code
         == 422
     )
+
+
+# ======================================================================
+# v3.1 phase 5: paginated history + bookmarks API + DetailOut deltas.
+# Design 2026-05-15-mnemo-v3.1 S3.4. GET returns only the LATEST window
+# (model context is bounded separately by compaction). Older turns load
+# via the dedicated pagination endpoint (reference_mnemo_pagination.md).
+# ======================================================================
+
+
+def _seed_messages(store: Store, conv_id: str, n: int) -> None:
+    for i in range(n):
+        role = "user" if i % 2 == 0 else "assistant"
+        store.append_message(conv_id, role=role, content={"text": f"m{i}"})
+
+
+def test_get_chat_returns_latest_window_with_total_and_has_more(
+    client: TestClient, store: Store
+) -> None:
+    conv = store.create_conversation(name="c", provider="scripted", model="m")
+    _seed_messages(store, conv.id, 35)
+    body = client.get(f"/v1/chat/{conv.id}").json()
+    seqs = [m["seq"] for m in body["messages"]]
+    assert len(seqs) == 30  # default window
+    assert seqs == list(range(5, 35))  # the LATEST 30, ascending
+    assert body["total"] == 35
+    assert body["has_more"] is True
+
+
+def test_messages_pagination_endpoint_returns_older_window(
+    client: TestClient, store: Store
+) -> None:
+    conv = store.create_conversation(name="c", provider="scripted", model="m")
+    _seed_messages(store, conv.id, 35)
+    r = client.get(f"/v1/chat/{conv.id}/messages", params={"before": 10, "limit": 5})
+    assert r.status_code == 200
+    body = r.json()
+    assert [m["seq"] for m in body["messages"]] == [5, 6, 7, 8, 9]
+    assert body["total"] == 35
+    assert body["has_more"] is True  # seqs 0..4 still older
+    # walk to the very start -> no more older
+    first = client.get(f"/v1/chat/{conv.id}/messages", params={"before": 5, "limit": 10}).json()
+    assert [m["seq"] for m in first["messages"]] == [0, 1, 2, 3, 4]
+    assert first["has_more"] is False
+
+
+def test_detail_message_carries_tokens_and_bookmarked_flag(
+    client: TestClient, store: Store
+) -> None:
+    conv = store.create_conversation(name="c", provider="scripted", model="m")
+    store.append_message(conv.id, role="user", content={"text": "q"})
+    store.append_message(
+        conv.id,
+        role="assistant",
+        content={"text": "a"},
+        token_in=120,
+        token_out=30,
+        cache_read=80,
+    )
+    store.bump_tokens(conv.id, delta=150)
+    store.add_bookmark(conv.id, message_seq=1, label="the answer")
+
+    body = client.get(f"/v1/chat/{conv.id}").json()
+    assert body["tokens_total"] == 150
+    m0, m1 = body["messages"]
+    assert m0["bookmarked"] is False
+    assert m1["bookmarked"] is True
+    assert m1["token_in"] == 120
+    assert m1["token_out"] == 30
+    assert m1["cache_read"] == 80
+
+
+def test_bookmarks_crud_roundtrip(client: TestClient, store: Store) -> None:
+    conv = store.create_conversation(name="c", provider="scripted", model="m")
+    _seed_messages(store, conv.id, 3)
+
+    created = client.post(f"/v1/chat/{conv.id}/bookmarks", json={"message_seq": 2, "label": "here"})
+    assert created.status_code == 200, created.text
+    bm_id = created.json()["id"]
+    assert created.json()["message_seq"] == 2
+
+    listed = client.get(f"/v1/chat/{conv.id}/bookmarks").json()
+    assert [b["id"] for b in listed] == [bm_id]
+
+    assert client.delete(f"/v1/chat/{conv.id}/bookmarks/{bm_id}").status_code == 200
+    assert client.get(f"/v1/chat/{conv.id}/bookmarks").json() == []
+
+
+def test_bookmarks_endpoints_404_unknown_conversation(client: TestClient) -> None:
+    assert client.get("/v1/chat/nope/bookmarks").status_code == 404
+    assert client.post("/v1/chat/nope/bookmarks", json={"message_seq": 0}).status_code == 404
+    assert client.get("/v1/chat/nope/messages").status_code == 404
