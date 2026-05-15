@@ -216,6 +216,17 @@ class AgentLoop:
                                 project_key=self._project_key, tool_name=name
                             )
                         result = spec.fn(ctx, **args)
+                # UI-directive tools (design S11): the daemon does not
+                # execute them -- emit a ui_action for the chat UI to
+                # dispatch and ack the model so it continues.
+                if isinstance(result, dict) and "_ui_action" in result:
+                    ua = result["_ui_action"]
+                    yield {
+                        "type": "ui_action",
+                        "action": ua["action"],
+                        "args": ua.get("args", {}),
+                    }
+                    result = {"ui_action_dispatched": ua["action"]}
                 self._store.append_message(
                     conv_id,
                     role="tool_call",

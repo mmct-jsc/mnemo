@@ -594,3 +594,69 @@ def _mnemo_purge_conversation(ctx: ToolContext, *, conv_id: str) -> dict:
 def _mnemo_change_settings(ctx: ToolContext, *, patch: dict) -> dict:
     config.update(patch)
     return {"ok": True, "applied": sorted(patch.keys())}
+
+
+# --- UI-directive tools (confirm, client-side) --------------------------
+#
+# The daemon does NOT execute these (design S3/S11). The fn returns a
+# ``_ui_action`` sentinel; the agent loop turns it into a ``ui_action``
+# SSE event the chat UI dispatches, and feeds the model a 'dispatched'
+# ack so it continues. They're still ``confirm`` risk -> permission-
+# gated like any other mutating tool.
+
+
+def _ui(action: str, args: dict) -> dict:
+    return {"_ui_action": {"action": action, "args": args}}
+
+
+@_tool(
+    name="mnemo_navigate",
+    risk=RISK_CONFIRM,
+    description="Navigate the browser to a mnemo path (e.g. /graph).",
+    parameters=_obj({"path": {"type": "string"}}, ["path"]),
+)
+def _mnemo_navigate(ctx: ToolContext, *, path: str) -> dict:
+    return _ui("navigate", {"path": path})
+
+
+@_tool(
+    name="mnemo_select_node",
+    risk=RISK_CONFIRM,
+    description="Select/focus a node on the current Nebula or /code view.",
+    parameters=_obj({"node_id": {"type": "string"}}, ["node_id"]),
+)
+def _mnemo_select_node(ctx: ToolContext, *, node_id: str) -> dict:
+    return _ui("select_node", {"node_id": node_id})
+
+
+@_tool(
+    name="mnemo_set_filter",
+    risk=RISK_CONFIRM,
+    description="Apply a type / confidence / layout filter on the view.",
+    parameters=_obj(
+        {"filter_kind": {"type": "string"}, "value": {"type": "string"}},
+        ["filter_kind", "value"],
+    ),
+)
+def _mnemo_set_filter(ctx: ToolContext, *, filter_kind: str, value: str) -> dict:
+    return _ui("set_filter", {"filter_kind": filter_kind, "value": value})
+
+
+@_tool(
+    name="mnemo_scroll_to",
+    risk=RISK_CONFIRM,
+    description="Scroll a DOM element (by CSS selector) into view.",
+    parameters=_obj({"selector": {"type": "string"}}, ["selector"]),
+)
+def _mnemo_scroll_to(ctx: ToolContext, *, selector: str) -> dict:
+    return _ui("scroll_to", {"selector": selector})
+
+
+@_tool(
+    name="mnemo_open_panel",
+    risk=RISK_CONFIRM,
+    description="Open a UI panel (detail side panel, search popover, ...).",
+    parameters=_obj({"panel_id": {"type": "string"}}, ["panel_id"]),
+)
+def _mnemo_open_panel(ctx: ToolContext, *, panel_id: str) -> dict:
+    return _ui("open_panel", {"panel_id": panel_id})
