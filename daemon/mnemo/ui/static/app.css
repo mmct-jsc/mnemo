@@ -4843,6 +4843,42 @@ dl.meta dd { margin: 0; color: var(--fg); }
   pointer-events: none;
 }
 
+/* v2.6.3: DOM label overlay for the Cosmograph canvas (cosmos.gl
+   renders no text). Spans are absolutely positioned at each point's
+   screen coords (recomputed every frame). The layer never eats
+   pointer events so canvas drag / click still work through it. */
+.nebula-labels {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 5;
+}
+.nebula-label {
+  position: absolute;
+  transform: translate(-50%, -160%);
+  white-space: nowrap;
+  font-size: 0.66rem;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-weight: 500;
+  color: #e6edf3;
+  background: rgba(10, 13, 20, 0.72);
+  border: 1px solid color-mix(in srgb, var(--label-color, #7ee7e0) 45%, transparent);
+  border-left: 2px solid var(--label-color, #7ee7e0);
+  border-radius: 4px;
+  padding: 1px 5px;
+  text-shadow: 0 1px 2px #000;
+  backdrop-filter: blur(2px);
+}
+.nebula-label.is-selected {
+  font-weight: 700;
+  font-size: 0.72rem;
+  color: #fff;
+  background: rgba(10, 13, 20, 0.9);
+  border-color: var(--label-color, #7ee7e0);
+  z-index: 2;
+}
+
 .nebula-context {
   position: absolute;
   top: 0.7rem;
