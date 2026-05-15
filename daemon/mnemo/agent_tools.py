@@ -1,0 +1,401 @@
+"""v3: the agent tool surface -- ONE source of truth, two consumers.
+
+The internal agent loop (``mnemo.chat``, phase 2) and the MCP server
+(``mnemo.mcp_server``, phase 6) both read :data:`TOOLS`. Each tool is a
+:class:`ToolSpec` carrying a JSON-Schema for its params and a ``risk``
+tag that drives the permission system (design doc S3):
+
+  * ``safe``    -- no side effects; auto-run; never prompted.
+  * ``confirm`` -- mutates recoverably; prompts unless allow-always.
+  * ``danger``  -- destructive; always prompts, no allow-always.
+
+Phase 1 ships only the six ``safe`` read tools. Write / exec / danger
+tools + the permission protocol land in phase 4; every later mnemo
+feature adds its tool here and both consumers pick it up for free.
+
+Tool functions are ``fn(ctx, **kwargs) -> dict`` where the return is
+always JSON-serialisable. Tools never raise to the caller: an
+unexpected failure (or a not-found / bad-arg) comes back as
+``{"error": "..."}`` so the agent loop can feed it to the model as a
+recoverable ``tool_result`` (design S4 error handling).
+"""
+
+from __future__ import annotations
+
+import fnmatch
+import json
+from collections.abc import Callable
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from mnemo import retrieve
+from mnemo.store import NODE_TYPES, Store
+
+RISK_SAFE = "safe"
+RISK_CONFIRM = "confirm"
+RISK_DANGER = "danger"
+
+# Hard cap so a single mnemo_get_code_lines call can't dump a whole
+# huge file into the model context.
+MAX_CODE_LINES = 400
+
+
+@dataclass
+class ToolContext:
+    """Everything a tool needs to run. The agent loop builds one per
+    request; MCP builds one per process. ``embedder`` is only needed by
+    ``mnemo_query``."""
+
+    store: Store
+    embedder: Any | None = None
+    # phase 4 adds: project_key, conversation_id, ui_action sink.
+
+
+@dataclass
+class ToolSpec:
+    name: str
+    description: str
+    risk: str
+    parameters: dict  # JSON Schema (object) -- provider tool defs + MCP
+    fn: Callable[..., dict]
+
+
+TOOLS: dict[str, ToolSpec] = {}
+
+
+def _register(spec: ToolSpec) -> ToolSpec:
+    if spec.name in TOOLS:
+        raise ValueError(f"duplicate tool registration: {spec.name}")
+    if spec.risk not in (RISK_SAFE, RISK_CONFIRM, RISK_DANGER):
+        raise ValueError(f"bad risk for {spec.name}: {spec.risk}")
+    TOOLS[spec.name] = spec
+    return spec
+
+
+def _tool(
+    *, name: str, risk: str, description: str, parameters: dict
+) -> Callable[[Callable[..., dict]], Callable[..., dict]]:
+    def deco(fn: Callable[..., dict]) -> Callable[..., dict]:
+        def safe_fn(ctx: ToolContext, **kwargs: Any) -> dict:
+            try:
+                return fn(ctx, **kwargs)
+            except Exception as exc:  # never raise to the agent loop
+                return {"error": f"{type(exc).__name__}: {exc}"}
+
+        _register(
+            ToolSpec(
+                name=name,
+                description=description,
+                risk=risk,
+                parameters=parameters,
+                fn=safe_fn,
+            )
+        )
+        return safe_fn
+
+    return deco
+
+
+def _obj(props: dict, required: list[str]) -> dict:
+    return {"type": "object", "properties": props, "required": required}
+
+
+# --- 1. mnemo_query -----------------------------------------------------
+
+
+@_tool(
+    name="mnemo_query",
+    risk=RISK_SAFE,
+    description=(
+        "Hybrid Graph-RAG retrieval over memory + code, ranked and "
+        "token-budgeted. Use for broad research. Returns ranked hits "
+        "each with a [mnemo:<id>] citation."
+    ),
+    parameters=_obj(
+        {
+            "prompt": {"type": "string", "description": "natural-language query"},
+            "limit": {"type": "integer", "default": 8},
+            "max_tokens": {"type": "integer", "default": 800},
+            "project_key": {"type": ["string", "null"], "default": None},
+        },
+        ["prompt"],
+    ),
+)
+def _mnemo_query(
+    ctx: ToolContext,
+    *,
+    prompt: str,
+    limit: int = 8,
+    max_tokens: int = 800,
+    project_key: str | None = None,
+) -> dict:
+    res = retrieve.query(
+        ctx.store,
+        ctx.embedder,
+        prompt,
+        budget_tokens=max_tokens,
+        k=limit,
+        active_project=project_key,
+    )
+    return {
+        "hits": [
+            {
+                "node_id": h.node_id,
+                "type": h.type,
+                "name": h.name,
+                "description": h.description,
+                "score": round(h.score, 4),
+                "citation": h.citation,
+                "source_path": h.source_path,
+            }
+            for h in res.hits
+        ],
+        "intent_tags": res.intent_tags,
+        "tokens_used": res.tokens_used,
+        "query_id": res.query_id,
+    }
+
+
+# --- 2. mnemo_get_node --------------------------------------------------
+
+
+@_tool(
+    name="mnemo_get_node",
+    risk=RISK_SAFE,
+    description="Full body + frontmatter for one node by id.",
+    parameters=_obj(
+        {"node_id": {"type": "string"}},
+        ["node_id"],
+    ),
+)
+def _mnemo_get_node(ctx: ToolContext, *, node_id: str) -> dict:
+    n = ctx.store.get_node(node_id)
+    if n is None:
+        return {"error": "node not found", "node_id": node_id}
+    fm = json.loads(n.frontmatter_json) if n.frontmatter_json else None
+    return {
+        "node_id": n.id,
+        "type": n.type,
+        "name": n.name,
+        "description": n.description,
+        "body": n.body,
+        "source_path": n.source_path,
+        "source_kind": n.source_kind,
+        "project_key": n.project_key,
+        "base": n.base,
+        "frontmatter": fm,
+        "created_at": n.created_at,
+        "updated_at": n.updated_at,
+    }
+
+
+# --- 3. mnemo_get_edges -------------------------------------------------
+
+
+@_tool(
+    name="mnemo_get_edges",
+    risk=RISK_SAFE,
+    description=(
+        "Edges connected to a node. direction in {out,in,both}; optional relation filter."
+    ),
+    parameters=_obj(
+        {
+            "node_id": {"type": "string"},
+            "direction": {
+                "type": "string",
+                "enum": ["out", "in", "both"],
+                "default": "both",
+            },
+            "relation": {"type": ["string", "null"], "default": None},
+        },
+        ["node_id"],
+    ),
+)
+def _mnemo_get_edges(
+    ctx: ToolContext,
+    *,
+    node_id: str,
+    direction: str = "both",
+    relation: str | None = None,
+) -> dict:
+    rels = (relation,) if relation else None
+    edges = ctx.store.get_edges_for_nodes([node_id], relations=rels)
+    out = []
+    for e in edges:
+        d = "out" if e.src_id == node_id else "in"
+        if direction != "both" and direction != d:
+            continue
+        out.append(
+            {
+                "src": e.src_id,
+                "dst": e.dst_id,
+                "relation": e.relation,
+                "weight": e.weight,
+                "confidence": e.confidence,
+                "source": e.source,
+                "direction": d,
+            }
+        )
+    return {"node_id": node_id, "direction": direction, "edges": out}
+
+
+# --- 4. mnemo_traverse --------------------------------------------------
+
+
+@_tool(
+    name="mnemo_traverse",
+    risk=RISK_SAFE,
+    description=(
+        "BFS from a node up to max_hops (optional relation filter). The "
+        "'why-is-this-here' provenance walk. Returns nodes tagged with "
+        "their hop distance + the edges traversed."
+    ),
+    parameters=_obj(
+        {
+            "start_id": {"type": "string"},
+            "max_hops": {"type": "integer", "default": 2},
+            "relations": {"type": ["array", "null"], "items": {"type": "string"}},
+        },
+        ["start_id"],
+    ),
+)
+def _mnemo_traverse(
+    ctx: ToolContext,
+    *,
+    start_id: str,
+    max_hops: int = 2,
+    relations: list[str] | None = None,
+) -> dict:
+    if ctx.store.get_node(start_id) is None:
+        return {"error": "start node not found", "start_id": start_id}
+    rels = tuple(relations) if relations else None
+    visited: dict[str, int] = {start_id: 0}
+    frontier = [start_id]
+    seen_edges: set[tuple[str, str, str]] = set()
+    edges_out: list[dict] = []
+    for hop in range(1, max(1, int(max_hops)) + 1):
+        if not frontier:
+            break
+        es = ctx.store.get_edges_for_nodes(frontier, relations=rels)
+        fset = set(frontier)
+        nxt: list[str] = []
+        for e in es:
+            key = (e.src_id, e.dst_id, e.relation)
+            if key not in seen_edges and (e.src_id in fset or e.dst_id in fset):
+                seen_edges.add(key)
+                edges_out.append(
+                    {
+                        "src": e.src_id,
+                        "dst": e.dst_id,
+                        "relation": e.relation,
+                        "confidence": e.confidence,
+                    }
+                )
+            for endpoint in (e.src_id, e.dst_id):
+                other = e.dst_id if endpoint == e.src_id else e.src_id
+                if endpoint in fset and other not in visited:
+                    visited[other] = hop
+                    nxt.append(other)
+        frontier = nxt
+    nodes_by_id = ctx.store.get_nodes_by_ids(list(visited))
+    nodes = [
+        {
+            "node_id": nid,
+            "type": (nodes_by_id[nid].type if nid in nodes_by_id else None),
+            "name": (nodes_by_id[nid].name if nid in nodes_by_id else None),
+            "hop": hop,
+        }
+        for nid, hop in sorted(visited.items(), key=lambda kv: (kv[1], kv[0]))
+    ]
+    return {
+        "start_id": start_id,
+        "max_hops": max_hops,
+        "nodes": nodes,
+        "edges": edges_out,
+    }
+
+
+# --- 5. mnemo_search_by_type --------------------------------------------
+
+
+@_tool(
+    name="mnemo_search_by_type",
+    risk=RISK_SAFE,
+    description="List nodes by type, optional name glob + project filter.",
+    parameters=_obj(
+        {
+            "type": {"type": "string"},
+            "name_glob": {"type": ["string", "null"], "default": None},
+            "project_key": {"type": ["string", "null"], "default": None},
+            "limit": {"type": "integer", "default": 20},
+        },
+        ["type"],
+    ),
+)
+def _mnemo_search_by_type(
+    ctx: ToolContext,
+    *,
+    type: str,
+    name_glob: str | None = None,
+    project_key: str | None = None,
+    limit: int = 20,
+) -> dict:
+    if type not in NODE_TYPES:
+        return {"error": f"unknown node type: {type!r}", "type": type}
+    nodes = ctx.store.list_nodes(type=type, project_key=project_key, limit=limit)
+    if name_glob:
+        nodes = [n for n in nodes if fnmatch.fnmatch(n.name, name_glob)]
+    return {
+        "type": type,
+        "count": len(nodes),
+        "nodes": [
+            {
+                "node_id": n.id,
+                "name": n.name,
+                "description": n.description,
+                "project_key": n.project_key,
+                "type": n.type,
+            }
+            for n in nodes
+        ],
+    }
+
+
+# --- 6. mnemo_get_code_lines --------------------------------------------
+
+
+@_tool(
+    name="mnemo_get_code_lines",
+    risk=RISK_SAFE,
+    description=(
+        f"Read lines [start, end] (1-based, inclusive) from a source "
+        f"file. Capped at {MAX_CODE_LINES} lines per call."
+    ),
+    parameters=_obj(
+        {
+            "source_path": {"type": "string"},
+            "start": {"type": "integer"},
+            "end": {"type": "integer"},
+        },
+        ["source_path", "start", "end"],
+    ),
+)
+def _mnemo_get_code_lines(ctx: ToolContext, *, source_path: str, start: int, end: int) -> dict:
+    p = Path(source_path)
+    if not p.is_file():
+        return {"error": "file not found", "source_path": source_path}
+    start = max(1, int(start))
+    end = int(end)
+    if end < start:
+        return {"error": "end < start", "source_path": source_path}
+    if end - start + 1 > MAX_CODE_LINES:
+        end = start + MAX_CODE_LINES - 1
+    lines = p.read_text(encoding="utf-8", errors="replace").splitlines()
+    slice_ = lines[start - 1 : end]
+    return {
+        "source_path": source_path,
+        "start": start,
+        "end": end,
+        "lines": "\n".join(slice_),
+    }
