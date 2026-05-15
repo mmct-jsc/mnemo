@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import fnmatch
 import json
+import os
 import time
 import uuid
 from collections.abc import Callable
@@ -32,6 +33,7 @@ from pathlib import Path
 from typing import Any
 
 from mnemo import config, retrieve
+from mnemo.parsers import md as _md_parser
 from mnemo.store import NODE_TYPES, Node, Store, signal_for_reason
 
 RISK_SAFE = "safe"
@@ -658,3 +660,85 @@ def _mnemo_scroll_to(ctx: ToolContext, *, selector: str) -> dict:
 )
 def _mnemo_open_panel(ctx: ToolContext, *, panel_id: str) -> dict:
     return _ui("open_panel", {"panel_id": panel_id})
+
+
+# --- Skill tools (v3.1 phase 4) -----------------------------------------
+#
+# Skills are markdown workflow guides (skills/<name>/SKILL.md), NOT
+# executable functions. ``mnemo_list_skills`` is a plain safe read;
+# ``mnemo_run_skill`` returns a ``{"_skill": ...}`` sentinel the agent
+# loop turns into a pinned guidance turn for the rest of the run (the
+# same "read it and follow it" model the IDE uses). Deeper end-to-end
+# autonomous skill *templates* are design S8 -> deferred to v3.2.
+
+
+def _skills_root() -> Path:
+    """The shipped skills dir. ``MNEMO_SKILLS_DIR`` overrides (tests).
+    Otherwise package-relative -- mnemo/agent_tools.py -> mnemo ->
+    daemon -> repo root, which holds ``skills/`` both in-repo and as an
+    installed Claude Code plugin."""
+    env = os.environ.get("MNEMO_SKILLS_DIR")
+    if env:
+        return Path(env)
+    return Path(__file__).resolve().parents[2] / "skills"
+
+
+def _read_skill(skill_dir: Path) -> tuple[dict, str]:
+    fm, body = _md_parser.parse((skill_dir / "SKILL.md").read_bytes(), skill_dir)
+    return fm, body
+
+
+@_tool(
+    name="mnemo_list_skills",
+    risk=RISK_SAFE,
+    description=(
+        "List the mnemo workflow skills available to load. Returns each "
+        "skill's name + description. Call this first, then "
+        "mnemo_run_skill to load one's guidance."
+    ),
+    parameters=_obj({}, []),
+)
+def _mnemo_list_skills(ctx: ToolContext) -> dict:
+    root = _skills_root()
+    skills: list[dict] = []
+    if root.is_dir():
+        for skill_md in sorted(root.glob("*/SKILL.md")):
+            try:
+                fm, _ = _read_skill(skill_md.parent)
+            except Exception:  # a malformed skill must not break listing
+                fm = {}
+            name = str(fm.get("name") or skill_md.parent.name)
+            skills.append({"name": name, "description": str(fm.get("description") or "")})
+    return {"skills": skills}
+
+
+@_tool(
+    name="mnemo_run_skill",
+    risk=RISK_CONFIRM,
+    description=(
+        "Load a mnemo skill's guidance into the conversation and follow "
+        "it for the rest of this turn. ``skill_name`` is the skill's "
+        "directory name (or its frontmatter name)."
+    ),
+    parameters=_obj({"skill_name": {"type": "string"}}, ["skill_name"]),
+)
+def _mnemo_run_skill(ctx: ToolContext, *, skill_name: str) -> dict:
+    root = _skills_root()
+    candidate = root / skill_name
+    if not (candidate / "SKILL.md").is_file():
+        # tolerate a frontmatter-name match (dir name may differ)
+        candidate = None  # type: ignore[assignment]
+        if root.is_dir():
+            for skill_md in sorted(root.glob("*/SKILL.md")):
+                try:
+                    fm, _ = _read_skill(skill_md.parent)
+                except Exception:
+                    continue
+                if str(fm.get("name") or "") == skill_name:
+                    candidate = skill_md.parent
+                    break
+        if candidate is None:
+            return {"error": f"unknown skill: {skill_name!r}"}
+    fm, body = _read_skill(candidate)
+    name = str(fm.get("name") or candidate.name)
+    return {"_skill": {"name": name, "guidance": body.strip()}}
