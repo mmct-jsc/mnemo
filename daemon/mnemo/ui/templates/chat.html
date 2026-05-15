@@ -235,6 +235,27 @@ function chatPage() {
         this.openConversation(id);
       };
       es.addEventListener('thinking', () => { this.thinking = true; });
+      es.addEventListener('ui_action', (e) => {
+        // v3 phase 11: the daemon delegated a client-side directive.
+        const d = JSON.parse(e.data);
+        const a = d.args || {};
+        if (d.action === 'navigate' && a.path) {
+          setTimeout(() => { window.location.href = a.path; }, 400);
+        } else if (d.action === 'select_node') {
+          document.dispatchEvent(new CustomEvent('mnemo-select-node',
+            { detail: { node_id: a.node_id } }));
+        } else if (d.action === 'set_filter') {
+          document.dispatchEvent(new CustomEvent('mnemo-set-filter',
+            { detail: a }));
+        } else if (d.action === 'scroll_to' && a.selector) {
+          const el = document.querySelector(a.selector);
+          if (el) el.scrollIntoView({ behavior: 'smooth' });
+        } else if (d.action === 'open_panel') {
+          document.dispatchEvent(new CustomEvent('mnemo-open-panel',
+            { detail: a }));
+        }
+        if (window.toast) window.toast('Mnem: ' + d.action, 'info');
+      });
       es.addEventListener('text_delta', (e) => {
         this.thinking = false;
         buf += JSON.parse(e.data).text || '';
