@@ -389,6 +389,16 @@ function nebula() {
         try {
           this.cg.setLinkColors(
             this.edgesVisible ? this._linkColors : this._linkColorsOff);
+          // v2.6.6: setLinkColors only SETS isLinkColorUpdateNeeded;
+          // the perpetual sim's per-frame frame() loop does NOT
+          // consume that flag (verified: flag stays true across
+          // hundreds of frames). Only render() flushes the link
+          // colour buffer to the GPU -- without this the toggle did
+          // nothing until a full page refresh re-ran renderCanvas
+          // (which calls render()). render() "does not modify
+          // simulation state" per cosmos docs, so the never-cool
+          // sim + positions are untouched.
+          if (this.cg.render) this.cg.render();
         } catch (_) {}
       }
       this._persistState();
