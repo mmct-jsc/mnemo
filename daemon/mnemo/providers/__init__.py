@@ -79,8 +79,16 @@ def get_provider(
         from mnemo.providers.anthropic import AnthropicProvider
 
         return AnthropicProvider(api_key=api_key, base_url=base_url)
-    if name in ("openai", "google", "ollama"):
-        raise NotImplementedError(
-            f"provider {name!r} lands in v3 phase 5; only 'anthropic' is wired in phase 2"
-        )
+    if name == "openai":
+        from mnemo.providers.openai import OpenAIProvider
+
+        return OpenAIProvider(api_key=api_key, base_url=base_url)
+    if name == "google":
+        from mnemo.providers.google import GoogleProvider
+
+        return GoogleProvider(api_key=api_key, base_url=base_url)
+    if name == "ollama":
+        from mnemo.providers.ollama import OllamaProvider
+
+        return OllamaProvider(api_key=api_key, base_url=base_url)
     raise ValueError(f"unknown provider: {name!r}")
