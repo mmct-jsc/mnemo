@@ -34,6 +34,9 @@ dependencies = [
     "tree-sitter-json>=0.23",
     "tree-sitter-yaml>=0.7",
     "tree-sitter-markdown>=0.4",
+    # v3: agentic chat companion. Anthropic provider (phase 2);
+    # openai / google-genai / keyring / mcp land in phases 5-7.
+    "anthropic>=0.40",
 ]
 
 [tool.hatch.build.targets.wheel.sources]
