@@ -23,6 +23,7 @@ still uses ``mnemoStaggeredReveal``; the page still 200s).
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -111,6 +112,46 @@ def test_graph_config_applied_via_setconfig(graph_html: str) -> None:
     assert "setConfig(config)" in graph_html or "setConfig(" in graph_html, (
         "renderCanvas must call cg.setConfig(...) after `new Graph()` "
         "-- the constructor-config path is a known cosmos.gl no-op."
+    )
+
+
+def _method_body(src: str, name: str) -> str:
+    """Return the brace-balanced body of an Alpine factory method
+    ``name() {`` so a contract assertion can scope to just it."""
+    m = re.search(rf"^    {re.escape(name)}\(\)\s*\{{", src, re.MULTILINE)
+    assert m, f"{name}() method must exist in graph.html"
+    depth, i = 0, m.end() - 1
+    while i < len(src):
+        if src[i] == "{":
+            depth += 1
+        elif src[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return src[m.start() : i + 1]
+        i += 1
+    raise AssertionError(f"{name}() body did not parse (unbalanced braces)")
+
+
+def test_toggle_edges_flushes_with_render(graph_html: str) -> None:
+    """v2.6.6 regression lock. cosmos.gl's setLinkColors only SETS
+    the isLinkColorUpdateNeeded dirty flag; the perpetual sim's
+    per-frame frame() loop never consumes it (verified: flag stayed
+    true for 2 s / hundreds of frames). Only render() flushes the
+    link-colour buffer to the GPU. Without a render() call after
+    setLinkColors the edges toggle did NOTHING until a full page
+    refresh re-ran renderCanvas. toggleEdges MUST call render()
+    after setLinkColors so the toggle is real-time."""
+    body = _method_body(graph_html, "toggleEdges")
+    assert "setLinkColors(" in body, (
+        "toggleEdges must swap the link-colour buffer via setLinkColors "
+        "(pure paint, no setConfig sim-restart)."
+    )
+    si = body.index("setLinkColors(")
+    assert ".render(" in body[si:], (
+        "toggleEdges must call cg.render() AFTER setLinkColors -- "
+        "cosmos only flushes the link-colour buffer on render(); the "
+        "per-frame sim loop ignores isLinkColorUpdateNeeded, so "
+        "without it the toggle only takes effect on page refresh."
     )
 
 
