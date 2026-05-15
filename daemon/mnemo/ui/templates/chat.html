@@ -2,141 +2,247 @@
 {% block title %} - chat{% endblock %}
 
 {% block content %}
-<section class="chat-shell" x-data="chatPage()" x-init="init()">
+<section class="mn" x-data="chatPage()" x-init="init()">
+
   <!-- left rail: conversations -->
   <aside class="chat-rail">
-    <button class="primary chat-new" @click="newConversation()">+ New chat</button>
-    <ul class="chat-convs">
-      <template x-for="c in conversations" :key="c.id">
-        <li :class="{active: c.id === activeId}" @click="openConversation(c.id)">
-          <span class="cv-name" x-text="c.name"></span>
-        </li>
+    <div class="rail-brand">
+      <img src="/static/mnem/idle.svg" width="26" height="26" alt="">
+      <span>Mnem</span>
+    </div>
+    <button class="rail-new" @click="newConversation()">
+      <span>＋</span> New chat
+    </button>
+    <div class="rail-scroll">
+      <template x-for="grp in groupedConversations" :key="grp.label">
+        <div class="rail-group">
+          <div class="rail-group-label" x-text="grp.label"></div>
+          <ul>
+            <template x-for="c in grp.items" :key="c.id">
+              <li :class="{active: c.id === activeId}" @click="openConversation(c.id)">
+                <span class="cv-name" x-text="c.name"></span>
+                <span class="cv-time" x-text="relTime(c.updated_at)"></span>
+              </li>
+            </template>
+          </ul>
+        </div>
       </template>
-    </ul>
+      <p class="rail-empty" x-show="conversations.length === 0" x-cloak>
+        No conversations yet.
+      </p>
+    </div>
   </aside>
 
   <!-- centre: the thread -->
   <main class="chat-thread">
-    <div class="chat-log" x-ref="log">
-      <template x-for="m in messages" :key="m.key">
-        <div class="msg" :class="'msg-' + m.role">
-          <div class="msg-role" x-text="m.role"></div>
-          <template x-if="m.role === 'tool_call'">
-            <details class="tool-call">
-              <summary x-text="'calling ' + (m.content.name || 'tool')"></summary>
-              <pre x-text="JSON.stringify(m.content.args || {}, null, 2)"></pre>
-            </details>
-          </template>
-          <template x-if="m.role === 'tool_result'">
-            <div class="tool-result" x-text="'got result for ' + (m.content.id || '')"></div>
-          </template>
-          <template x-if="m.role === 'user' || m.role === 'assistant'">
-            <div>
-              <div class="msg-body" x-html="renderText(m.content.text || '')"></div>
-              <template x-for="(d, di) in extractDrafts(m.content.text || '')"
-                        :key="m.key + '-d' + di">
-                <div class="mnemo-draft-card">
-                  <pre x-text="d.raw"></pre>
-                  <button class="primary" @click="saveDraft(d)">Save as memory</button>
-                </div>
-              </template>
-            </div>
-          </template>
+    <div class="thread-scroll" x-ref="log">
+      <div class="thread-col">
+
+        <!-- empty / welcome state -->
+        <div class="welcome" x-show="!messages.length && !streaming" x-cloak>
+          <img class="welcome-mark" src="/static/mnem/idle.svg" width="72" height="72" alt="">
+          <h1>How can I help with your memory graph?</h1>
+          <p>I'm Mnem — I can query your notes &amp; code, trace
+             provenance, and draft new memory. I cite every node I use.</p>
+          <div class="examples">
+            <template x-for="ex in examples" :key="ex">
+              <button class="example" @click="draft = ex; sendMessage()" x-text="ex"></button>
+            </template>
+          </div>
         </div>
-      </template>
-      <div class="msg msg-assistant" x-show="streaming" x-cloak>
-        <div class="msg-role">assistant</div>
-        <div class="msg-body" x-ref="liveBody"></div>
-        <div class="thinking-dots" x-show="thinking" x-cloak>thinking…</div>
+
+        <template x-for="m in messages" :key="m.key">
+          <div class="turn" :class="'turn-' + m.role">
+
+            <template x-if="m.role === 'user'">
+              <div class="bubble-user" x-text="m.content.text"></div>
+            </template>
+
+            <template x-if="m.role === 'assistant' && (m.content.text || (m.content.citations||[]).length)">
+              <div class="turn-assistant">
+                <img class="ava" src="/static/mnem/idle.svg" width="30" height="30" alt="Mnem">
+                <div class="assistant-body">
+                  <div class="prose" x-html="renderText(m.content.text || '')"></div>
+                  <template x-for="(d, di) in extractDrafts(m.content.text || '')"
+                            :key="m.key + '-d' + di">
+                    <div class="draft-card">
+                      <div class="draft-head">
+                        <span class="draft-tag">mnemo-draft</span>
+                        <span x-text="d.front.name || 'untitled'"></span>
+                      </div>
+                      <pre x-text="d.body"></pre>
+                      <button class="btn-mini" @click="saveDraft(d)">Save as memory</button>
+                    </div>
+                  </template>
+                </div>
+              </div>
+            </template>
+
+            <template x-if="m.role === 'tool_call'">
+              <details class="tool-chip">
+                <summary>
+                  <span class="tc-dot"></span>
+                  <span class="tc-name" x-text="m.content.name || 'tool'"></span>
+                  <span class="tc-hint">tool call</span>
+                </summary>
+                <pre x-text="JSON.stringify(m.content.args || {}, null, 2)"></pre>
+              </details>
+            </template>
+
+            <template x-if="m.role === 'tool_result'">
+              <div class="tool-done" x-text="'✓ ' + (m.content.id || 'result')"></div>
+            </template>
+          </div>
+        </template>
+
+        <!-- live streaming assistant -->
+        <div class="turn turn-assistant" x-show="streaming" x-cloak>
+          <div class="turn-assistant">
+            <img class="ava" :src="'/static/mnem/' + (thinking ? 'thinking' : 'speaking') + '.svg'"
+                 width="30" height="30" alt="Mnem">
+            <div class="assistant-body">
+              <div class="prose" x-ref="liveBody"></div>
+              <span class="caret" x-show="thinking" x-cloak>thinking</span>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 
-    <form class="chat-input" @submit.prevent="sendMessage()">
-      <input type="text" x-model="draft" :disabled="streaming"
-             placeholder="ask Mnem anything…" x-ref="draft">
-      <button class="primary" :disabled="streaming || !draft.trim()">Send</button>
+    <!-- inline permission prompt (design S6E) -- NO browser confirm() -->
+    <div class="permit" x-show="pending" x-cloak x-transition.opacity>
+      <img :src="'/static/mnem/waiting.svg'" width="34" height="34" alt="">
+      <div class="permit-body">
+        <strong x-text="pending && pending.rationale"></strong>
+        <code x-text="pending && (pending.tool_name + '(' + JSON.stringify(pending.tool_args||{}) + ')')"></code>
+        <span class="permit-risk" :class="'risk-' + (pending && pending.risk)"
+              x-text="pending && pending.risk"></span>
+      </div>
+      <div class="permit-actions">
+        <button class="btn-ghost" @click="decide('deny')">Deny</button>
+        <button class="btn-ghost" x-show="pending && pending.auto_grant_options.includes('always')"
+                @click="decide('allow_always')">Always allow</button>
+        <button class="btn-go" @click="decide('allow_once')">Allow once</button>
+      </div>
+    </div>
+
+    <form class="composer" @submit.prevent="sendMessage()">
+      <textarea x-ref="draft" x-model="draft" rows="1"
+                placeholder="Ask Mnem anything…  (Enter to send · Shift+Enter for newline)"
+                :disabled="streaming"
+                @input="grow($event.target)"
+                @keydown.enter.prevent="if (!$event.shiftKey) sendMessage()"
+                @keydown.enter.shift="$nextTick(() => grow($refs.draft))"></textarea>
+      <button class="send" :disabled="streaming || !draft.trim()" aria-label="send">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none"
+             stroke="currentColor" stroke-width="2.2" stroke-linecap="round"
+             stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+      </button>
     </form>
   </main>
 
   <!-- right: citation side panel -->
   <aside class="chat-cite">
-    <h3>Citations</h3>
-    <p class="hint" x-show="citations.length === 0">
-      Cited <code>[mnemo:&lt;id&gt;]</code> nodes appear here.
+    <div class="cite-head">Citations</div>
+    <p class="cite-hint" x-show="citations.length === 0" x-cloak>
+      Nodes Mnem cites appear here — click to preview.
     </p>
     <ul class="cite-list">
       <template x-for="cid in citations" :key="cid">
-        <li>
-          <a :href="'/node/' + cid" x-text="cid" @click.prevent="previewNode(cid)"></a>
+        <li @click="previewNode(cid)" :class="{sel: cid === citeSel}">
+          <span class="cite-dot"></span>
+          <code x-text="cid"></code>
         </li>
       </template>
     </ul>
-    <div class="cite-preview" x-ref="citePreview"></div>
+    <div class="cite-preview" x-ref="citePreview" x-show="citeSel" x-cloak></div>
   </aside>
 </section>
 
 <script>
 function chatPage() {
   return {
-    conversations: [],
-    activeId: null,
-    messages: [],
-    citations: [],
-    draft: '',
-    streaming: false,
-    thinking: false,
-    _es: null,
+    conversations: [], activeId: null, messages: [], citations: [],
+    citeSel: '', draft: '', streaming: false, thinking: false,
+    pending: null, _es: null,
+    examples: [
+      'What do we know about MQTT broker auth?',
+      'Trace why the Nebula renderer was reverted.',
+      'Draft a memory for what we just learned.',
+    ],
+    get groupedConversations() {
+      const now = Date.now(), DAY = 86400000;
+      const sod = new Date(); sod.setHours(0, 0, 0, 0);
+      const groups = { Today: [], Yesterday: [], Earlier: [] };
+      for (const c of this.conversations) {
+        const t = c.updated_at || 0;
+        if (t >= sod.getTime()) groups.Today.push(c);
+        else if (t >= sod.getTime() - DAY) groups.Yesterday.push(c);
+        else groups.Earlier.push(c);
+      }
+      return Object.entries(groups)
+        .filter(([, v]) => v.length)
+        .map(([label, items]) => ({ label, items }));
+    },
+    relTime(ms) {
+      if (!ms) return '';
+      const s = (Date.now() - ms) / 1000;
+      if (s < 60) return 'now';
+      if (s < 3600) return Math.floor(s / 60) + 'm';
+      if (s < 86400) return Math.floor(s / 3600) + 'h';
+      if (s < 604800) return Math.floor(s / 86400) + 'd';
+      return new Date(ms).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    },
+    mood(m) {
+      document.dispatchEvent(new CustomEvent('mnemo-mnem-mood', { detail: { mood: m } }));
+    },
+    grow(el) { el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 180) + 'px'; },
     async init() {
       await this.loadConversations();
-      if (this.conversations.length) {
-        this.openConversation(this.conversations[0].id);
-      }
+      if (this.conversations.length) this.openConversation(this.conversations[0].id);
     },
     async loadConversations() {
-      const r = await fetch('/v1/chat');
-      this.conversations = await r.json();
+      this.conversations = await fetch('/v1/chat').then(r => r.json());
     },
     async newConversation() {
-      const r = await fetch('/v1/chat', {
+      const conv = await fetch('/v1/chat', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: 'New chat' }),
-      });
-      const conv = await r.json();
+      }).then(r => r.json());
       await this.loadConversations();
       this.openConversation(conv.id);
+      this.$nextTick(() => this.$refs.draft && this.$refs.draft.focus());
     },
     async openConversation(id) {
-      this.activeId = id;
-      this.citations = [];
-      const r = await fetch('/v1/chat/' + id);
-      const data = await r.json();
+      this.activeId = id; this.citations = []; this.citeSel = '';
+      const data = await fetch('/v1/chat/' + id).then(r => r.json());
       this.messages = (data.messages || []).map((m, i) =>
         Object.assign({}, m, { key: m.id || ('m' + i) }));
       this.collectCitations();
-      this.scroll();
+      this.scroll(true);
     },
     collectCitations() {
       const seen = [];
-      for (const m of this.messages) {
-        for (const c of (m.content && m.content.citations) || []) {
+      for (const m of this.messages)
+        for (const c of (m.content && m.content.citations) || [])
           if (!seen.includes(c)) seen.push(c);
-        }
-      }
       this.citations = seen;
     },
     renderText(t) {
-      // Reuse the v2.2 body renderer when available for full fidelity;
-      // otherwise escape + linkify [mnemo:id] citations.
       const esc = (s) => s.replace(/[&<>]/g, (c) =>
         ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
-      return esc(t).replace(/\[mnemo:([^\]\s]+)\]/g,
-        '<a href="/node/$1" class="cite-link">[mnemo:$1]</a>');
+      // strip mnemo-draft fences from prose (rendered as cards separately)
+      const noDraft = (t || '').replace(/```mnemo-draft[\s\S]*?```/g, '').trim();
+      return esc(noDraft)
+        .replace(/```([\s\S]*?)```/g, '<pre>$1</pre>')
+        .replace(/`([^`]+)`/g, '<code>$1</code>')
+        .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+        .replace(/\[mnemo:([^\]\s]+)\]/g,
+          '<a href="/node/$1" class="cite-link" onclick="event.stopPropagation()">[mnemo:$1]</a>')
+        .replace(/\n/g, '<br>');
     },
-    // v3 phase 10: doc-helper. Pull ```mnemo-draft fenced blocks out
-    // of the assistant text so the UI can render a one-click save.
     extractDrafts(text) {
-      const out = [];
-      const re = /```mnemo-draft\s*\n([\s\S]*?)```/g;
+      const out = [], re = /```mnemo-draft\s*\n([\s\S]*?)```/g;
       let m;
       while ((m = re.exec(text || '')) !== null) {
         const raw = m[1];
@@ -160,20 +266,16 @@ function chatPage() {
         project: 'memory_project', reference: 'memory_reference',
         session_summary: 'session_summary',
       };
-      const t = typeMap[d.front.type] || 'memory_feedback';
-      const payload = {
-        type: t,
-        name: d.front.name || 'untitled',
-        body: d.body,
-        project_key: d.front.projectKey || null,
-      };
       const r = await fetch('/v1/nodes', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({
+          type: typeMap[d.front.type] || 'memory_feedback',
+          name: d.front.name || 'untitled', body: d.body,
+          project_key: d.front.projectKey || null,
+        }),
       });
       if (r.ok) {
         const n = await r.json();
-        // best-effort memory reindex so it surfaces in retrieval
         fetch('/v1/reindex', { method: 'POST' }).catch(() => {});
         if (window.toast) window.toast('Saved memory ' + (n.id || ''), 'success');
       } else if (window.toast) {
@@ -181,37 +283,39 @@ function chatPage() {
       }
     },
     async previewNode(cid) {
+      this.citeSel = cid;
       const box = this.$refs.citePreview;
-      box.textContent = 'loading ' + cid + '…';
+      box.textContent = 'loading…';
       try {
-        const r = await fetch('/v1/nodes/' + cid);
-        if (!r.ok) { box.innerHTML = '<a href="/node/' + cid + '">open ' + cid + '</a>'; return; }
-        const n = await r.json();
-        if (window.mnemoRenderBody) {
-          window.mnemoRenderBody(box, n.body || '', {
-            type: n.type, sourcePath: n.source_path });
-        } else {
+        const n = await fetch('/v1/nodes/' + cid).then(r => r.ok ? r.json() : null);
+        if (n && window.mnemoRenderBody) {
+          window.mnemoRenderBody(box, n.body || '', { type: n.type, sourcePath: n.source_path });
+        } else if (n) {
           box.textContent = n.body || '';
+        } else {
+          box.innerHTML = '<a href="/node/' + cid + '">open ' + cid + '</a>';
         }
       } catch (e) {
         box.innerHTML = '<a href="/node/' + cid + '">open ' + cid + '</a>';
       }
     },
-    scroll() {
+    scroll(instant) {
       this.$nextTick(() => {
-        const l = this.$refs.log; if (l) l.scrollTop = l.scrollHeight;
+        const l = this.$refs.log;
+        if (l) l.scrollTo({ top: l.scrollHeight, behavior: instant ? 'auto' : 'smooth' });
       });
     },
     async sendMessage() {
       const text = this.draft.trim();
-      if (!text || !this.activeId) {
-        if (!this.activeId) { await this.newConversation(); }
-        if (!this.draft.trim()) return;
+      if (!text || this.streaming) return;
+      if (!this.activeId) {
+        await this.newConversation();
+        await new Promise(r => setTimeout(r, 50));
       }
       const id = this.activeId;
       this.draft = '';
-      this.messages.push({ key: 'u' + Date.now(), role: 'user',
-        content: { text } });
+      if (this.$refs.draft) this.$refs.draft.style.height = 'auto';
+      this.messages.push({ key: 'u' + Date.now(), role: 'user', content: { text } });
       this.scroll();
       await fetch('/v1/chat/' + id + '/message', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -220,46 +324,23 @@ function chatPage() {
       this.streamRun(id);
     },
     streamRun(id) {
-      this.streaming = true;
-      this.thinking = true;
+      this.streaming = true; this.thinking = true; this.mood('thinking');
       const live = this.$refs.liveBody;
-      if (live) live.textContent = '';
+      if (live) live.innerHTML = '';
       let buf = '';
-      // Native EventSource consumes the same event:/data: frames the
-      // reindex SSE (and window.mnemoStreamFromSSE) use.
       const es = new EventSource('/v1/chat/' + id + '/events');
       this._es = es;
-      const finish = () => {
+      const finish = (mood) => {
         es.close(); this._es = null;
-        this.streaming = false; this.thinking = false;
+        this.streaming = false; this.thinking = false; this.pending = null;
+        this.mood(mood || 'idle');
         this.openConversation(id);
       };
-      es.addEventListener('thinking', () => { this.thinking = true; });
-      es.addEventListener('ui_action', (e) => {
-        // v3 phase 11: the daemon delegated a client-side directive.
-        const d = JSON.parse(e.data);
-        const a = d.args || {};
-        if (d.action === 'navigate' && a.path) {
-          setTimeout(() => { window.location.href = a.path; }, 400);
-        } else if (d.action === 'select_node') {
-          document.dispatchEvent(new CustomEvent('mnemo-select-node',
-            { detail: { node_id: a.node_id } }));
-        } else if (d.action === 'set_filter') {
-          document.dispatchEvent(new CustomEvent('mnemo-set-filter',
-            { detail: a }));
-        } else if (d.action === 'scroll_to' && a.selector) {
-          const el = document.querySelector(a.selector);
-          if (el) el.scrollIntoView({ behavior: 'smooth' });
-        } else if (d.action === 'open_panel') {
-          document.dispatchEvent(new CustomEvent('mnemo-open-panel',
-            { detail: a }));
-        }
-        if (window.toast) window.toast('Mnem: ' + d.action, 'info');
-      });
+      es.addEventListener('thinking', () => { this.thinking = true; this.mood('thinking'); });
       es.addEventListener('text_delta', (e) => {
-        this.thinking = false;
+        this.thinking = false; this.mood('speaking');
         buf += JSON.parse(e.data).text || '';
-        if (live) live.innerHTML = this.renderText(buf);
+        if (live) live.innerHTML = this.renderText(buf) + '<span class="blink">▍</span>';
         this.scroll();
       });
       es.addEventListener('tool_call', (e) => {
@@ -275,28 +356,48 @@ function chatPage() {
         this.scroll();
       });
       es.addEventListener('permission_request', (e) => {
-        const d = JSON.parse(e.data);
-        const ok = window.confirm(
-          (d.rationale || ('Allow ' + d.tool_name + '?')) +
-          '\\n(risk: ' + d.risk + ')');
-        fetch('/v1/chat/' + id + '/permit', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ permission_id: d.id,
-            decision: ok ? 'allow_once' : 'deny' }),
-        });
+        this.pending = JSON.parse(e.data);
+        this.thinking = false; this.mood('waiting');
+        this.scroll();
       });
       es.addEventListener('citation', (e) => {
         const d = JSON.parse(e.data);
         if (!this.citations.includes(d.node_id)) this.citations.push(d.node_id);
       });
-      es.addEventListener('done', finish);
-      es.addEventListener('idle', finish);
+      es.addEventListener('ui_action', (e) => {
+        const d = JSON.parse(e.data), a = d.args || {};
+        if (d.action === 'navigate' && a.path) {
+          setTimeout(() => { window.location.href = a.path; }, 600);
+        } else if (d.action === 'select_node') {
+          document.dispatchEvent(new CustomEvent('mnemo-select-node', { detail: a }));
+        } else if (d.action === 'set_filter') {
+          document.dispatchEvent(new CustomEvent('mnemo-set-filter', { detail: a }));
+        } else if (d.action === 'scroll_to' && a.selector) {
+          const el = document.querySelector(a.selector);
+          if (el) el.scrollIntoView({ behavior: 'smooth' });
+        } else if (d.action === 'open_panel') {
+          document.dispatchEvent(new CustomEvent('mnemo-open-panel', { detail: a }));
+        }
+        if (window.toast) window.toast('Mnem: ' + d.action, 'info');
+      });
+      es.addEventListener('done', () => finish('idle'));
+      es.addEventListener('idle', () => finish('idle'));
       es.addEventListener('error', (e) => {
         try {
           const d = JSON.parse(e.data || '{}');
-          if (window.toast) window.toast(d.message || 'chat error', 'error');
-        } catch (_) { /* connection close fires a bare error too */ }
-        finish();
+          if (d.message && window.toast) window.toast(d.message, 'error');
+        } catch (_) { /* bare connection-close error */ }
+        finish('alert');
+      });
+    },
+    async decide(decision) {
+      if (!this.pending) return;
+      const pid = this.pending.id;
+      this.pending = null;
+      this.thinking = true; this.mood('thinking');
+      await fetch('/v1/chat/' + this.activeId + '/permit', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ permission_id: pid, decision }),
       });
     },
   };
@@ -304,40 +405,202 @@ function chatPage() {
 </script>
 
 <style>
-  .chat-shell { display: grid; grid-template-columns: 220px 1fr 280px;
-    gap: 0; height: calc(100vh - 120px); }
-  .chat-rail { border-right: 1px solid var(--border-soft); padding: .75rem;
-    overflow-y: auto; }
-  .chat-new { width: 100%; margin-bottom: .75rem; }
-  .chat-convs { list-style: none; margin: 0; padding: 0; }
-  .chat-convs li { padding: .5rem .6rem; border-radius: var(--radius);
-    cursor: pointer; color: var(--fg-dim); }
-  .chat-convs li.active, .chat-convs li:hover {
-    background: var(--bg); color: var(--fg); }
-  .chat-thread { display: flex; flex-direction: column; min-width: 0; }
-  .chat-log { flex: 1; overflow-y: auto; padding: 1rem 1.25rem; }
-  .msg { margin: .85rem 0; }
-  .msg-role { font-size: .7rem; text-transform: uppercase;
-    color: var(--fg-muted); margin-bottom: .2rem; }
-  .msg-user .msg-body { background: var(--bg); border-radius: var(--radius);
-    padding: .55rem .8rem; display: inline-block; }
-  .tool-call summary { cursor: pointer; color: var(--fg-muted);
+  /* ---- mnemo v3 chat : "knowledge terminal", Claude-grade ---- */
+  .mn { display: grid; grid-template-columns: 252px minmax(0,1fr) 280px;
+    height: calc(100vh - 116px); background:
+      radial-gradient(80% 60% at 50% -10%, rgba(126,231,224,.05), transparent 60%),
+      var(--bg); }
+  .mn [x-cloak] { display: none !important; }
+
+  /* rail */
+  .chat-rail { display: flex; flex-direction: column;
+    border-right: 1px solid var(--border-soft); min-height: 0; }
+  .rail-brand { display: flex; align-items: center; gap: .55rem;
+    padding: 1rem 1rem .65rem; font-family: var(--mono); font-weight: 600;
+    letter-spacing: .04em; }
+  .rail-new { margin: 0 .75rem .6rem; padding: .6rem .8rem; text-align: left;
+    background: var(--accent-soft); color: var(--accent);
+    border: 1px solid transparent; border-radius: var(--radius);
+    cursor: pointer; font-size: .88rem; transition: var(--transition);
+    display: flex; gap: .5rem; align-items: center; }
+  .rail-new:hover { border-color: var(--accent); background: rgba(126,231,224,.16); }
+  .rail-new span { font-size: 1.05rem; line-height: 1; }
+  .rail-scroll { overflow-y: auto; padding: .25rem .5rem 1rem; flex: 1; }
+  .rail-group-label { font-family: var(--mono); font-size: .68rem;
+    text-transform: uppercase; letter-spacing: .14em; color: var(--fg-dim);
+    padding: .9rem .55rem .35rem; }
+  .rail-group ul { list-style: none; margin: 0; padding: 0; }
+  .rail-group li { display: flex; align-items: baseline; gap: .5rem;
+    padding: .5rem .6rem; border-radius: var(--radius); cursor: pointer;
+    color: var(--fg-muted); transition: var(--transition); }
+  .rail-group li:hover { background: var(--panel); color: var(--fg); }
+  .rail-group li.active { background: var(--panel); color: var(--fg);
+    box-shadow: inset 2px 0 0 var(--accent); }
+  .cv-name { flex: 1; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; font-size: .88rem; }
+  .cv-time { font-family: var(--mono); font-size: .68rem; color: var(--fg-dim); }
+  .rail-empty { color: var(--fg-dim); font-size: .82rem; padding: 1rem .8rem; }
+
+  /* thread */
+  .chat-thread { display: flex; flex-direction: column; min-width: 0;
+    position: relative; }
+  .thread-scroll { flex: 1; overflow-y: auto; scroll-behavior: smooth; }
+  .thread-col { max-width: 46rem; margin: 0 auto; padding: 2rem 1.5rem 1rem;
+    display: flex; flex-direction: column; gap: 1.5rem; }
+  .turn { animation: turn-in .32s cubic-bezier(.2,.7,.3,1) both; }
+  @keyframes turn-in { from { opacity: 0; transform: translateY(8px); } }
+
+  .turn-user { display: flex; justify-content: flex-end; }
+  .bubble-user { background: var(--panel); border: 1px solid var(--border-soft);
+    border-radius: 14px 14px 4px 14px; padding: .7rem 1rem; max-width: 80%;
+    white-space: pre-wrap; line-height: 1.55; }
+
+  .turn-assistant { display: flex; gap: .85rem; align-items: flex-start; }
+  .ava { border-radius: 50%; flex-shrink: 0; margin-top: 2px;
+    box-shadow: 0 0 0 1px var(--border-soft), 0 4px 14px rgba(0,0,0,.35); }
+  .assistant-body { min-width: 0; flex: 1; padding-top: 2px; }
+  .prose { line-height: 1.7; font-size: .96rem; word-wrap: break-word; }
+  .prose strong { color: var(--fg); }
+  .prose code { background: var(--panel); padding: .1rem .35rem;
+    border-radius: 4px; font-size: .85em; }
+  .prose pre { background: var(--panel); border: 1px solid var(--border-soft);
+    border-radius: var(--radius); padding: .8rem 1rem; overflow-x: auto;
+    font-size: .82rem; line-height: 1.5; }
+  .cite-link { color: var(--accent); text-decoration: none;
+    border-bottom: 1px dashed rgba(126,231,224,.4); font-family: var(--mono);
+    font-size: .82em; }
+  .cite-link:hover { border-bottom-style: solid; }
+  .caret { font-family: var(--mono); font-size: .78rem; color: var(--fg-dim);
+    animation: pulse 1.4s ease-in-out infinite; }
+  .blink { animation: blink 1s steps(1) infinite; color: var(--accent); }
+  @keyframes blink { 50% { opacity: 0; } }
+  @keyframes pulse { 0%,100% { opacity: .4; } 50% { opacity: 1; } }
+
+  /* tool chips */
+  .tool-chip { margin-left: 3.4rem; }
+  .tool-chip summary { display: inline-flex; align-items: center; gap: .5rem;
+    list-style: none; cursor: pointer; padding: .35rem .7rem;
+    background: var(--panel); border: 1px solid var(--border-soft);
+    border-radius: 999px; font-family: var(--mono); font-size: .78rem;
+    color: var(--fg-muted); transition: var(--transition); }
+  .tool-chip summary::-webkit-details-marker { display: none; }
+  .tool-chip summary:hover { border-color: var(--accent); color: var(--fg); }
+  .tc-dot { width: 6px; height: 6px; border-radius: 50%;
+    background: var(--accent); box-shadow: 0 0 6px var(--accent); }
+  .tc-name { color: var(--accent); }
+  .tc-hint { color: var(--fg-dim); }
+  .tool-chip pre { margin: .5rem 0 0; background: var(--panel);
+    border: 1px solid var(--border-soft); border-radius: var(--radius);
+    padding: .6rem .8rem; font-size: .76rem; color: var(--fg-muted);
+    overflow-x: auto; }
+  .tool-done { margin-left: 3.4rem; font-family: var(--mono);
+    font-size: .74rem; color: var(--ok); opacity: .75; }
+
+  /* draft card */
+  .draft-card { margin-top: .85rem; border: 1px solid var(--border);
+    border-radius: var(--radius-lg); overflow: hidden; background: var(--bg); }
+  .draft-head { display: flex; gap: .6rem; align-items: center;
+    padding: .55rem .85rem; background: var(--panel);
+    border-bottom: 1px solid var(--border-soft); font-size: .82rem; }
+  .draft-tag { font-family: var(--mono); font-size: .68rem;
+    color: var(--accent); background: var(--accent-soft);
+    padding: .12rem .45rem; border-radius: 4px; }
+  .draft-card pre { margin: 0; padding: .8rem 1rem; font-size: .78rem;
+    color: var(--fg-muted); max-height: 220px; overflow: auto; }
+  .btn-mini { margin: .7rem .85rem .85rem; padding: .4rem .85rem;
+    background: var(--accent); color: #06201e; border: 0;
+    border-radius: var(--radius); font-weight: 600; cursor: pointer;
     font-size: .82rem; }
-  .tool-call pre, .tool-result { color: var(--fg-dim); font-size: .8rem; }
-  .cite-link { color: var(--accent); }
-  .chat-input { display: flex; gap: .5rem; padding: .75rem 1.25rem;
-    border-top: 1px solid var(--border-soft); }
-  .chat-input input { flex: 1; padding: .55rem .7rem; background: var(--bg);
-    color: var(--fg); border: 1px solid var(--border);
-    border-radius: var(--radius); }
-  .chat-cite { border-left: 1px solid var(--border-soft); padding: .75rem;
-    overflow-y: auto; }
-  .chat-cite h3 { margin: 0 0 .5rem; }
-  .cite-list { list-style: none; margin: 0 0 .75rem; padding: 0; }
-  .cite-list a { color: var(--accent); font-family: var(--mono);
-    font-size: .82rem; }
-  .thinking-dots { color: var(--fg-muted); font-size: .8rem; }
-  @media (max-width: 900px) { .chat-shell { grid-template-columns: 1fr; }
-    .chat-rail, .chat-cite { display: none; } }
+
+  /* welcome */
+  .welcome { text-align: center; margin: auto; padding: 3rem 1rem;
+    animation: turn-in .5s ease both; }
+  .welcome-mark { border-radius: 50%; margin-bottom: 1.1rem;
+    box-shadow: 0 0 0 1px var(--border-soft), 0 8px 30px rgba(126,231,224,.12); }
+  .welcome h1 { font-size: 1.5rem; margin: 0 0 .5rem; letter-spacing: -.01em; }
+  .welcome p { color: var(--fg-muted); max-width: 30rem; margin: 0 auto 1.6rem;
+    line-height: 1.6; }
+  .examples { display: flex; flex-direction: column; gap: .5rem;
+    max-width: 28rem; margin: 0 auto; }
+  .example { text-align: left; padding: .65rem .9rem; background: var(--panel);
+    border: 1px solid var(--border-soft); border-radius: var(--radius);
+    color: var(--fg-muted); cursor: pointer; font-size: .86rem;
+    transition: var(--transition); }
+  .example:hover { border-color: var(--accent); color: var(--fg);
+    transform: translateY(-1px); }
+
+  /* permission card */
+  .permit { position: absolute; left: 50%; bottom: 5.6rem;
+    transform: translateX(-50%); width: min(42rem, calc(100% - 3rem));
+    display: flex; gap: .9rem; align-items: flex-start;
+    background: var(--panel); border: 1px solid var(--warn);
+    border-radius: var(--radius-lg); padding: .9rem 1rem;
+    box-shadow: 0 12px 40px rgba(0,0,0,.5); z-index: 5; }
+  .permit img { border-radius: 50%; flex-shrink: 0; }
+  .permit-body { flex: 1; display: flex; flex-direction: column; gap: .3rem; }
+  .permit-body strong { font-size: .92rem; }
+  .permit-body code { font-family: var(--mono); font-size: .74rem;
+    color: var(--fg-muted); word-break: break-all; }
+  .permit-risk { align-self: flex-start; font-family: var(--mono);
+    font-size: .64rem; text-transform: uppercase; letter-spacing: .1em;
+    padding: .1rem .45rem; border-radius: 4px; }
+  .risk-confirm { color: var(--warn); background: rgba(217,119,87,.14); }
+  .risk-danger { color: #fff; background: var(--warn); }
+  .permit-actions { display: flex; gap: .45rem; align-self: center; }
+  .btn-ghost { padding: .45rem .8rem; background: transparent;
+    border: 1px solid var(--border); border-radius: var(--radius);
+    color: var(--fg-muted); cursor: pointer; font-size: .82rem; }
+  .btn-ghost:hover { color: var(--fg); border-color: var(--fg-muted); }
+  .btn-go { padding: .45rem .9rem; background: var(--warn); color: #1a0f0c;
+    border: 0; border-radius: var(--radius); font-weight: 600;
+    cursor: pointer; font-size: .82rem; }
+
+  /* composer */
+  .composer { display: flex; align-items: flex-end; gap: .6rem;
+    max-width: 46rem; margin: 0 auto; width: 100%;
+    padding: .9rem 1.5rem 1.4rem; }
+  .composer textarea { flex: 1; resize: none; max-height: 180px;
+    padding: .8rem 1rem; background: var(--panel);
+    border: 1px solid var(--border); border-radius: 14px; color: var(--fg);
+    font-family: var(--sans); font-size: .94rem; line-height: 1.5;
+    transition: border-color var(--transition); }
+  .composer textarea:focus { outline: none; border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft); }
+  .send { width: 42px; height: 42px; flex-shrink: 0; border: 0;
+    border-radius: 12px; background: var(--accent); color: #06201e;
+    cursor: pointer; display: grid; place-items: center;
+    transition: var(--transition); }
+  .send:disabled { background: var(--panel); color: var(--fg-dim);
+    cursor: not-allowed; }
+  .send:not(:disabled):hover { background: var(--accent-hover);
+    transform: translateY(-1px); }
+
+  /* citation panel */
+  .chat-cite { border-left: 1px solid var(--border-soft); overflow-y: auto;
+    padding: 1rem .85rem; }
+  .cite-head { font-family: var(--mono); font-size: .72rem;
+    text-transform: uppercase; letter-spacing: .14em; color: var(--fg-dim);
+    margin-bottom: .8rem; }
+  .cite-hint { color: var(--fg-dim); font-size: .8rem; line-height: 1.5; }
+  .cite-list { list-style: none; margin: 0 0 1rem; padding: 0;
+    display: flex; flex-direction: column; gap: .3rem; }
+  .cite-list li { display: flex; align-items: center; gap: .5rem;
+    padding: .5rem .6rem; border-radius: var(--radius); cursor: pointer;
+    border: 1px solid transparent; transition: var(--transition); }
+  .cite-list li:hover { background: var(--panel); }
+  .cite-list li.sel { background: var(--panel); border-color: var(--accent); }
+  .cite-dot { width: 6px; height: 6px; border-radius: 50%;
+    background: var(--type-feedback); flex-shrink: 0; }
+  .cite-list code { font-family: var(--mono); font-size: .76rem;
+    color: var(--accent); overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; }
+  .cite-preview { font-size: .82rem; line-height: 1.6; color: var(--fg-muted);
+    border-top: 1px solid var(--border-soft); padding-top: .8rem;
+    max-height: 50vh; overflow: auto; }
+
+  @media (max-width: 1100px) {
+    .mn { grid-template-columns: 1fr; }
+    .chat-rail, .chat-cite { display: none; }
+  }
 </style>
 {% endblock %}
