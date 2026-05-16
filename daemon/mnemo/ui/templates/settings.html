@@ -335,6 +335,133 @@ function settingsForm() {
     }
   };
 }
+
+// v3.2: override the base.html page-context default with the live
+// retrieval-tuning state so the companion can act as a retune
+// assistant (read memory, propose weight deltas, explain tradeoffs)
+// grounded on what's actually configured -- not guessed. weights/k
+// come from the server render; the live (possibly unsaved) edits +
+// the last retune report's labeled-feedback sizes override them off
+// the settingsForm() Alpine proxy (gotcha 20: read via Alpine.$data).
+window.mnemoPageContext = function () {
+  var ctx = {
+    page: 'settings',
+    path: location.pathname,
+    weights: {{ weights | tojson }},
+    k: {{ k | tojson }},
+    recent_feedback: null,
+  };
+  try {
+    var el = document.querySelector('.settings');
+    var d = el && window.Alpine && window.Alpine.$data(el);
+    if (d) {
+      if (d.weights) ctx.weights = d.weights;
+      if (d.report) {
+        ctx.recent_feedback = {
+          n: (d.report.train_size || 0) + (d.report.val_size || 0),
+          train: d.report.train_size || 0,
+          val: d.report.val_size || 0,
+        };
+      }
+    }
+  } catch (e) {
+    /* partial context is still useful -- never throw from here */
+  }
+  return ctx;
+};
+
+// v3.2 P5: the Settings retune assistant. The companion reads memory,
+// proposes scoring deltas + applies them (confirm-risk
+// mnemo_apply_retune mutates the live config), then signals this page
+// via the existing ui_action infra (mnemo-open-panel/mnemo-retune --
+// no new tool). The page VALIDATES: focus the card, re-pull /v1/config,
+// and show the before -> after on the live weight inputs.
+(function () {
+  var KEYS = ['alpha', 'beta', 'gamma', 'delta', 'epsilon', 'zeta'];
+
+  function focusRetune() {
+    var card = document.querySelector('.retune-card');
+    if (!card) return;
+    card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    card.classList.add('retune-flash');
+    setTimeout(function () {
+      card.classList.remove('retune-flash');
+    }, 1400);
+  }
+
+  function validateRetune() {
+    var card = document.querySelector('.retune-card');
+    if (!card) return;
+    fetch('/v1/config')
+      .then(function (r) {
+        return r.ok ? r.json() : null;
+      })
+      .then(function (cfg) {
+        if (!cfg || !cfg.scoring) return;
+        // read the form's CURRENT values off the settingsForm Alpine
+        // proxy (gotcha 20: via Alpine.$data, not a stale handler this)
+        var d =
+          window.Alpine &&
+          window.Alpine.$data(document.querySelector('.settings'));
+        var rows = [];
+        KEYS.forEach(function (k) {
+          var now = Number(cfg.scoring[k]);
+          var was =
+            d && d.weights != null && d.weights[k] != null
+              ? Number(d.weights[k])
+              : null;
+          if (was == null || Math.abs(was - now) > 1e-9) {
+            rows.push(
+              k +
+                ': ' +
+                (was == null ? '?' : was.toFixed(3)) +
+                ' → ' +
+                now.toFixed(3)
+            );
+          }
+          if (d && d.weights) d.weights[k] = now; // live-update the input
+        });
+        var box = card.querySelector('.retune-validated');
+        if (!box) {
+          box = document.createElement('div');
+          box.className = 'retune-validated';
+          card.appendChild(box);
+        }
+        box.innerHTML = rows.length
+          ? '<strong>Retune applied</strong><ul><li>' +
+            rows.join('</li><li>') +
+            '</li></ul>'
+          : '<strong>Weights already current</strong>';
+        box.classList.add('on');
+        clearTimeout(box._t);
+        box._t = setTimeout(function () {
+          box.classList.remove('on');
+        }, 6000);
+        if (window.toast) {
+          window.toast(
+            rows.length
+              ? 'Retune: ' + rows.length + ' weight(s) updated'
+              : 'Weights already current',
+            'info'
+          );
+        }
+      })
+      .catch(function () {
+        /* validation is best-effort -- never block */
+      });
+  }
+
+  function focusAndValidate() {
+    focusRetune();
+    validateRetune();
+  }
+
+  document.addEventListener('mnemo-open-panel', function (e) {
+    var pid = e.detail && e.detail.panel_id;
+    if (!pid || /retune|tune|weight/i.test(pid)) focusAndValidate();
+  });
+  document.addEventListener('mnemo-retune', focusAndValidate);
+})();
 </script>
 
 <style>
@@ -438,6 +565,24 @@ function settingsForm() {
 
   /* v1.2 phase 6: retune panel */
   .retune-card { display: grid; gap: 0.85rem; }
+  /* v3.2: companion "let's retune" focus cue */
+  .retune-card.retune-flash {
+    animation: retune-flash 1.4s ease-out;
+    border-radius: var(--radius-lg, 10px);
+  }
+  @keyframes retune-flash {
+    0%, 100% { box-shadow: 0 0 0 0 transparent; }
+    25% { box-shadow: 0 0 0 3px var(--accent, #7ee7e0); }
+  }
+  /* v3.2 P5: companion retune before -> after validation */
+  .retune-validated {
+    display: none; margin-top: 0.6rem; padding: 0.6rem 0.75rem;
+    border: 1px solid var(--accent, #7ee7e0); border-radius: 8px;
+    background: rgba(126, 231, 224, 0.07); font-size: 0.8rem;
+  }
+  .retune-validated.on { display: block; }
+  .retune-validated ul { margin: 0.35rem 0 0; padding-left: 1.1rem; }
+  .retune-validated li { font-family: var(--mono, monospace); font-size: 0.76rem; }
   .retune-actions { display: flex; gap: 0.6rem; align-items: center; }
   .retune-report { display: grid; gap: 1rem; }
   .retune-mrr-grid {

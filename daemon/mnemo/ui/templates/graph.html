@@ -586,14 +586,6 @@ function nebula() {
         try { this._eventSource.close(); } catch (_) {}
         this._eventSource = null;
       }
-      if (this._resizeObs) {
-        try { this._resizeObs.disconnect(); } catch (_) {}
-        this._resizeObs = null;
-      }
-      if (this._flyRAF) {
-        cancelAnimationFrame(this._flyRAF);
-        this._flyRAF = null;
-      }
       if (this.cg) {
         try { this.cg.destroy(); } catch (_) {}
         this.cg = null;
@@ -825,14 +817,6 @@ function nebula() {
       const container = document.getElementById('cy-nebula');
       if (!container) return;
 
-      if (this._resizeObs) {
-        try { this._resizeObs.disconnect(); } catch (_) {}
-        this._resizeObs = null;
-      }
-      if (this._flyRAF) {
-        cancelAnimationFrame(this._flyRAF);
-        this._flyRAF = null;
-      }
       if (this.cg) {
         try { this.cg.destroy && this.cg.destroy(); } catch (_) {}
         this.cg = null;
@@ -900,26 +884,30 @@ function nebula() {
         renderHoveredPointRing: true,
         hoveredPointRingColor: '#7ee7e0',
         focusedPointRingColor: '#7ee7e0',
-        // -- Force simulation. v2.6.8 SUPERSEDES the v2.6.4
-        //    "never-cool + cached seed" design. Measurement proved
-        //    that premise FALSE: a low-alpha cache-hit kick + decay
-        //    1e9 left the sim energetic ~6 s (dense core moving
-        //    5-18 px / 1.6 s -- the "fluctuate like crazy") then
-        //    froze HARD at
-        //    ~8 s (0 movement forever). So it delivered the chaos
-        //    WITHOUT the perpetual motion. Plus simulationCenter
-        //    0.45 hauled the whole cached cloud toward space-centre
-        //    over those 8 s (off-centre + visibly sliding).
-        //
-        //    New model: the cached layout is a CONVERGED layout --
-        //    display it STATIC (renderCanvas never calls start() on
-        //    a cache hit), so zero relaxation, zero drift, instantly
-        //    stable, then _fitToView() centres it. The sim ONLY runs
-        //    on a cold MISS (start(1)) to PRODUCE that converged
-        //    layout, which is persisted at ~11 s (after it has
-        //    frozen) so future cache hits are a true equilibrium.
-        //    These knobs therefore only shape the cold MISS
-        //    convergence; on a hit the sim is dormant.
+        // -- Organic force simulation. v2.6.4: ALWAYS enabled (even
+        //    on a cache hit). cosmos halts its rAF render loop the
+        //    moment the sim is inactive -- a halted loop is why the
+        //    graph "stopped moving" AND why a subsequent toggle
+        //    "disappeared" (no live frame to repaint into). The
+        //    PERPETUAL-MOTION mechanism is the heartbeat below
+        //    (tiny periodic alpha), NOT a slow decay -- decay stays
+        //    moderate so the COLD convergence forms a good layout
+        //    fast enough to cache (the 7 s persist snapshot). Gentle
+        //    forces + heavy friction so the perpetual drift is calm,
+        //    not a re-scatter.
+        // v2.6.4: NEVER-COOL SIM + CACHED SEED (user-chosen).
+        // cosmos.gl is converge-and-stop: it halts its rAF render
+        // loop the instant the simulation cools, which is why the
+        // nebula "stopped moving" and a later toggle could "vanish"
+        // (no live frame). Energy-injecting a COOLED sim never
+        // worked (4 measured attempts). The fix is to never let it
+        // cool: simulationDecay ~= infinity keeps alpha hot for the
+        // whole session -> the loop stays alive -> perpetual gentle
+        // motion. The cached layout is fed as the SEED (not random
+        // scatter) so load is still fast AND we're already near
+        // equilibrium, so "hot" forces only produce a calm orbital
+        // drift around the cached arrangement -- not a re-scatter.
+        // Runs on BOTH hit + miss (always alive).
         enableSimulation: true,
         simulationGravity: 0.12,
         simulationCenter: 0.45,
@@ -927,15 +915,11 @@ function nebula() {
         simulationRepulsionTheta: 1.15,
         simulationLinkSpring: 0.55,
         simulationLinkDistance: 14,
-        // Heavy friction damps the cold-MISS relaxation so it
-        // settles to a calm layout (not a jitter) before we persist.
+        // Heavier friction so the never-cooling sim is a slow calm
+        // drift, not a jitter.
         simulationFriction: 0.9,
-        // Empirically the cold MISS sim freezes ~8 s after start(1)
-        // regardless of this value (cosmos cools it anyway -- the
-        // old "1e9 == never cool" comment was wrong, proven by
-        // measurement). Left high; harmless since a cache HIT never
-        // starts the sim and the MISS path persists at 11 s (after
-        // the freeze) + displays the result static.
+        // ~1e9: alpha decays so slowly it's effectively constant
+        // for any realistic session -> the render loop never stops.
         simulationDecay: 1000000000,
         onClick: (index) => {
           if (index === undefined || index === null) this.deselect();
@@ -979,42 +963,15 @@ function nebula() {
           }
         }
         this.cg.render();
+        if (this.cg.start) {
+          // HIT: cached seed is near-equilibrium -> a low alpha is
+          // enough for perpetual gentle drift without re-scatter.
+          // MISS: full energy to converge from the random seed.
+          this.cg.start(useCache ? 0.35 : 1);
+        }
         if (useCache) {
-          // v2.6.8 -- the stable, low-end-safe synthesis. Measured
-          // truths this session:
-          //   * start(0.35) re-energised the cached layout off the
-          //     force equilibrium -> ~8 s of violent dense-cluster
-          //     collision + centroid drift ("fluctuate like crazy").
-          //   * a perpetual external render() pump (to keep the loop
-          //     alive for animated camera) HANGS the tab -- hammering
-          //     cosmos render() every frame on 10 k nodes saturates
-          //     the main thread.
-          // Resolution: PIN every point so the sim can NEVER move a
-          // node (zero chaos, zero drift -- verified maxMove=0 even
-          // at full alpha). start(1) ONCE kicks cosmos's own loop so
-          // it's alive across the brief ~1-8 s before it naturally
-          // cools -- long enough for the framing fits below to land.
-          // No pump (it hung), no perpetual sim (it was chaos).
-          // Trade-off: once cosmos cools, camera ops are instant
-          // (not tweened) -- the smooth fly-to + "always alive" are
-          // a cosmos.gl architectural limit, deferred to v3 (see the
-          // handover + reference_cosmos_gl_nebula.md).
-          this._pinAll();
-          if (this.cg.start) this.cg.start(1);
           this.booting = false;
-          // Fit across the first ~1.5 s (cosmos loop still alive):
-          // the first fire can land before the 3-panel grid gives
-          // the canvas its final size. Idempotent; the pinned layout
-          // never moves so once framed it stays framed forever.
-          requestAnimationFrame(() => this._fitToView());
-          setTimeout(() => this._fitToView(), 500);
-          setTimeout(() => this._fitToView(), 1500);
-          setTimeout(() => this._fitToView(), 3000);
           this._scheduleLabels();
-        } else if (this.cg.start) {
-          // MISS only: full energy to converge from the random seed
-          // (NOT pinned -- it must actually move to lay itself out).
-          this.cg.start(1);
         }
       } catch (e) {
         this.booting = false;
@@ -1022,113 +979,20 @@ function nebula() {
         return;
       }
 
-      // MISS: ~11 s in the cold convergence has fully settled (the
-      // sim is energetic for ~6 s then freezes ~8 s -- measured).
-      // Persist THAT truly-settled snapshot so the next visit's
-      // cache hit is a real equilibrium needing zero relaxation,
-      // then centre the static result for this session too.
+      // MISS: ~7 s in, the cold convergence has shaped a good
+      // layout -- persist that snapshot as the warm seed for next
+      // time. We do NOT pause: the never-cool sim keeps the nebula
+      // alive perpetually after convergence too.
       if (!useCache) {
         setTimeout(() => {
           if (!this.cg) return;
           this.booting = false;
+          try { this.cg.fitView(700); } catch (_) {}
           this._persistLayout();
-          // Freeze the converged layout (pin all) so it's stable +
-          // centred -- same end-state as a cache hit. start(0) gives
-          // cosmos's loop a final tick so this late fit lands.
-          this._pinAll();
-          if (this.cg.start) this.cg.start(0);
-          requestAnimationFrame(() => this._fitToView());
           this._scheduleLabels();
-        }, 11000);
-      }
-
-      // v2.6.8: the layout is now STATIC (no perpetual sim), so it
-      // never re-frames itself when the canvas changes size. Watch
-      // the container -- dragging the tree / detail panel gutters or
-      // a window resize must re-centre the cloud. Debounced; goes
-      // through _fitToView so the fit is render-flushed (a bare
-      // cosmos fitView no-ops on the idle loop).
-      if (window.ResizeObserver && !this._resizeObs) {
-        let raf = 0;
-        this._resizeObs = new ResizeObserver(() => {
-          if (raf) cancelAnimationFrame(raf);
-          raf = requestAnimationFrame(() => { raf = 0; this._fitToView(); });
-        });
-        try { this._resizeObs.observe(container); } catch (_) {}
+        }, 7000);
       }
     },
-
-    // v2.6.8: cosmos camera / buffer ops (fitView, selectPoints,
-    // zoomToPointByIndex, setLinkColors) only SET internal state;
-    // the per-frame loop applies it -- but the loop is IDLE once the
-    // sim is inactive (the static cached layout never runs the sim).
-    // An explicit render() is the flush that makes the op take
-    // effect (proven live: bare fitView left the cloud off-centre;
-    // fitView+render snapped it to centre). Generalises the v2.6.6
-    // setLinkColors+render fix to every camera op.
-    _flush() {
-      if (this.cg && this.cg.render) {
-        try { this.cg.render(); } catch (_) { /* engine torn down */ }
-      }
-    },
-
-    // Centre + frame the whole graph. Instant (duration 0) so the
-    // initial framing is deterministic regardless of loop timing;
-    // the render pump (below) makes it apply.
-    _fitToView() {
-      if (!this.cg || !this.cg.fitView) return;
-      try { this.cg.fitView(0); } catch (_) { return; }
-      this._flush();
-    },
-
-    // v2.6.8: pin EVERY point so the force sim can never move a
-    // node. This is what makes "keep the loop alive" safe -- the
-    // loop runs (smooth camera + alive feel) but the cached layout
-    // is frozen exactly in place (zero chaos, zero drift). Verified
-    // live: maxMove == 0 even with cg.start(1) at full alpha.
-    _pinAll() {
-      if (!this.cg || !this.cg.setPinnedPoints) return;
-      const n = (this._points && this._points.length) || 0;
-      if (!n) return;
-      const idx = new Array(n);
-      for (let i = 0; i < n; i++) idx[i] = i;
-      try { this.cg.setPinnedPoints(idx); } catch (_) { /* best effort */ }
-    },
-
-    // v2.6.8: self-terminating camera fly-to (~650 ms ease-out).
-    // Loop-independent (drives its own rAF + render() per frame) so
-    // it tweens even after cosmos's native loop has cooled, and it
-    // ENDS (p>=1 -> no more rAF) so it can never hang the tab the
-    // way the perpetual render pump did. zoomToPointByIndex with
-    // duration 0 instantly recentres on the node at `scale`; ramping
-    // scale start->5 each frame reads as a smooth zoom-in fly. Any
-    // prior fly is superseded (newId guard) so rapid clicks don't
-    // stack rAF chains.
-    _flyTo(index) {
-      if (!this.cg || !this.cg.zoomToPointByIndex) return;
-      if (this._flyRAF) cancelAnimationFrame(this._flyRAF);
-      const myId = (this._flyId = (this._flyId || 0) + 1);
-      let startZoom = 1;
-      try { startZoom = this.cg.getZoomLevel() || 1; } catch (_) {}
-      const target = 5, dur = 650, t0 = performance.now();
-      const ease = (p) => 1 - Math.pow(1 - p, 3);  // easeOutCubic
-      const step = (now) => {
-        if (!this.cg || this._flyId !== myId) { this._flyRAF = null; return; }
-        const p = Math.min(1, (now - t0) / dur);
-        const scale = startZoom + (target - startZoom) * ease(p);
-        try {
-          this.cg.zoomToPointByIndex(index, 0, scale, false);
-          if (this.cg.render) this.cg.render();
-        } catch (_) {}
-        if (p < 1) {
-          this._flyRAF = requestAnimationFrame(step);
-        } else {
-          this._flyRAF = null;  // FINITE -- the burst is over
-        }
-      };
-      this._flyRAF = requestAnimationFrame(step);
-    },
-
 
     // v2.6.3: PUT the current settled positions to the server cache,
     // keyed by the scope + fingerprint the data feed gave us. Best-
@@ -1170,17 +1034,7 @@ function nebula() {
           this.cg.selectPointByIndex(index);
         }
         if (this.cg.setFocusedPointByIndex) this.cg.setFocusedPointByIndex(index);
-        // v2.6.8: the loved camera FLY-TO -- restored WITHOUT the
-        // perpetual pump (that hung the tab). cosmos's own animated
-        // zoomToPointByIndex needs cosmos's native loop, which is
-        // dead once the sim cools, so we drive a SELF-TERMINATING
-        // ~650 ms ease ourselves: each frame, instantly recentre on
-        // the node (duration 0) at a progressively larger scale +
-        // render(). It is a finite burst (ends at p>=1) so it can
-        // NEVER hang like the perpetual pump did, and it's loop-
-        // independent so it always tweens. Pinned points => the
-        // fly-to never disturbs the layout.
-        this._flyTo(index);
+        if (this.cg.zoomToPointByIndex) this.cg.zoomToPointByIndex(index, 700, 5, false);
       } catch (_) { /* engine mid-rebuild -- selection is best-effort */ }
 
       this.selected = { ...rec };
@@ -1232,9 +1086,7 @@ function nebula() {
         try {
           if (this.cg.unselectPoints) this.cg.unselectPoints();
           if (this.cg.setFocusedPointByIndex) this.cg.setFocusedPointByIndex(undefined);
-          // v2.6.8: render-flushed fit (a bare fitView no-ops on the
-          // static layout's idle loop).
-          this._fitToView();
+          if (this.cg.fitView) this.cg.fitView(500);
         } catch (_) {}
       }
       this.selected = null;

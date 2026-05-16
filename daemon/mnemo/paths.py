@@ -41,8 +41,13 @@ def logs_dir() -> Path:
     return mnemo_home() / "logs"
 
 
-def pid_file() -> Path:
-    return mnemo_home() / "pid"
+def pid_file(port: int = 7373) -> Path:
+    """Port-scoped pid file. A preview daemon (7399) and the prod
+    daemon (7373) MUST NOT share one pid file -- when they did, each
+    one's exit ``remove_pid_file()`` orphaned the other (no pid file ->
+    ``mnemo daemon stop/status`` went blind -> a stale process kept
+    serving old code). 7373 is the canonical default (back-compat)."""
+    return mnemo_home() / f"mnemo-{port}.pid"
 
 
 def grammars_dir() -> Path:

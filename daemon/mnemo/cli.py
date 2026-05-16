@@ -553,16 +553,16 @@ def daemon_start(
 
 
 @daemon_app.command("stop")
-def daemon_stop() -> None:
-    if daemon.stop():
+def daemon_stop(port: int = typer.Option(daemon.DEFAULT_PORT, "--port")) -> None:
+    if daemon.stop(port=port):
         typer.echo("daemon stopped")
     else:
         typer.echo("daemon not running")
 
 
 @daemon_app.command("status")
-def daemon_status() -> None:
-    s = daemon.status()
+def daemon_status(port: int = typer.Option(daemon.DEFAULT_PORT, "--port")) -> None:
+    s = daemon.status(port=port)
     if s.running:
         typer.echo(f"running (pid {s.pid})")
     elif s.stale:
@@ -583,7 +583,7 @@ def daemon_restart(
     blank console -- not the daemon). ``daemon.stop()`` blocks until
     the old process has actually exited, so the start is race-safe.
     """
-    typer.echo("daemon stopped" if daemon.stop() else "daemon was not running")
+    typer.echo("daemon stopped" if daemon.stop(port=port) else "daemon was not running")
     try:
         pid = daemon.start(host=host, port=port)
     except RuntimeError as exc:
@@ -598,11 +598,11 @@ def _run_foreground(*, host: str, port: int) -> None:
 
     from mnemo.server import create_app
 
-    daemon.write_pid_file()
+    daemon.write_pid_file(port=port)
     try:
         uvicorn.run(create_app(), host=host, port=port, log_level="info")
     finally:
-        daemon.remove_pid_file()
+        daemon.remove_pid_file(port=port)
 
 
 @app.command()

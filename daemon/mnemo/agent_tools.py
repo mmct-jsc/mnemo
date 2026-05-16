@@ -25,6 +25,7 @@ from __future__ import annotations
 import fnmatch
 import json
 import os
+import re
 import time
 import uuid
 from collections.abc import Callable
@@ -53,7 +54,10 @@ class ToolContext:
 
     store: Store
     embedder: Any | None = None
-    # phase 4 adds: project_key, conversation_id, ui_action sink.
+    # v3.2: the running conversation id (when invoked by the agent
+    # loop). Lets safe tools resolve the live, client-PATCHed
+    # ``page_context``. None when invoked by MCP / outside a chat.
+    conversation_id: str | None = None
 
 
 @dataclass
@@ -405,6 +409,136 @@ def _mnemo_get_code_lines(ctx: ToolContext, *, source_path: str, start: int, end
     }
 
 
+# --- 7. mnemo_page_context (v3.2) ---------------------------------------
+#
+# The companion must ground on the CURRENT screen, not guess. The chat
+# client calls ``window.mnemoPageContext()`` and PATCHes the result onto
+# the conversation before every run (design v3.2 S3.1); this tool hands
+# the model that live state plus the server-known view so it can act in
+# the page ("what's selected here / related in this session") instead of
+# blindly redirecting.
+
+
+@_tool(
+    name="mnemo_page_context",
+    risk=RISK_SAFE,
+    description=(
+        "The user's CURRENT screen: the live page state the UI attached "
+        "to this conversation (page, path, selected node, visible nodes, "
+        "query, weights, ...). Call this FIRST when the user says 'this "
+        "page' / 'here' / 'what's on screen' so you act in-context."
+    ),
+    parameters=_obj({}, []),
+)
+def _mnemo_page_context(ctx: ToolContext) -> dict:
+    cid = ctx.conversation_id
+    conv = ctx.store.get_conversation(cid) if cid else None
+    if conv is None:
+        return {
+            "available": False,
+            "page_context": None,
+            "conversation_id": cid,
+            "project_key": None,
+        }
+    return {
+        "available": conv.page_context is not None,
+        "page_context": conv.page_context,
+        "conversation_id": conv.id,
+        "project_key": conv.project_key,
+    }
+
+
+# --- 8. mnemo_session_nodes (v3.2) --------------------------------------
+#
+# "What's related in THIS session?" -- the cited / tool-used node ids of
+# the running conversation + their 1-hop neighbours. The companion calls
+# this then mnemo_highlight_nodes to light up the subgraph on Nebula
+# instead of guessing (design v3.2 S3.4).
+
+_SESSION_CITE_RE = re.compile(r"\[mnemo:([^\]\s]+)\]")
+# the tool args that unambiguously name a node (so a tool the user
+# acted on counts as "used" even without an inline citation).
+_NODE_ID_ARGS = ("node_id", "start_id")
+
+
+@_tool(
+    name="mnemo_session_nodes",
+    risk=RISK_SAFE,
+    description=(
+        "The nodes this conversation has cited or acted on, plus their "
+        "1-hop neighbours. Use to ground 'what's related in this "
+        "session / show it on the graph' before mnemo_highlight_nodes."
+    ),
+    parameters=_obj({}, []),
+)
+def _mnemo_session_nodes(ctx: ToolContext) -> dict:
+    cid = ctx.conversation_id
+    empty = {
+        "conversation_id": cid,
+        "node_ids": [],
+        "neighbor_ids": [],
+        "edges": [],
+        "count": 0,
+    }
+    if not cid or ctx.store.get_conversation(cid) is None:
+        return empty
+
+    seeds: list[str] = []
+
+    def _add(nid: object) -> None:
+        if isinstance(nid, str) and nid and nid not in seeds:
+            seeds.append(nid)
+
+    for msg in ctx.store.list_messages(cid):
+        c = msg.content or {}
+        if msg.role == "assistant":
+            for nid in c.get("citations") or []:
+                _add(nid)
+            for m in _SESSION_CITE_RE.finditer(c.get("text") or ""):
+                _add(m.group(1))
+        elif msg.role == "tool_call":
+            args = c.get("args") or {}
+            for k in _NODE_ID_ARGS:
+                _add(args.get(k))
+        elif msg.role == "tool_result":
+            res = c.get("result")
+            if isinstance(res, dict):
+                _add(res.get("node_id"))
+
+    # Keep only seeds that still exist (a node may have been deleted).
+    existing = ctx.store.get_nodes_by_ids(seeds)
+    node_ids = [s for s in seeds if s in existing]
+
+    edges = ctx.store.get_edges_for_nodes(node_ids) if node_ids else []
+    node_set = set(node_ids)
+    neighbors: list[str] = []
+    edges_out: list[dict] = []
+    for e in edges:
+        edges_out.append(
+            {
+                "src": e.src_id,
+                "dst": e.dst_id,
+                "relation": e.relation,
+                "confidence": e.confidence,
+            }
+        )
+        for endpoint in (e.src_id, e.dst_id):
+            if endpoint not in node_set and endpoint not in neighbors:
+                neighbors.append(endpoint)
+    # only surface neighbours that are real nodes
+    if neighbors:
+        nb_existing = ctx.store.get_nodes_by_ids(neighbors)
+        neighbors = [n for n in neighbors if n in nb_existing]
+
+    return {
+        "conversation_id": cid,
+        "node_ids": node_ids,
+        "neighbor_ids": neighbors,
+        "edges": edges_out,
+        "count": len(node_ids),
+    }
+
+
 # --- write / exec tools (confirm) ---------------------------------------
 
 
@@ -549,6 +683,59 @@ def _mnemo_reindex_source(ctx: ToolContext, *, source_path: str | None = None) -
     }
 
 
+# --- 9. mnemo_apply_retune (v3.2) ---------------------------------------
+#
+# The Settings retune assistant's apply step. Scoped to ONLY the 6
+# scoring weights -> a bounded, recoverable CONFIRM surface (config can
+# be reset / re-applied), deliberately NOT the danger
+# mnemo_change_settings catch-all. Returns before/after so the page can
+# validate (design v3.2 S3.5).
+
+_RETUNE_KEYS = ("alpha", "beta", "gamma", "delta", "epsilon", "zeta")
+
+
+@_tool(
+    name="mnemo_apply_retune",
+    risk=RISK_CONFIRM,
+    description=(
+        "Apply retrieval scoring-weight deltas (alpha/beta/gamma/delta/"
+        "epsilon/zeta) to the live config -- the Settings retune "
+        "assistant's apply step. Bounded + recoverable. Returns the "
+        "before/after so the page can validate."
+    ),
+    parameters=_obj(
+        {
+            "weights": {
+                "type": "object",
+                "description": "subset of alpha/beta/gamma/delta/epsilon/zeta -> float",
+            }
+        },
+        ["weights"],
+    ),
+)
+def _mnemo_apply_retune(ctx: ToolContext, *, weights: dict) -> dict:
+    cur = config.load().scoring
+    before = {k: getattr(cur, k) for k in _RETUNE_KEYS}
+    valid: dict[str, float] = {}
+    ignored: list[str] = []
+    for k, v in (weights or {}).items():
+        if k in _RETUNE_KEYS and isinstance(v, int | float) and not isinstance(v, bool):
+            valid[k] = float(v)
+        else:
+            ignored.append(k)
+    if valid:
+        config.update({"scoring": valid})
+    after_sc = config.load().scoring
+    after = {k: getattr(after_sc, k) for k in _RETUNE_KEYS}
+    return {
+        "ok": True,
+        "before": before,
+        "after": after,
+        "applied": sorted(valid.keys()),
+        "ignored": ignored,
+    }
+
+
 # --- danger tools (always prompt, no allow-always) ----------------------
 
 
@@ -660,6 +847,23 @@ def _mnemo_scroll_to(ctx: ToolContext, *, selector: str) -> dict:
 )
 def _mnemo_open_panel(ctx: ToolContext, *, panel_id: str) -> dict:
     return _ui("open_panel", {"panel_id": panel_id})
+
+
+@_tool(
+    name="mnemo_highlight_nodes",
+    risk=RISK_CONFIRM,
+    description=(
+        "Highlight a SET of nodes on the live Nebula graph (greys the "
+        "rest by opacity -- never hides). Pair with mnemo_session_nodes "
+        "to light up 'what's related in this session'."
+    ),
+    parameters=_obj(
+        {"node_ids": {"type": "array", "items": {"type": "string"}}},
+        ["node_ids"],
+    ),
+)
+def _mnemo_highlight_nodes(ctx: ToolContext, *, node_ids: list[str]) -> dict:
+    return _ui("highlight_nodes", {"node_ids": node_ids})
 
 
 # --- Skill tools (v3.1 phase 4) -----------------------------------------

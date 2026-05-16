@@ -89,11 +89,62 @@ def test_stop_cleans_up_stale_pid_file(isolated_mnemo_home: Path) -> None:
 
 
 def test_write_and_remove_pid_file(isolated_mnemo_home: Path) -> None:
-    f = daemon.write_pid_file(1234)
+    # New ownership-safe contract: remove_pid_file only deletes a file
+    # this process owns (so a duplicate / other-port daemon exiting can
+    # never orphan the real one). Write OUR pid so the remove applies.
+    f = daemon.write_pid_file(os.getpid())
     assert f.exists()
-    assert f.read_text().strip() == "1234"
+    assert f.read_text().strip() == str(os.getpid())
     daemon.remove_pid_file()
     assert not f.exists()
+
+
+# --- v3.2 fix: the daemon "stuck" root cause -------------------------
+# Two defects orphaned the real daemon so `mnemo daemon stop/status`
+# went blind and a stale process kept serving old code:
+#   (1) ONE pid file shared across ports -- a preview daemon (7399)
+#       and the prod daemon (7373) clobbered each other's pid file;
+#   (2) remove_pid_file() unlinked unconditionally -- a duplicate /
+#       other-port process exiting wiped the live one's pid file.
+
+
+def test_pid_file_is_port_scoped(isolated_mnemo_home: Path) -> None:
+    assert paths.pid_file(7373) != paths.pid_file(7399)
+    # the default must remain the canonical 7373 file (back-compat)
+    assert paths.pid_file() == paths.pid_file(7373)
+    assert "7399" in paths.pid_file(7399).name
+
+
+def test_status_does_not_collide_across_ports(isolated_mnemo_home: Path) -> None:
+    paths.ensure_runtime_dirs()
+    # a preview daemon on 7399 must NOT make the 7373 prod daemon look
+    # running (the exact bug: prod served stale code as an orphan).
+    paths.pid_file(7399).write_text(str(os.getpid()))
+    assert daemon.status(port=7399).running is True
+    assert daemon.status(port=7373).running is False
+
+
+def test_remove_pid_file_only_removes_when_owned(isolated_mnemo_home: Path) -> None:
+    paths.ensure_runtime_dirs()
+    # a DIFFERENT pid owns the file -> remove must be a no-op (this is
+    # what stops preview-stop from orphaning the prod daemon).
+    paths.pid_file().write_text("99999999")
+    daemon.remove_pid_file()
+    assert paths.pid_file().exists()
+    assert paths.pid_file().read_text().strip() == "99999999"
+    # we own it -> remove works
+    paths.pid_file().write_text(str(os.getpid()))
+    daemon.remove_pid_file()
+    assert not paths.pid_file().exists()
+
+
+def test_remove_pid_file_is_port_scoped(isolated_mnemo_home: Path) -> None:
+    paths.ensure_runtime_dirs()
+    paths.pid_file(7399).write_text(str(os.getpid()))
+    daemon.remove_pid_file(port=7373)  # different port -> must not touch 7399
+    assert paths.pid_file(7399).exists()
+    daemon.remove_pid_file(port=7399)
+    assert not paths.pid_file(7399).exists()
 
 
 def test_start_refuses_when_already_running(
