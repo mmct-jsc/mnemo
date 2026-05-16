@@ -285,6 +285,18 @@
   .rail-group li { position: relative; }
   .cv-del:hover { color: var(--warn);
     background: color-mix(in srgb, var(--warn) 18%, transparent); }
+  /* v4.3 (C3): rename affordance -- same hover-reveal as .cv-del */
+  .cv-ren { display: grid; place-items: center; width: 22px; height: 22px;
+    flex-shrink: 0; padding: 0; margin: -2px 0 -2px 0;
+    background: none; border: 0; color: var(--fg-dim); cursor: pointer;
+    border-radius: 6px; opacity: 0;
+    transition: opacity .15s ease, color .15s ease, background .15s ease; }
+  .rail-group li:hover .cv-ren, .cv-ren:focus-visible { opacity: 1; }
+  .cv-ren:hover { color: var(--accent);
+    background: var(--accent-soft); }
+  .cv-rename { flex: 1; min-width: 0; font-size: .86rem;
+    padding: .15rem .35rem; background: var(--bg);
+    border: 1px solid var(--accent); border-radius: 6px; color: var(--fg); }
   .rail-empty { color: var(--fg-dim); font-size: .82rem; padding: 1rem .8rem; }
 
   /* thread */
