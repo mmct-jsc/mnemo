@@ -1,8 +1,12 @@
 {% extends "base.html" %}
 {% block title %} - chat{% endblock %}
 
-{% block content %}
+{# Use {% block layout %} + <main class="full"> -- the SAME app-wide
+   full-window convention the Nebula page uses (consistent chrome, no
+   global html/body/main overrides). #}
+{% block layout %}
 <script src="/static/chat.js?v={{ mnemo_version }}" defer></script>
+<main class="full">
 <section class="mn" x-data="mnemoChat({ surface: 'page' })" x-init="init()"
          @mnemo-cite.document="onCiteEvent($event.detail.node_id)">
 
@@ -249,26 +253,20 @@
     <div class="cite-preview" x-ref="citePreview" x-show="citeSel" x-cloak></div>
   </aside>
 </section>
+</main>
 
 
 <style>
   /* ---- mnemo v3 chat : "knowledge terminal", Claude-grade ---- */
-  /* /chat is a SINGLE WINDOW: the document never scrolls (this <style>
-     only ships on /chat, so the lock is page-scoped). .mn fills
-     exactly the space under the topbar -- the topbar is 64px
-     (measured live; the old code's 116px was wrong by 52px, which
-     was the void/scroll). NOT position:fixed -- a base.html ancestor
-     has a transform/filter, which makes fixed resolve against IT,
-     not the viewport (it rendered collapsed at y:134/h:0). With the
-     overflow lock a slightly-off calc can only clip, never scroll.
-     Only .thread-scroll / .rail-scroll scroll, internally. */
-  html, body { height: 100%; overflow: hidden; margin: 0; }
-  /* <main> ships ~38px of top padding site-wide; on the 1-window chat
-     that pushed .mn below the 64px topbar (y:102) and clipped the
-     bottom. Zero it page-scoped so .mn sits flush under the topbar. */
-  body > main { margin: 0; padding: 0; }
+  /* 1-window via the SAME app convention as Nebula: this page emits
+     the layout block + a full-bleed main (no html/body/main
+     overrides -> chrome stays IDENTICAL to every other page) and the
+     shell is calc(100vh - 65px) -- the exact value .nebula-shell uses
+     for the topbar. The thread/rail scroll internally; the document
+     does not. (Comment kept free of brace-percent so Jinja does not
+     parse it as a tag.) */
   .mn { display: grid; grid-template-columns: 252px minmax(0,1fr) 280px;
-    height: calc(100dvh - 64px); min-height: 0; background:
+    height: calc(100vh - 65px); min-height: 0; background:
       radial-gradient(80% 60% at 50% -10%, rgba(126,231,224,.05), transparent 60%),
       var(--bg); }
   .mn [x-cloak] { display: none !important; }
@@ -351,7 +349,15 @@
     border-radius: 14px 14px 4px 14px; padding: .7rem 1rem; max-width: 80%;
     white-space: pre-wrap; line-height: 1.55; }
 
-  .turn-assistant { display: flex; gap: .85rem; align-items: flex-start; }
+  /* `.turn > .turn-assistant` -- scope the avatar+body flex ROW to the
+     INNER element only. The outer `.turn` ALSO gets class
+     `turn-assistant` via :class="'turn-'+m.role"; if the flex rule hit
+     it too, the outer became display:flex and its single inner child
+     was flex:0 1 auto -> CONTENT-SIZED (the assistant prose collapsed
+     to ~63px and a short message "shrank"). The outer must stay a
+     full-width block. (Same class of bug as the dock .mc-user one.) */
+  .turn > .turn-assistant { display: flex; gap: .85rem;
+    align-items: flex-start; }
   .ava { border-radius: 50%; flex-shrink: 0; margin-top: 2px;
     box-shadow: 0 0 0 1px var(--border-soft), 0 4px 14px rgba(0,0,0,.35); }
   .assistant-body { min-width: 0; flex: 1; padding-top: 2px; }
@@ -636,11 +642,9 @@
   .ce-fade { transition: opacity .26s ease, transform .26s ease; }
   .ce-fade-0 { opacity: 0; transform: translateY(4px); }
   .ce-fade-1 { opacity: 1; transform: translateY(0); }
-  /* short assistant replies sat unbalanced next to the avatar -- give
-     the body a comfortable min-height so 1-liners read as a real turn */
-  .turn-assistant .assistant-body { min-height: 30px;
-    display: flex; flex-direction: column; justify-content: center; }
-  .turn-assistant .assistant-body .prose { align-self: stretch; }
+  /* (removed the min-height/flex band-aids -- they were compensating
+     for the collapsed-width bug fixed above; with .assistant-body
+     flex:1 in a full-width inner row the prose fills naturally.) */
 
   @media (max-width: 1100px) {
     .mn { grid-template-columns: 1fr; }
