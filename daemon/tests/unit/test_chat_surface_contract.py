@@ -60,3 +60,26 @@ def test_dock_renders_conversation_list_via_shared_rail() -> None:
     assert "deleteConversation(" in rail
     # and is matrix-gated, not unconditional:
     assert "chat_surfaces[surface].rail" in rail
+
+
+def test_dock_renders_bookmarks_via_shared_partial() -> None:
+    """The dock gains bookmark parity (strip + per-turn star) by
+    INCLUDING the shared partial. The factory already shares
+    bookmarks[]/isBookmarked/toggleBookmark/jumpTo (loadBookmarks even
+    already ran in the dock scope) -- only rendering was missing."""
+    base = (TPL / "base.html").read_text(encoding="utf-8")
+    page = (TPL / "chat.html").read_text(encoding="utf-8")
+    bm = (TPL / "_chat_bookmarks.html").read_text(encoding="utf-8")
+    assert "_chat_bookmarks.html" in base, "dock must INCLUDE the shared bookmarks"
+    assert "_chat_bookmarks.html" in page, "page must INCLUDE it (single-source)"
+    # both the strip and the star are wired in the partial:
+    assert "toggleBookmark(" in bm
+    assert "isBookmarked(" in bm
+    assert "jumpTo(" in bm
+    assert "bm-tick" in bm
+    assert "bm-star" in bm
+    # matrix-gated, not unconditional:
+    assert "chat_surfaces[surface].bookmarks" in bm
+    # dock wires BOTH parts (strip + star):
+    assert "bm = 'strip'" in base
+    assert "bm = 'star'" in base
