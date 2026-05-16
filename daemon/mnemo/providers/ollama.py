@@ -20,9 +20,11 @@ from mnemo.providers import (
     EV_TEXT,
     EV_TOOL_CALL,
     BaseProvider,
+    ProviderDescriptor,
     ProviderError,
     ProviderEvent,
     _usage_event,
+    register_provider,
 )
 
 # Model name prefixes that support Ollama's native tool API.
@@ -177,3 +179,21 @@ class OllamaProvider(BaseProvider):
             if ev is not None:
                 yield ev
         yield (EV_STOP, "tool_use" if saw_tool else "end_turn")
+
+
+# C2 (v4.1): self-register. Ollama is local -> no key, no env var.
+# base_url=None: OllamaProvider keeps its own http://localhost:11434
+# default (behaviour-preserving -- do not invent a new endpoint).
+register_provider(
+    ProviderDescriptor(
+        name="ollama",
+        display_name="Ollama (local)",
+        impl_class=OllamaProvider,
+        env_var=None,
+        requires_key=False,
+        default_model="llama3.1:8b",  # UNCHANGED (DEFAULT_MODELS)
+        known_models=("llama3.1:8b", "llama3.3", "qwen2.5", "mistral"),
+        base_url=None,
+        native_compaction_models=frozenset(),
+    )
+)
