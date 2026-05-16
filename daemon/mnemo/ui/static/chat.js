@@ -685,6 +685,10 @@
             document.dispatchEvent(
               new CustomEvent('mnemo-set-filter', { detail: a })
             );
+          } else if (d.action === 'highlight_nodes') {
+            document.dispatchEvent(
+              new CustomEvent('mnemo-highlight-nodes', { detail: a })
+            );
           } else if (d.action === 'scroll_to' && a.selector) {
             var el = document.querySelector(a.selector);
             if (el) el.scrollIntoView({ behavior: 'smooth' });
