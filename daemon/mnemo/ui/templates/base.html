@@ -725,6 +725,7 @@
         this._applyXY(el, this.pos.x, this.pos.y);
         localStorage.setItem('mnem.pos', JSON.stringify(this.pos));
         if (this.state !== 'closed') this._positionPanel(); // keep glued
+        this._positionBubble(); // keep glued (self-guards if no bubble)
       },
       init() {
         if (this.hiddenOnChat) return;
@@ -832,12 +833,45 @@
         panel.style.right = 'auto';
         panel.style.bottom = 'auto';
       },
-      // The panel is x-show'd: it has no box until Alpine flips display,
-      // so re-anchor on the next frame(s).
+      // Same anchor math as _positionPanel but for the proactive nudge
+      // bubble. The bubble was in .mnem-wrap's flex flow -> showing it
+      // shoved Mnem out of place; the WIP fix also read offsetWidth
+      // pre-layout (clipped to "Want m to"). So: definite CSS width
+      // (not max-content), generous offset fallbacks, and only ever
+      // called from _repositionSoon (post-layout rAF/timeout).
+      _positionBubble() {
+        var root = (this.$el && this.$el.classList
+          && this.$el.classList.contains('mnem-wrap'))
+          ? this.$el : document.querySelector('.mnem-wrap');
+        if (!root || !this.bubble) return;
+        var bub = root.querySelector('.mnem-bubble');
+        var launcher = root.querySelector('.mnem-dock');
+        if (!bub || !launcher) return;
+        var lr = launcher.getBoundingClientRect();
+        var vw = document.documentElement.clientWidth || this._vw();
+        var vh = document.documentElement.clientHeight || this._vh();
+        if (!vw || !lr.width) return;
+        var bw = bub.offsetWidth || 280;
+        var bh = bub.offsetHeight || 84;
+        var gap = 10;
+        var lcx = lr.left + lr.width / 2;
+        var lcy = lr.top + lr.height / 2;
+        var left = lcx > vw / 2 ? lr.right - bw : lr.left;
+        var top = lcy > vh / 2 ? lr.top - bh - gap : lr.bottom + gap;
+        left = Math.max(8, Math.min(vw - bw - 8, left));
+        top = Math.max(8, Math.min(vh - bh - 8, top));
+        bub.style.left = left + 'px';
+        bub.style.top = top + 'px';
+        bub.style.right = 'auto';
+        bub.style.bottom = 'auto';
+      },
+      // The panel/bubble are x-show'd: no box until Alpine flips
+      // display, so re-anchor on the next frame(s).
       _repositionSoon() {
         var self = this;
-        requestAnimationFrame(function () { self._positionPanel(); });
-        setTimeout(function () { self._positionPanel(); }, 60);
+        var go = function () { self._positionPanel(); self._positionBubble(); };
+        requestAnimationFrame(go);
+        setTimeout(go, 60);
       },
       dragStart(e) {
         // Stop the browser's native image/text drag-and-drop -- without
@@ -878,6 +912,7 @@
           cmp.pos.y = ny;
           apply(el, nx, ny); // immediate, frame-perfect visual
           if (cmp.state !== 'closed') cmp._positionPanel(); // follow
+          cmp._positionBubble(); // follows too (self-guards if no bubble)
         };
         var up = function () {
           document.removeEventListener('pointermove', mv);
@@ -886,6 +921,7 @@
           cmp.dragging = false;
           if (cmp._moved) cmp.snapToEdge(el);
           if (cmp.state !== 'closed') cmp._positionPanel(); // re-anchor
+          cmp._positionBubble();
         };
         document.addEventListener('pointermove', mv);
         document.addEventListener('pointerup', up);
@@ -930,6 +966,7 @@
         if (window.location.pathname.startsWith('/chat')) return;
         this._lastNudge = now;
         this.bubble = 'Want me to summarize what you are looking at?';
+        this._repositionSoon(); // glue it to the launcher; never reflow
       },
     };
   }
@@ -1048,7 +1085,14 @@
       font-size: .74rem; color: var(--fg-dim); text-decoration: none;
       border-top: 1px solid var(--border-soft); }
     .mc-expand:hover { color: var(--accent); }
-    .mnem-bubble { max-width: 260px; background: var(--panel);
+    /* position:fixed (out of the launcher's flex flow -- it was
+       shoving Mnem out of place) + a DEFINITE width (max-content +
+       a pre-layout offsetWidth read clipped it to "Want m to").
+       _positionBubble() glues it next to the launcher + clamps it
+       on-screen; right/bottom here is just a pre-JS fallback. */
+    .mnem-bubble { position: fixed; right: 16px; bottom: 84px;
+      z-index: 61; width: min(280px, calc(100vw - 32px));
+      background: var(--panel);
       border: 1px solid var(--accent); color: var(--fg);
       padding: .7rem .85rem; border-radius: var(--radius-lg);
       cursor: pointer; font-size: .85rem; line-height: 1.45;
