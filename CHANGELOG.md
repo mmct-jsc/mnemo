@@ -84,6 +84,27 @@ serious pre-existing defects this release now fixes.
   preview with a real Anthropic turn: "show me in nebula" opens
   `/graph` in a new tab with the conversation intact (no "connection
   dropped").
+- **Chat layout, fully root-caused (supersedes the item above).** The
+  earlier "single window" attempt used a page-scoped `html,body`
+  overflow lock + zeroed `body>main`, which desynced `/chat`'s chrome
+  from every other page. Reverted to the **app-standard full-window
+  convention** the Nebula page uses (`{% block layout %}` +
+  `<main class="full">` + `calc(100vh - 65px)`; no global overrides).
+  Then the real "messages shrink / aren't left aligned" cause was
+  found by measuring the user's *exact* conversation: the centre
+  column was a **second `<main>`** (`<main class="chat-thread">`
+  nested in `<main class="full">`) that inherited app.css
+  `main{max-width:1600px;margin:2rem auto}` -- as a grid item the
+  auto inline margins made it shrink-to-fit + centre instead of
+  filling its cell. Now a plain `<div>`; the message body **fills the
+  thread** (the 46rem reading cap is removed -- it had left the body
+  at ~53% of a wide screen with a large dead gap next to the
+  citations panel), **left-flush** by the rail, with assistant prose,
+  tool calls, and the user/composer all sharing one column.
+  Cited **code in the side panel now wraps** instead of clipping
+  (Prism forces the inner `<code>` to `white-space:pre`; an
+  `!important` rule overrides the vendored sheet). All verified live
+  with hard geometry numbers (prose 277->1270px, no overflow).
 
 ## [3.1.0] - 2026-05-16
 
