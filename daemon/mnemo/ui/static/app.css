@@ -390,6 +390,31 @@ a:hover { color: var(--accent-hover); }
 .settings-tabs a.active { color: var(--fg);
   border-bottom-color: var(--accent); }
 
+/* C3 (v4.3): the SHARED chat rail's dock variant. The dock renders
+   off /chat where chat.html's <style> (.chat-rail page styling) is
+   absent, so .rail--dock is self-sufficient: a compact, bounded,
+   scrollable conversation switcher (the switch/back capability the
+   dock silently lacked pre-v4.3). The page variant keeps chat.html's
+   .chat-rail rules untouched. */
+.rail--dock { flex: 0 0 auto; max-height: 32vh; overflow-y: auto;
+  border-bottom: 1px solid var(--border-soft);
+  padding: .3rem .5rem .4rem; font-size: .8rem; }
+.rail--dock .rail-group-label { font-size: .66rem; color: var(--fg-dim);
+  text-transform: uppercase; letter-spacing: .04em; margin: .4rem 0 .15rem; }
+.rail--dock ul { list-style: none; margin: 0; padding: 0; }
+.rail--dock li { display: flex; align-items: center; gap: .4rem;
+  padding: .3rem .4rem; border-radius: var(--radius); cursor: pointer; }
+.rail--dock li:hover { background: var(--panel-2); }
+.rail--dock li.active { background: var(--accent-soft); color: var(--accent); }
+.rail--dock .cv-name { flex: 1; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }
+.rail--dock .cv-time { font-size: .64rem; color: var(--fg-dim); flex: 0 0 auto; }
+.rail--dock .cv-del { background: none; border: 0; color: var(--fg-dim);
+  cursor: pointer; padding: .12rem; display: inline-flex; }
+.rail--dock .cv-del:hover { color: var(--warn); }
+.rail--dock .rail-empty { color: var(--fg-dim); font-size: .76rem;
+  padding: .4rem; margin: 0; }
+
 code, pre { font-family: var(--mono); font-size: 0.85em; }
 pre {
   background: var(--panel);

@@ -36,3 +36,27 @@ def test_both_surfaces_include_the_shared_partials() -> None:
     for p in PARTIALS:
         assert p in page, f"chat.html must include {p} (no re-implementation)"
         assert p in base, f"dock (base.html) must include {p} (parity by inclusion)"
+
+
+def test_dock_renders_conversation_list_via_shared_rail() -> None:
+    """The dock gains switch/back/new by INCLUDING the shared rail
+    (the factory already shares the logic; only rendering was missing)
+    -- not by re-implementing it inline."""
+    base = (TPL / "base.html").read_text(encoding="utf-8")
+    page = (TPL / "chat.html").read_text(encoding="utf-8")
+    rail = (TPL / "_chat_rail.html").read_text(encoding="utf-8")
+    import re
+
+    assert "_chat_rail.html" in base, "dock must INCLUDE the shared rail"
+    assert "_chat_rail.html" in page, "page must INCLUDE the shared rail (single-source)"
+    # surface passed to the include (whitespace-tolerant -- Jinja
+    # `{% with surface = 'dock' %}`):
+    assert re.search(r"surface\s*=\s*'dock'", base), "dock include must pass surface='dock'"
+    assert re.search(r"surface\s*=\s*'page'", page), "page include must pass surface='page'"
+    # the shared rail binds the ALREADY-shared factory logic:
+    assert "groupedConversations" in rail
+    assert "openConversation(" in rail
+    assert "newConversation()" in rail
+    assert "deleteConversation(" in rail
+    # and is matrix-gated, not unconditional:
+    assert "chat_surfaces[surface].rail" in rail

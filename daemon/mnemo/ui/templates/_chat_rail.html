@@ -1,0 +1,47 @@
+{# C3 (v4.3) shared chat rail. ONE conversation-list source for both
+   surfaces -- the mnemoChat() factory already shares
+   groupedConversations / openConversation / newConversation /
+   deleteConversation; pre-v4.3 the dock silently lacked the RENDERING
+   (switch/back/new-then-return was impossible). Gated by the
+   CHAT_SURFACES matrix; `surface` is set by the includer. Page keeps
+   the brand + standalone New-chat button; the dock omits them (its
+   mc-head already has Mnem + a New-chat control) and renders the
+   compact .rail--dock list = the switch/back capability. #}
+{% if chat_surfaces[surface].rail %}
+<aside class="chat-rail rail--{{ surface }}">
+  {% if surface == 'page' %}
+  <div class="rail-brand">
+    <img src="/static/mnem/idle.svg" width="26" height="26" alt="">
+    <span>Mnem</span>
+  </div>
+  <button class="rail-new" @click="newConversation()">
+    <span>＋</span> New chat
+  </button>
+  {% endif %}
+  <div class="rail-scroll">
+    <template x-for="grp in groupedConversations" :key="grp.label">
+      <div class="rail-group">
+        <div class="rail-group-label" x-text="grp.label"></div>
+        <ul>
+          <template x-for="c in grp.items" :key="c.id">
+            <li :class="{active: c.id === activeId}" @click="openConversation(c.id)">
+              <span class="cv-name" x-text="c.name"></span>
+              <span class="cv-time" x-text="relTime(c.updated_at)"></span>
+              <button class="cv-del" type="button"
+                      @click="deleteConversation(c.id, $event)"
+                      title="Delete chat" aria-label="Delete chat">
+                <svg viewBox="0 0 24 24" width="13" height="13" fill="none"
+                     stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                     stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M10 11v6M14 11v6"/></svg>
+              </button>
+            </li>
+          </template>
+        </ul>
+      </div>
+    </template>
+    <p class="rail-empty" x-show="conversations.length === 0" x-cloak>
+      No conversations yet.
+    </p>
+  </div>
+</aside>
+{% endif %}
