@@ -555,12 +555,37 @@
         if (this.nearBottom()) this.scroll(false);
       },
 
-      // v3.2: show a "jump to latest" affordance only when the user
-      // has scrolled up off the bottom (Claude/ChatGPT behaviour).
+      // v3.2: "jump to latest" affordance. The scroll event fires
+      // dozens of times/sec during the pin sequence + streaming-follow
+      // + smooth scrolls; recomputing showJump on EACH (with
+      // x-transition.opacity) made the pill "flicker like crazy".
+      // Fix: DEBOUNCE -- only re-evaluate once scrolling has SETTLED
+      // (so continuous programmatic scroll never flips it) -- plus
+      // HYSTERESIS: a wide show band / narrow hide band so it cannot
+      // oscillate around a single threshold.
       onScroll: function () {
-        this.showJump = this.messages.length > 0 && !this.nearBottom();
+        var self = this;
+        if (self._jumpT) clearTimeout(self._jumpT);
+        self._jumpT = setTimeout(function () {
+          self._jumpT = null;
+          var l = self.$refs.log;
+          if (!l || !self.messages.length) {
+            self.showJump = false;
+            return;
+          }
+          var dist = l.scrollHeight - l.scrollTop - l.clientHeight;
+          if (self.showJump) {
+            if (dist < 90) self.showJump = false; // clearly back at bottom
+          } else if (dist > 260) {
+            self.showJump = true; // clearly scrolled up
+          }
+        }, 160);
       },
       jumpToLatest: function () {
+        if (this._jumpT) {
+          clearTimeout(this._jumpT);
+          this._jumpT = null;
+        }
         this.showJump = false;
         this.scroll(false);
       },

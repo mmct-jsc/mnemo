@@ -194,6 +194,14 @@ def test_jitter_send_thinking_polish() -> None:
     # scrollbar-gutter:stable kills the "Latest" pill + content jitter
     assert "scrollbar-gutter: stable" in CHAT_HTML
     assert "scrollbar-gutter: stable" in BASE_HTML
+    # the "Latest" pill must be DEBOUNCED + HYSTERETIC, not recomputed
+    # per scroll event (that strobed it "like crazy" during the pin
+    # sequence + streaming-follow). Lock the debounce + the two bands.
+    assert "if (self._jumpT) clearTimeout(self._jumpT)" in CHAT_JS
+    assert "self._jumpT = setTimeout(" in CHAT_JS
+    assert "dist < 90" in CHAT_JS  # narrow hide band
+    assert "dist > 260" in CHAT_JS  # wide show band
+    assert "this.showJump = this.messages.length > 0 && !this.nearBottom()" not in CHAT_JS
     # the off-centre send-icon nudges are gone (place-items centers it)
     assert ".send .send-ic { transform: translateY" not in CHAT_HTML
     assert ".send .send-ic { display: block; }" in CHAT_HTML
