@@ -30,6 +30,18 @@
   --shadow:    0 1px 0 rgba(255,255,255,0.02), 0 4px 12px rgba(0,0,0,0.25);
   --transition: 120ms ease;
 
+  /* C1 page-shell + primitive tokens (v4.0) -- a value lives here once. */
+  --topbar-h:       65px;     /* topbar height; calc(100vh - var(--topbar-h)) */
+  --content-max:    1600px;   /* centered-page content cap */
+  --page-pad:       2rem;     /* centered-page horizontal padding */
+  --radius-pill:    999px;    /* pill / capsule radius */
+  --accent-fg:      #06201e;  /* text on --accent fills */
+  --warn-fg:        #1a0f0c;  /* text on --warn fills */
+  --measure:        46rem;    /* canonical reading measure for centered prose */
+  --measure-wide:   40rem;    /* token-track width */
+  --measure-prose:  30rem;    /* welcome copy width */
+  --measure-narrow: 28rem;    /* examples column width */
+
   --mono: ui-monospace, "JetBrains Mono", SFMono-Regular, Menlo, Consolas, monospace;
   --sans: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
 }
