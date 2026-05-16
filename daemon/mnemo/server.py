@@ -74,6 +74,7 @@ from mnemo.api_schemas import (
     ProjectActivateIn,
     ProjectResolveIn,
     ProjectResolveOut,
+    ProviderOut,
     ProvidersPatchIn,
     QueryAuditOut,
     QueryIn,
@@ -1551,6 +1552,26 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
             companion=cfg.companion,
             chat_history_retention_days=cfg.chat_history_retention_days,
         )
+
+    @v1.get("/providers", response_model=list[ProviderOut])
+    def list_providers() -> list[ProviderOut]:
+        """C2 (v4.1): the provider registry, for the C4 settings UI.
+        Every registered provider appears automatically -- no key
+        material, only declared capabilities."""
+        from mnemo.providers import PROVIDERS
+
+        return [
+            ProviderOut(
+                name=d.name,
+                display_name=d.display_name,
+                env_var=d.env_var,
+                requires_key=d.requires_key,
+                default_model=d.default_model,
+                known_models=list(d.known_models),
+                supports_compaction_models=sorted(d.native_compaction_models),
+            )
+            for d in PROVIDERS.values()
+        ]
 
     @v1.get("/settings", response_model=SettingsOut)
     def get_settings() -> SettingsOut:

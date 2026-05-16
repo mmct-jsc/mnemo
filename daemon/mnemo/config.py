@@ -40,6 +40,15 @@ class Defaults:
     budget_tokens: int = 800
 
 
+def _default_providers() -> dict:
+    """C2 (v4.1): single-sourced from the provider registry (was a
+    hand-maintained literal). Lazy import: runs at Config()
+    instantiation, never at config.py import time."""
+    from mnemo.providers import PROVIDERS
+
+    return {n: {"model": d.default_model} for n, d in PROVIDERS.items()}
+
+
 @dataclass
 class Config:
     scoring: ScoringWeights = field(default_factory=ScoringWeights)
@@ -75,14 +84,7 @@ class Config:
     # non-secret provider prefs (default + per-provider model) +
     # Mnem personality + history retention persist in settings.json.
     default_provider: str = "anthropic"
-    providers: dict = field(
-        default_factory=lambda: {
-            "anthropic": {"model": "claude-sonnet-4-5-20250929"},
-            "openai": {"model": "gpt-4o-mini"},
-            "google": {"model": "gemini-2.5-flash"},
-            "ollama": {"model": "llama3.1:8b"},
-        }
-    )
+    providers: dict = field(default_factory=_default_providers)
     companion: dict = field(
         default_factory=lambda: {
             "name": "Mnem",
