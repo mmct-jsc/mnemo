@@ -46,8 +46,12 @@
     </div>
   </aside>
 
-  <!-- centre: the thread -->
-  <main class="chat-thread">
+  <!-- centre: the thread (a plain <div>, NOT a 2nd <main> -- a nested
+       <main> inherits app.css `main{max-width:1600px;margin:2rem auto}`
+       and, as a grid item, the auto inline margins shrink-to-fit +
+       centre it instead of filling the cell -> the "messages shrink /
+       not left aligned" bug). -->
+  <div class="chat-thread">
 
     <!-- running token budget bar (tokens_total vs per-provider cap) -->
     <div class="tok-bar" :class="{ warn: budgetWarn }" x-show="activeId" x-cloak>
@@ -234,7 +238,7 @@
              stroke-linejoin="round"><path d="M7 11l5-5 5 5M12 6v13"/></svg>
       </button>
     </form>
-  </main>
+  </div>
 
   <!-- right: citation side panel -->
   <aside class="chat-cite">
@@ -337,7 +341,7 @@
      chat app, instead of a short thread pinned at the top with a huge
      empty void below it. The .welcome state keeps margin:auto so it
      still centres (auto margins beat justify-content). */
-  .thread-col { max-width: 46rem; margin: 0 auto; padding: 2rem 1.5rem 1rem;
+  .thread-col { margin: 0; padding: 2rem 2rem 1rem;
     min-height: 100%; box-sizing: border-box;
     display: flex; flex-direction: column; justify-content: flex-end;
     gap: 1.5rem; }
@@ -531,8 +535,8 @@
 
   /* composer */
   .composer { display: flex; align-items: flex-end; gap: .6rem;
-    max-width: 46rem; margin: 0 auto; width: 100%;
-    padding: .9rem 1.5rem 1.4rem; }
+    margin: 0; width: 100%;
+    padding: .9rem 2rem 1.4rem; }
   .composer textarea { flex: 1; resize: none; max-height: 180px;
     padding: .8rem 1rem; background: var(--panel);
     border: 1px solid var(--border); border-radius: 14px; color: var(--fg);
@@ -577,7 +581,7 @@
 
   /* clean error banner (replaces the raw-JSON dump) */
   .chat-error { display: flex; align-items: center; gap: .6rem;
-    max-width: 46rem; margin: 0 auto; width: 100%;
+    margin: 0; width: 100%;
     padding: .65rem .9rem; box-sizing: border-box;
     background: color-mix(in srgb, var(--warn) 12%, var(--panel));
     border: 1px solid var(--warn); border-radius: 12px;
@@ -635,6 +639,16 @@
   .cite-preview pre { white-space: pre-wrap; word-break: break-word;
     max-width: 100%; font-size: .72rem; padding: .6rem .7rem; }
   .cite-preview code { overflow-wrap: anywhere; }
+  /* Prism ships `code[class*="language-"] { white-space: pre }` which
+     keeps the INNER highlighted <code> from wrapping -> the cited code
+     is a rigid block CLIPPED in the narrow side panel. Force it to
+     wrap (a h-scrollbar in a ~250px panel is unusable). !important
+     because we override a vendored 3rd-party sheet of unknown order. */
+  .cite-preview pre code,
+  .cite-preview pre[class*="language-"],
+  .cite-preview code[class*="language-"] {
+    white-space: pre-wrap !important; word-break: break-word;
+    overflow-wrap: anywhere; }
   .cite-preview table { display: block; max-width: 100%; overflow-x: auto; }
 
   /* v3.2 UX refine ---------------------------------------------------- */

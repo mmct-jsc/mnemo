@@ -226,6 +226,56 @@ def test_assistant_message_does_not_collapse_width() -> None:
     assert "\n  .turn-assistant { display: flex" not in CHAT_HTML
 
 
+def test_chat_thread_is_not_a_nested_main_and_is_left_flush() -> None:
+    # THE root cause of "still shrinks / not left aligned" (measured
+    # live on the user's exact conv: centre column 443px @ x:485 inside
+    # a 908px grid cell, varying with content): the centre column was
+    # ``<main class="chat-thread">`` -- a SECOND <main> nested in
+    # ``<main class="full">``. It inherited app.css
+    # ``main { max-width:1600px; margin:2rem auto }``; as a grid item
+    # the auto INLINE margins disable the stretch fit -> the box
+    # shrink-to-fits its content and the auto margins centre it. It
+    # must be a plain <div> that fills its grid cell.
+    assert '<main class="chat-thread">' not in CHAT_HTML
+    assert '<div class="chat-thread">' in CHAT_HTML
+    # exactly one real <main> (the col-0 page main); the nested one and
+    # its </main> are gone (a `<main` also appears in a Jinja comment,
+    # so anchor on the line start / the close-tag count instead).
+    assert CHAT_HTML.count("\n<main") == 1
+    assert CHAT_HTML.count("</main>") == 1
+    # the reading column + composer + error banner are LEFT-flush AND
+    # FILL the message div -- no width cap. The 46rem readability cap
+    # left the body at ~53% of a 1388px chat area with a 652px dead gap
+    # next to the citations panel ("only takes up 1/2 of the full
+    # message div"). The user asked 3x for the body to use the full
+    # width; honour it (the welcome card keeps its OWN smaller max-width
+    # so the empty state still reads as a centred card).
+    assert ".thread-col { margin: 0; padding: 2rem 2rem 1rem;" in CHAT_HTML
+    assert ".thread-col { max-width:" not in CHAT_HTML
+    # 46rem was ONLY ever on thread-col / composer / chat-error -- all
+    # three are now uncapped, so the token is gone entirely.
+    assert "46rem" not in CHAT_HTML
+    assert (
+        ".composer { display: flex; align-items: flex-end; gap: .6rem;\n    margin: 0; width: 100%;"
+        in CHAT_HTML
+    )
+
+
+def test_cite_preview_prism_code_wraps_not_clipped() -> None:
+    # Root cause (measured live: the cited code <pre> scrollWidth 656
+    # vs clientWidth 242 in the 280px side panel): ``.cite-preview pre``
+    # is pre-wrap, but Prism ships ``code[class*="language-"] {
+    # white-space: pre }`` which keeps the INNER <code> from wrapping
+    # -> a ~634px rigid block CLIPPED in the narrow panel ("citation of
+    # code still fail"; an h-scrollbar there is unusable). A rule that
+    # beats Prism must force the highlighted code/pre to wrap.
+    assert ".cite-preview pre code," in CHAT_HTML
+    assert '.cite-preview code[class*="language-"]' in CHAT_HTML
+    # !important: we are overriding a vendored 3rd-party stylesheet
+    # (Prism) whose load order we do not control.
+    assert "white-space: pre-wrap !important" in CHAT_HTML
+
+
 def test_mnem_side_gutter_is_consistent() -> None:
     # assistant prose + tool calls + tool results share ONE left
     # gutter (avatar 30px + the .85rem turn gap) -- the old 3.4rem
