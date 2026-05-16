@@ -33,7 +33,10 @@ def test_runtime_subpaths_under_home(monkeypatch: pytest.MonkeyPatch, tmp_path: 
     assert paths.vec_path() == tmp_path / "mnemo.vec"
     assert paths.cache_dir() == tmp_path / "cache"
     assert paths.logs_dir() == tmp_path / "logs"
-    assert paths.pid_file() == tmp_path / "pid"
+    # v3.2: pid file is port-scoped (prod 7373 vs preview 7399 must not
+    # share one file -- the shared file orphaned the live daemon).
+    assert paths.pid_file() == tmp_path / "mnemo-7373.pid"
+    assert paths.pid_file(7399) == tmp_path / "mnemo-7399.pid"
 
 
 def test_ensure_runtime_dirs_creates(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
