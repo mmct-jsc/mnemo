@@ -83,3 +83,26 @@ def test_dock_renders_bookmarks_via_shared_partial() -> None:
     # dock wires BOTH parts (strip + star):
     assert "bm = 'strip'" in base
     assert "bm = 'star'" in base
+
+
+def test_send_icon_is_single_sourced_and_optically_rebalanced() -> None:
+    """The send arrow is single-sourced in _chat_composer.html and the
+    optically bottom-heavy path is gone (Task 6 -- a PATH/geometry fix,
+    not CSS; the buttons already grid-center correctly)."""
+    comp = (TPL / "_chat_composer.html").read_text(encoding="utf-8")
+    page = (TPL / "chat.html").read_text(encoding="utf-8")
+    base = (TPL / "base.html").read_text(encoding="utf-8")
+    old_path = "M7 11l5-5 5 5M12 6v13"
+    assert old_path not in comp, "the optically bottom-heavy path must be gone"
+    assert old_path not in page, "send icon moved to the shared composer"
+    assert old_path not in base, "send icon moved to the shared composer"
+    # the rebalanced path is the single source: it lives ONLY in the
+    # composer partial, never inline in a page (CSS that styles
+    # .send-ic legitimately stays in chat.html -- assert on the PATH).
+    new_path = "M12 18V6M6 12l6-6 6 6"
+    assert new_path in comp
+    assert new_path not in page, "send-icon path must NOT be inline in chat.html"
+    assert new_path not in base, "send-icon path must NOT be inline in base.html"
+    assert "send-ic" in comp  # the icon markup lives in the composer
+    assert "_chat_composer.html" in page
+    assert "_chat_composer.html" in base
