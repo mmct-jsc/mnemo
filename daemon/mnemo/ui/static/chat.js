@@ -115,6 +115,20 @@
         el.style.height = Math.min(el.scrollHeight, 180) + 'px';
       },
 
+      // v3.2: the LIVE page state the companion grounds on. Prefer the
+      // page's window.mnemoPageContext() override (graph/settings/code
+      // expose their real state); fall back to the static opts.
+      livePageContext: function () {
+        try {
+          if (typeof window.mnemoPageContext === 'function') {
+            return window.mnemoPageContext();
+          }
+        } catch (e) {
+          /* a page override threw -- fall back to the static context */
+        }
+        return this.pageContext || null;
+      },
+
       // --- lifecycle ----------------------------------------------------
       init: function () {
         var self = this;
@@ -142,7 +156,8 @@
       newConversation: function () {
         var self = this;
         var body = { name: 'New chat' };
-        if (this.pageContext) body.page_context = this.pageContext;
+        var pc0 = this.livePageContext();
+        if (pc0) body.page_context = pc0;
         return fetch('/v1/chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -512,13 +527,30 @@
             content: { text: text },
           });
           self.scroll(false);
-          return fetch('/v1/chat/' + id + '/message', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text: text }),
-          }).then(function () {
-            self.streamRun(id);
-          });
+          // v3.2: refresh the conversation's page_context with the
+          // CURRENT screen before the run, so the model grounds on what
+          // the user is actually looking at (not the create-time state).
+          var pc = self.livePageContext();
+          var pre = pc
+            ? fetch('/v1/chat/' + id, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ page_context: pc }),
+              }).catch(function () {
+                /* stale context must never block the message */
+              })
+            : Promise.resolve();
+          return pre
+            .then(function () {
+              return fetch('/v1/chat/' + id + '/message', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text: text }),
+              });
+            })
+            .then(function () {
+              self.streamRun(id);
+            });
         });
       },
 

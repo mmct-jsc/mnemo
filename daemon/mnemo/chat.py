@@ -249,8 +249,10 @@ class AgentLoop:
                 yield {"type": "done", "stop_reason": stop_reason}
                 return
 
-            # Dispatch tools (phase 2: all registered tools are safe).
-            ctx = ToolContext(store=self._store, embedder=self._embedder)
+            # Dispatch tools. ToolContext carries the running conv id so
+            # mnemo_page_context (v3.2) resolves the live, client-PATCHed
+            # page state.
+            ctx = ToolContext(store=self._store, embedder=self._embedder, conversation_id=conv_id)
             result_blocks: list[dict] = []
             # Skill guidance is pinned AFTER the tool turn (a user turn
             # between a tool_use and its tool_result would break the

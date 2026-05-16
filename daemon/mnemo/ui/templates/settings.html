@@ -335,6 +335,40 @@ function settingsForm() {
     }
   };
 }
+
+// v3.2: override the base.html page-context default with the live
+// retrieval-tuning state so the companion can act as a retune
+// assistant (read memory, propose weight deltas, explain tradeoffs)
+// grounded on what's actually configured -- not guessed. weights/k
+// come from the server render; the live (possibly unsaved) edits +
+// the last retune report's labeled-feedback sizes override them off
+// the settingsForm() Alpine proxy (gotcha 20: read via Alpine.$data).
+window.mnemoPageContext = function () {
+  var ctx = {
+    page: 'settings',
+    path: location.pathname,
+    weights: {{ weights | tojson }},
+    k: {{ k | tojson }},
+    recent_feedback: null,
+  };
+  try {
+    var el = document.querySelector('.settings');
+    var d = el && window.Alpine && window.Alpine.$data(el);
+    if (d) {
+      if (d.weights) ctx.weights = d.weights;
+      if (d.report) {
+        ctx.recent_feedback = {
+          n: (d.report.train_size || 0) + (d.report.val_size || 0),
+          train: d.report.train_size || 0,
+          val: d.report.val_size || 0,
+        };
+      }
+    }
+  } catch (e) {
+    /* partial context is still useful -- never throw from here */
+  }
+  return ctx;
+};
 </script>
 
 <style>
