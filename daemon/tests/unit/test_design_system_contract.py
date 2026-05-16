@@ -65,3 +65,29 @@ def test_app_css_uses_tokens_not_raw_literals(app_css: str) -> None:
     assert "#06201e" not in body, "accent-fg text must be var(--accent-fg)."
     assert "#1a0f0c" not in body, "warn-fg text must be var(--warn-fg)."
     assert "999px" not in body, "pill radius must be var(--radius-pill)."
+
+
+SHARED_PRIMITIVES = (
+    ".mnem-working",
+    ".load-older",
+    ".lo-pill",
+    ".link-button",
+    ".btn-pill",
+)
+
+
+def test_shared_primitives_defined_once_in_app_css(app_css: str) -> None:
+    for sel in SHARED_PRIMITIVES:
+        assert sel + " {" in app_css or sel + "{" in app_css, (
+            f"{sel} must have its single canonical definition in app.css."
+        )
+
+
+def test_pages_do_not_redefine_shared_primitives() -> None:
+    for name in ("chat.html", "base.html"):
+        html = (TPL / name).read_text(encoding="utf-8")
+        for sel in (".mnem-working {", ".load-older {", ".lo-pill {"):
+            assert sel not in html, (
+                f"{name} must NOT redefine {sel}; it is a shared app.css "
+                f"primitive (was duplicated + divergent pre-v4.0)."
+            )
