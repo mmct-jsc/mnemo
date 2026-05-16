@@ -27,9 +27,11 @@ from mnemo.providers import (
     EV_TEXT,
     EV_TOOL_CALL,
     BaseProvider,
+    ProviderDescriptor,
     ProviderError,
     ProviderEvent,
     _usage_event,
+    register_provider,
 )
 
 # Native server-side compaction (v3.1, claude-api skill). Capable
@@ -191,3 +193,29 @@ class AnthropicProvider(BaseProvider):
             if ev is not None:
                 yield ev
         yield (EV_STOP, final.stop_reason or "end_turn")
+
+
+# C2 (v4.1): self-register. Adding a provider = this one call + the
+# stream() class above. get_provider / DEFAULT_MODELS / keys.ENV_VAR /
+# Config.providers / compaction.NATIVE_COMPACTION all DERIVE from this.
+register_provider(
+    ProviderDescriptor(
+        name="anthropic",
+        display_name="Anthropic (Claude)",
+        impl_class=AnthropicProvider,
+        env_var="ANTHROPIC_API_KEY",
+        requires_key=True,
+        default_model="claude-sonnet-4-5-20250929",  # UNCHANGED (DEFAULT_MODELS)
+        known_models=(
+            "claude-sonnet-4-5-20250929",
+            "claude-opus-4-7",
+            "claude-opus-4-6",
+            "claude-sonnet-4-6",
+            "claude-haiku-4-5",
+        ),
+        base_url=None,
+        native_compaction_models=frozenset(
+            {"claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6"}
+        ),
+    )
+)
