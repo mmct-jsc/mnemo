@@ -32,6 +32,7 @@ behind the same contract (``get_provider`` raises until then).
 from __future__ import annotations
 
 from collections.abc import Iterator
+from dataclasses import dataclass
 from typing import Any
 
 EV_TEXT = "text_delta"
@@ -109,6 +110,38 @@ class BaseProvider:
         compact: bool = False,
     ) -> Iterator[ProviderEvent]:
         raise NotImplementedError("provider must implement stream()")
+
+
+@dataclass(frozen=True)
+class ProviderDescriptor:
+    """C2 (v4.1): one declarative registry entry per provider. Mirrors
+    agent_tools.ToolSpec/TOOLS/_register exactly -- adding a provider =
+    one register_provider(...) call + one stream() impl class, instead
+    of editing get_provider + DEFAULT_MODELS + keys.ENV_VAR +
+    Config.providers + compaction.NATIVE_COMPACTION (5 files)."""
+
+    name: str
+    display_name: str
+    impl_class: type
+    env_var: str | None
+    requires_key: bool
+    default_model: str
+    known_models: tuple[str, ...]
+    base_url: str | None
+    native_compaction_models: frozenset[str]
+
+
+PROVIDERS: dict[str, ProviderDescriptor] = {}
+
+
+def register_provider(desc: ProviderDescriptor) -> ProviderDescriptor:
+    """Validating registrar (mirrors agent_tools._register: dict +
+    raise-on-dupe). get_provider / DEFAULT_MODELS / keys / config /
+    compaction all DERIVE from PROVIDERS."""
+    if desc.name in PROVIDERS:
+        raise ValueError(f"duplicate provider registration: {desc.name}")
+    PROVIDERS[desc.name] = desc
+    return desc
 
 
 def get_provider(
