@@ -128,10 +128,11 @@ def test_chat_thread_is_a_bounded_flex_scroller() -> None:
     # v3.2: /chat deliberately converged on the app-standard full-window
     # convention ("does not sync with others" -> use the SAME shell as
     # every other page). The chat-specific 100dvh was replaced by the
-    # canonical calc(100vh - 65px) topbar offset that .nebula-shell uses.
-    # mnemo is a 127.0.0.1 desktop tool -- app-chrome consistency wins
-    # over the mobile-URL-bar concern the old dvh contract encoded.
-    assert "calc(100vh - 65px)" in css
+    # canonical topbar offset that .nebula-shell uses. v4.0 (C1) then
+    # tokenized that literal: calc(100vh - 65px) -> calc(100vh -
+    # var(--topbar-h)) (--topbar-h is 65px, so computed height is
+    # byte-identical; the C1 guard test forbids the raw literal).
+    assert "calc(100vh - var(--topbar-h))" in css
     # pin-to-bottom must survive post-$nextTick markdown layout:
     # re-pin on a rAF + a short timeout, instant via scrollTop
     assert "requestAnimationFrame" in CHAT_JS

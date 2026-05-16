@@ -201,11 +201,13 @@ def test_chat_uses_the_app_standard_full_window_pattern() -> None:
     # /chat's chrome inconsistent with every other page ("does not sync
     # with others"). Reverted to the SAME convention the Nebula page
     # uses: override {% block layout %} + <main class="full"> + the
-    # canonical calc(100vh - 65px) topbar offset. NO global overrides.
+    # canonical topbar-offset shell. NO global overrides. v4.0 (C1)
+    # tokenized the literal -> calc(100vh - var(--topbar-h)); the
+    # computed height is byte-identical (--topbar-h is 65px).
     assert "{% block layout %}" in CHAT_HTML
     assert '<main class="full">' in CHAT_HTML
     assert "{% block content %}" not in CHAT_HTML
-    assert "height: calc(100vh - 65px)" in CHAT_HTML
+    assert "height: calc(100vh - var(--topbar-h))" in CHAT_HTML
     # the reverted over-reach must NOT come back: the specific global
     # ELEMENT overrides that desynced /chat from the app chrome. (A
     # blanket ``"overflow: hidden" not in`` is wrong -- legit component

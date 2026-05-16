@@ -91,3 +91,26 @@ def test_pages_do_not_redefine_shared_primitives() -> None:
                 f"{name} must NOT redefine {sel}; it is a shared app.css "
                 f"primitive (was duplicated + divergent pre-v4.0)."
             )
+
+
+def test_page_shell_contract_no_forbidden_constructs() -> None:
+    """Centered mode: override {% block content %}, never emit <main>.
+    Full-window mode: override {% block layout %}, exactly one
+    <main class="full"> + one root section sized
+    calc(100vh - var(--topbar-h)). Neither mode may scope html/body
+    or hardcode the topbar literal (gotcha 35)."""
+    for name in PAGE_TEMPLATES:
+        html = (TPL / name).read_text(encoding="utf-8")
+        assert "html, body {" not in html, f"{name}: a page template must NOT scope html/body."
+        assert "html,body {" not in html, f"{name}: a page template must NOT scope html/body."
+        assert "body > main {" not in html, f"{name}: a page template must NOT scope body > main."
+        assert "body>main {" not in html, f"{name}: a page template must NOT scope body > main."
+        assert "calc(100vh - 65px)" not in html, (
+            f"{name}: use calc(100vh - var(--topbar-h)) (gotcha 35)."
+        )
+        # At most one <main; full-window pages use exactly one
+        # <main class="full">. No nested second <main> (the v3.2 trap).
+        assert html.count("<main") <= 1, (
+            f"{name}: a nested second <main> inherits app.css main{{}} and "
+            f"shrink-to-fit-centres as a grid item (the v3.2 bug)."
+        )

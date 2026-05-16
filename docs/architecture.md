@@ -161,3 +161,42 @@ handles tiny client state. CSS is hand-rolled.
 | Intent regex | `daemon/mnemo/intent.py::INTENT_PATTERNS` |
 | Plugin manifest | `.claude-plugin/plugin.json` |
 | Hook contracts | `hooks/*.sh`, `hooks/*.ps1` |
+
+## Page-shell contract (C1, v4.0)
+
+The UI design system has **one token layer** (`app.css :root`) and
+**exactly two page-shell modes**. There is no third. A grep guard test
+(`daemon/tests/unit/test_design_system_contract.py`) is the contract's
+teeth -- it makes the v3.2-class layout bug (the one that cost a multi-
+round `/chat` saga, gotcha 35) impossible to reintroduce silently.
+
+**Token layer.** Every primitive value lives in `:root` exactly once
+and consumers use `var(--...)`: `--topbar-h` (65px; every full-window
+shell is `calc(100vh - var(--topbar-h))`), `--content-max` (1600px
+centered cap), `--page-pad` (2rem), `--radius-pill` (999px),
+`--accent-fg` / `--warn-fg` (text on accent/warn fills),
+`--measure*` (reading widths). No raw `65px`/`1600px`/`999px`/
+`#06201e`/`#1a0f0c` literal may appear outside `:root`. This mirrors
+the proven `palette.py` single-source model.
+
+**Mode 1 -- Centered.** A normal content page. Override only
+`{% block content %}`; **never emit a `<main>`** (base.html already
+provides the single `<main>`). Inherits `main { max-width:
+var(--content-max); margin: 2rem auto; padding: 0 var(--page-pad)
+4rem }`. Examples: `/settings`, `/nodes-page`, `/dashboard`.
+
+**Mode 2 -- Full-window.** An app-shell page (graph, chat). Override
+`{% block layout %}`; emit **exactly one** `<main class="full">` then
+one root `<section class="shell-NAME">` whose height is
+`calc(100vh - var(--topbar-h))`. The inner regions scroll internally;
+the document does not. Reference: `graph.html` `.nebula-shell`;
+`chat.html` `.mn` conforms. A **nested second `<main>`** inside the
+full one inherits the centered `main {}` rule and, as a grid item,
+shrink-to-fit-centres instead of filling -- that was the v3.2 bug; use
+a `<div>` for inner regions (gotcha 35).
+
+**Shared primitives** (`.mnem-working`, `.load-older`/`.lo-pill`/
+`.lo-dot`, `.link-button`, `.btn-pill`, `@keyframes mnem-bob`) have
+their single canonical definition in `app.css`; no page template may
+redefine them (they were duplicated + divergent across chat.html/
+base.html pre-v4.0).
