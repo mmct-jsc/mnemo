@@ -24,7 +24,7 @@ sees, never what the user can scroll back to.
 
 from __future__ import annotations
 
-from mnemo.providers import EV_TEXT, BaseProvider
+from mnemo.providers import EV_TEXT, PROVIDERS, BaseProvider
 
 # Settings knob default (design S3.3). The agent loop takes the live
 # value; this is the floor when no settings override is wired.
@@ -33,18 +33,9 @@ TRIGGER_TOKENS_DEFAULT = 120_000
 # How many of the most-recent turns the fallback keeps verbatim.
 KEEP_RECENT_DEFAULT = 6
 
-# Providers/models that do server-side compaction natively. Anthropic
-# compaction beta is Opus 4.7 / Opus 4.6 / Sonnet 4.6 (NOT Sonnet 4.5,
-# the mnemo default -> that path always uses the fallback).
-NATIVE_COMPACTION: dict[str, frozenset[str]] = {
-    "anthropic": frozenset(
-        {
-            "claude-opus-4-7",
-            "claude-opus-4-6",
-            "claude-sonnet-4-6",
-        }
-    ),
-}
+# C2 (v4.1): which provider/model pairs do native server-side
+# compaction is now single-sourced on each ProviderDescriptor's
+# native_compaction_models (was the NATIVE_COMPACTION literal here).
 
 ANTHROPIC_COMPACT_BETA = "compact-2026-01-12"
 ANTHROPIC_CONTEXT_MANAGEMENT = {"edits": [{"type": "compact_20260112"}]}
@@ -73,7 +64,8 @@ def should_compact(messages: list[dict], *, trigger_tokens: int = TRIGGER_TOKENS
 
 
 def supports_native_compaction(provider_name: str, model: str) -> bool:
-    return model in NATIVE_COMPACTION.get(provider_name, frozenset())
+    desc = PROVIDERS.get(provider_name)
+    return desc is not None and model in desc.native_compaction_models
 
 
 def _collect_text(provider: BaseProvider, model: str, prompt: str) -> str:
