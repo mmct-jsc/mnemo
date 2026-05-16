@@ -181,6 +181,23 @@
           });
       },
 
+      // v4.3 (C3): rename a conversation. Backend was already complete
+      // (PATCH /v1/chat/{id} + ChatPatchIn.name +
+      // store.rename_conversation) -- this is the only missing piece.
+      // Shared by both surfaces via the _chat_rail partial.
+      renameConversation: function (id, name) {
+        var self = this;
+        var nm = (name || '').trim();
+        if (!id || !nm) return Promise.resolve();
+        return fetch('/v1/chat/' + id, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: nm }),
+        }).then(function () {
+          return self.loadConversations();
+        });
+      },
+
       // v3.2: delete (archive) a conversation. If it was the active
       // one, fall back to the newest remaining (or a fresh chat).
       deleteConversation: function (id, ev) {
