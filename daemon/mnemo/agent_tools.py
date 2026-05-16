@@ -452,8 +452,9 @@ def _mnemo_page_context(ctx: ToolContext) -> dict:
 #
 # "What's related in THIS session?" -- the cited / tool-used node ids of
 # the running conversation + their 1-hop neighbours. The companion calls
-# this then mnemo_highlight_nodes to light up the subgraph on Nebula
-# instead of guessing (design v3.2 S3.4).
+# this then mnemo_highlight_nodes to surface the subgraph in the chat
+# side panel instead of guessing (design v3.2 S3.4; the cosmos
+# graph-view highlight is a closed ceiling -- gotcha 31).
 
 _SESSION_CITE_RE = re.compile(r"\[mnemo:([^\]\s]+)\]")
 # the tool args that unambiguously name a node (so a tool the user
@@ -467,7 +468,7 @@ _NODE_ID_ARGS = ("node_id", "start_id")
     description=(
         "The nodes this conversation has cited or acted on, plus their "
         "1-hop neighbours. Use to ground 'what's related in this "
-        "session / show it on the graph' before mnemo_highlight_nodes."
+        "session / show it in the side panel' before mnemo_highlight_nodes."
     ),
     parameters=_obj({}, []),
 )
@@ -853,9 +854,12 @@ def _mnemo_open_panel(ctx: ToolContext, *, panel_id: str) -> dict:
     name="mnemo_highlight_nodes",
     risk=RISK_CONFIRM,
     description=(
-        "Highlight a SET of nodes on the live Nebula graph (greys the "
-        "rest by opacity -- never hides). Pair with mnemo_session_nodes "
-        "to light up 'what's related in this session'."
+        "Surface a SET of related nodes in the chat side panel (the "
+        "off-renderer highlight surface). Pair with mnemo_session_nodes "
+        "to show 'what's related in this session'. NOTE: this lists them "
+        "in the side panel -- do NOT tell the user it lit them up on the "
+        "live graph canvas (that renderer path is a known closed "
+        "ceiling; never claim a graph-view highlight)."
     ),
     parameters=_obj(
         {"node_ids": {"type": "array", "items": {"type": "string"}}},
