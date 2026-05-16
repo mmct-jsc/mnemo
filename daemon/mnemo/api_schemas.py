@@ -791,6 +791,20 @@ class CompanionPatchIn(BaseModel):
     chat_history_retention_days: int | None = None
 
 
+class ProviderOut(BaseModel):
+    """``GET /v1/providers`` -- the C2 (v4.1) registry, exposed for the
+    C4 (v4.2) settings UI. No key material; the registry only knows
+    capabilities, never secrets."""
+
+    name: str
+    display_name: str
+    env_var: str | None
+    requires_key: bool
+    default_model: str
+    known_models: list[str]
+    supports_compaction_models: list[str]
+
+
 class SettingsOut(BaseModel):
     """``GET /v1/settings`` -- never includes key material; per-provider
     reports ``has_key`` + ``model`` only."""
