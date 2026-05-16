@@ -62,6 +62,157 @@
     window.mnemoColorFor = (t) => (
       (t && window.MNEMO_TYPE_COLORS[t]) || window.MNEMO_TYPE_COLOR_FALLBACK
     );
+
+    // v3.2: live page-context provider. base.html ships the DEFAULT
+    // (the nav page + the live path). Interactive pages (graph /
+    // settings / code) reassign window.mnemoPageContext with their own
+    // live state; mnemoChat() calls it and PATCHes the result onto the
+    // conversation before every run so the companion grounds on the
+    // CURRENT screen instead of guessing. Defined here (head, before
+    // Alpine + deferred page scripts) so a default always exists.
+    window.mnemoPageContext = function () {
+      return { page: {{ page | default('') | tojson }}, path: location.pathname };
+    };
+
+    // v3.2: a shared inline cite popover. Renders a node's body with
+    // the SAME window.mnemoMd / Prism globals the chat previewMarkup
+    // uses (DRY) -- no navigating away. Reused by window.mnemoCite and
+    // available to any surface. Lazily builds one fixed element.
+    window.mnemoCitePopover = function (id, anchorEl) {
+      var pop = document.getElementById('mnemo-cite-pop');
+      if (!pop) {
+        pop = document.createElement('div');
+        pop.id = 'mnemo-cite-pop';
+        pop.className = 'mnemo-cite-pop';
+        pop.setAttribute('role', 'dialog');
+        document.body.appendChild(pop);
+        document.addEventListener('mousedown', function (e) {
+          if (
+            pop.style.display === 'block' &&
+            !pop.contains(e.target) &&
+            !(e.target.closest && e.target.closest('.cite-link'))
+          ) {
+            pop.style.display = 'none';
+          }
+        });
+        document.addEventListener('keydown', function (e) {
+          if (e.key === 'Escape') pop.style.display = 'none';
+        });
+      }
+      pop.innerHTML =
+        '<div class="ccp-head"><span class="ccp-id"></span>' +
+        '<a class="ccp-open" href="/node/' + id + '">open ↗</a>' +
+        '<button class="ccp-x" aria-label="close">×</button></div>' +
+        '<div class="ccp-body">loading…</div>';
+      pop.querySelector('.ccp-id').textContent = id;
+      pop.querySelector('.ccp-x').onclick = function () {
+        pop.style.display = 'none';
+      };
+      pop.style.display = 'block';
+      try {
+        var r = anchorEl.getBoundingClientRect();
+        var vw = document.documentElement.clientWidth || 1024;
+        var vh = document.documentElement.clientHeight || 768;
+        var pw = Math.min(360, vw - 24);
+        pop.style.width = pw + 'px';
+        pop.style.left = Math.min(Math.max(8, r.left), vw - pw - 8) + 'px';
+        var ph = pop.offsetHeight || 240;
+        var top = r.bottom + 8;
+        if (top + ph > vh - 8) top = Math.max(8, r.top - ph - 8);
+        pop.style.top = top + 'px';
+      } catch (e) {
+        /* still visible, just unpositioned */
+      }
+      var box = pop.querySelector('.ccp-body');
+      fetch('/v1/nodes/' + id)
+        .then(function (rs) {
+          return rs.ok ? rs.json() : null;
+        })
+        .then(function (n) {
+          if (!n) {
+            box.innerHTML = '<a href="/node/' + id + '">open ' + id + '</a>';
+            return;
+          }
+          if (n.name) pop.querySelector('.ccp-id').textContent = n.name;
+          var isCode = window.mnemoIsCodeType && window.mnemoIsCodeType(n.type);
+          var ext = window.mnemoLanguageOf
+            ? window.mnemoLanguageOf(n.source_path)
+            : 'none';
+          var body = n.body || '';
+          if (isCode && ext !== 'markdown' && ext !== 'none') {
+            var esc = body
+              .replace(/&/g, '&amp;')
+              .replace(/</g, '&lt;')
+              .replace(/>/g, '&gt;');
+            box.innerHTML =
+              '<pre class="mnemo-code language-' + ext +
+              '"><code class="language-' + ext + '">' + esc + '</code></pre>';
+            if (window.Prism) {
+              try {
+                window.Prism.highlightElement(box.querySelector('code'));
+              } catch (e) {
+                /* tolerate */
+              }
+            }
+          } else {
+            box.innerHTML = window.mnemoMd
+              ? window.mnemoMd(body)
+              : '<pre>' + body.replace(/&/g, '&amp;').replace(/</g, '&lt;') + '</pre>';
+          }
+        })
+        .catch(function () {
+          box.innerHTML = '<a href="/node/' + id + '">open ' + id + '</a>';
+        });
+    };
+
+    // v3.2: context-aware [mnemo:id]. Nebula/code can show the node in
+    // place -> dispatch an in-page select (graph.html listens);
+    // everywhere else -> the shared inline popover. A full-page
+    // /node/<id> redirect is ONLY the final fallback, reached by
+    // returning true so the <a href> navigates (S3.3: no blind
+    // redirect). Returns false (preventDefault) when handled in-context.
+    window.mnemoCite = function (id, ev) {
+      try {
+        var pc =
+          typeof window.mnemoPageContext === 'function'
+            ? window.mnemoPageContext()
+            : {};
+        var page = pc && pc.page;
+        if (page === 'graph' || page === 'code') {
+          document.dispatchEvent(
+            new CustomEvent('mnemo-select-node', { detail: { node_id: id } })
+          );
+          if (ev && ev.preventDefault) ev.preventDefault();
+          return false;
+        }
+        // On a surface that already has the citation side-panel (the
+        // /chat page) use it -- a floating popover there overlaps the
+        // thread + composer (live-review: "the node model does not
+        // display properly"). The dock has no panel -> popover.
+        if (document.querySelector('.cite-preview')) {
+          // bubbles:true so it reaches an Alpine @mnemo-cite listener
+          // wherever it's bound (a non-bubbling document event never
+          // reaches a window/ancestor listener -> the click did
+          // nothing; the prior live test falsely passed on a manual
+          // document listener).
+          document.dispatchEvent(
+            new CustomEvent('mnemo-cite', {
+              detail: { node_id: id },
+              bubbles: true,
+            })
+          );
+        } else {
+          window.mnemoCitePopover(
+            id,
+            (ev && (ev.currentTarget || ev.target)) || document.body
+          );
+        }
+        if (ev && ev.preventDefault) ev.preventDefault();
+        return false;
+      } catch (e) {
+        return true; // FINAL fallback: let the <a href="/node/<id>"> navigate
+      }
+    };
   </script>
   <script defer>
     // Toast bus + localStorage-backed notification history.
@@ -636,9 +787,15 @@
         <strong>Mnem</strong>
         <span class="mc-tok" x-show="tokensTotal" x-cloak
               x-text="tokensTotal ? (tokensTotal.toLocaleString() + ' tok') : ''"></span>
+        <button class="mc-new" @click="newConversation()"
+                title="New chat" aria-label="New chat">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none"
+               stroke="currentColor" stroke-width="2" stroke-linecap="round"
+               stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+        </button>
         <button class="mc-x" @click="$dispatch('mnem-close')" aria-label="close">×</button>
       </div>
-      <div class="mc-thread" x-ref="log">
+      <div class="mc-thread" x-ref="log" @scroll.passive="onScroll()">
         <div class="mc-col">
           <div class="load-older" x-ref="topSentinel" :class="{ on: hasMore }">
             <template x-if="hasMore"><span class="lo-pill">earlier messages</span></template>
@@ -652,16 +809,31 @@
                 <div class="mc-user" x-text="m.content.text"></div>
               </template>
               <template x-if="m.role === 'assistant' && m.content.text">
-                <div class="mc-asst prose" x-html="renderMarkdown(m.content.text || '')"></div>
+                <div class="mc-asst-wrap">
+                  <div class="mc-asst prose" x-html="renderMarkdown(m.content.text || '')"></div>
+                  <button class="mc-copy" type="button"
+                          @click="copyText(m.content.text || '')"
+                          title="Copy" aria-label="Copy message">
+                    <svg viewBox="0 0 24 24" width="13" height="13" fill="none"
+                         stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                         stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                  </button>
+                </div>
               </template>
               <template x-if="m.role === 'tool_call'">
                 <div class="mc-tool" x-text="'⚙ ' + (m.content.name || 'tool')"></div>
               </template>
             </div>
           </template>
-          <div class="mc-turn mc-assistant" x-show="streaming" x-cloak>
+          <div class="mc-turn mc-assistant" x-show="streaming" x-cloak
+               x-transition:enter="ce-fade" x-transition:enter-start="ce-fade-0"
+               x-transition:enter-end="ce-fade-1">
             <div class="mc-asst prose" x-ref="liveBody"></div>
-            <div class="mnem-working" x-show="working" x-cloak>
+            <div class="mnem-working" x-show="working" x-cloak
+                 x-transition:enter="ce-fade" x-transition:enter-start="ce-fade-0"
+                 x-transition:enter-end="ce-fade-1"
+                 x-transition:leave="ce-fade" x-transition:leave-start="ce-fade-1"
+                 x-transition:leave-end="ce-fade-0">
               <span></span><span></span><span></span>
             </div>
           </div>
@@ -676,11 +848,32 @@
           <button class="go" @click="decide('allow_once')">Allow</button>
         </div>
       </div>
+      <button class="mc-jump" type="button" x-show="showJump" x-cloak
+              x-transition.opacity @click="jumpToLatest()" aria-label="Jump to latest">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none"
+             stroke="currentColor" stroke-width="2.4" stroke-linecap="round"
+             stroke-linejoin="round"><path d="M12 5v14M5 12l7 7 7-7"/></svg>
+        <span>Latest</span>
+      </button>
+      <div class="mc-error" x-show="error" x-cloak x-transition.opacity role="alert">
+        <span class="mce-msg" x-text="error"></span>
+        <div class="mce-act">
+          <button class="mce-retry" type="button" @click="retry()"
+                  :disabled="streaming || !lastUserText">Retry</button>
+          <button class="mce-x" type="button" @click="dismissError()"
+                  aria-label="dismiss">×</button>
+        </div>
+      </div>
       <form class="mc-composer" @submit.prevent="sendMessage()">
         <textarea x-ref="draft" x-model="draft" rows="1" placeholder="Ask Mnem…"
                   :disabled="streaming"
                   @keydown.enter.prevent="if (!$event.shiftKey) sendMessage()"></textarea>
-        <button class="mc-send" :disabled="streaming || !draft.trim()" aria-label="send">→</button>
+        <button class="mc-send" :disabled="streaming || !draft.trim()"
+                :title="streaming ? 'Mnem is replying…' : 'Send (Enter)'" aria-label="Send">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none"
+               stroke="currentColor" stroke-width="2.4" stroke-linecap="round"
+               stroke-linejoin="round"><path d="M7 11l5-5 5 5M12 6v13"/></svg>
+        </button>
       </form>
       <a class="mc-expand" href="/chat">Open full chat ↗</a>
     </div>
@@ -1026,15 +1219,38 @@
       font-size: .9rem; }
     .mc-tok { margin-left: auto; font-family: var(--mono); font-size: .66rem;
       color: var(--fg-dim); }
+    .mc-new { display: grid; place-items: center; width: 24px; height: 24px;
+      margin-left: .35rem; padding: 0; background: none; border: 0;
+      color: var(--fg-dim); cursor: pointer; border-radius: 7px;
+      transition: color .15s ease, background .15s ease; }
+    .mc-new:hover { color: var(--accent);
+      background: color-mix(in srgb, var(--accent) 16%, transparent); }
     .mc-x { background: none; border: 0; color: var(--fg-dim); cursor: pointer;
-      font-size: 1.05rem; line-height: 1; margin-left: .3rem; }
+      font-size: 1.05rem; line-height: 1; margin-left: .2rem; }
     .mc-x:hover { color: var(--fg); }
-    .mc-thread { flex: 1 1 0; min-height: 0; overflow-y: auto; }
-    .mc-col { padding: .85rem; display: flex; flex-direction: column;
+    /* reserve the scrollbar track so the centered "Latest" pill +
+       content don't jitter left/right as it appears on scroll. */
+    .mc-thread { flex: 1 1 0; min-height: 0; overflow-y: auto;
+      scrollbar-gutter: stable; }
+    .ce-fade { transition: opacity .26s ease, transform .26s ease; }
+    .ce-fade-0 { opacity: 0; transform: translateY(3px); }
+    .ce-fade-1 { opacity: 1; transform: translateY(0); }
+    /* bottom-anchor the dock thread too (no void above the composer
+       on a short conversation); .mc-empty keeps margin:auto -> centred */
+    .mc-col { padding: .85rem; min-height: 100%; box-sizing: border-box;
+      display: flex; flex-direction: column; justify-content: flex-end;
       gap: .75rem; }
     .mc-empty { color: var(--fg-dim); font-size: .82rem; line-height: 1.5;
       text-align: center; margin: auto; padding: 1.5rem .5rem; }
-    .mc-user { align-self: flex-end; background: var(--bg);
+    /* :not(.mc-turn): the turn wrapper gets `mc-user` via
+       :class="'mc-' + m.role" too -- without this guard it
+       double-applies the bubble box around the real one (live-review:
+       a 200px dark box wrapping a 59px bubble). */
+    /* the user turn wrapper becomes the right-aligning ROW (only the
+       user turn -- assistant/tool turns stay block so prose is full
+       width); the real bubble is the inner :not(.mc-turn). */
+    .mc-turn.mc-user { display: flex; justify-content: flex-end; }
+    .mc-user:not(.mc-turn) { background: var(--bg);
       border: 1px solid var(--border-soft); border-radius: 12px 12px 3px 12px;
       padding: .5rem .75rem; max-width: 85%; font-size: .86rem;
       white-space: pre-wrap; line-height: 1.5; }
@@ -1076,11 +1292,61 @@
       border-radius: 10px; color: var(--fg); font-family: var(--sans);
       font-size: .85rem; line-height: 1.45; }
     .mc-composer textarea:focus { outline: none; border-color: var(--accent); }
-    .mc-send { width: 34px; flex-shrink: 0; border: 0; border-radius: 9px;
-      background: var(--accent); color: #06201e; cursor: pointer;
-      font-size: 1rem; font-weight: 700; }
+    .mc-send { width: 36px; height: 36px; flex-shrink: 0; align-self: flex-end;
+      border: 0; border-radius: 50%; background: var(--accent);
+      color: #06201e; cursor: pointer; display: grid; place-items: center;
+      box-shadow: 0 3px 10px -3px var(--accent);
+      transition: transform var(--transition), background var(--transition),
+        box-shadow var(--transition), opacity var(--transition); }
+    .mc-send svg { display: block; } /* grid place-items centers it */
     .mc-send:disabled { background: var(--bg); color: var(--fg-dim);
-      cursor: not-allowed; }
+      box-shadow: none; opacity: .55; cursor: not-allowed; }
+    .mc-send:not(:disabled):hover { background: var(--accent-hover);
+      transform: translateY(-1px); box-shadow: 0 5px 14px -3px var(--accent); }
+    .mc-send:not(:disabled):active { transform: translateY(0); }
+
+    /* assistant body + hover copy */
+    .mc-asst-wrap { position: relative; }
+    .mc-copy { position: absolute; top: -2px; right: -2px;
+      display: grid; place-items: center; width: 24px; height: 24px;
+      padding: 0; color: var(--fg-dim); background: var(--panel);
+      border: 1px solid var(--border-soft); border-radius: 7px;
+      cursor: pointer; opacity: 0; transition: opacity var(--transition),
+        color var(--transition); }
+    .mc-asst-wrap:hover .mc-copy, .mc-copy:focus { opacity: 1; }
+    .mc-copy:hover { color: var(--accent); }
+
+    /* scroll-to-latest (floats just above the composer) */
+    .mc-jump { position: absolute; left: 50%; bottom: 58px;
+      transform: translateX(-50%); z-index: 2;
+      display: inline-flex; align-items: center; gap: .3rem;
+      padding: .3rem .6rem .3rem .5rem; font-size: .72rem; color: var(--fg);
+      background: var(--panel); border: 1px solid var(--border);
+      border-radius: 999px; box-shadow: var(--shadow); cursor: pointer; }
+    .mc-jump:hover { border-color: var(--accent); color: var(--accent); }
+
+    /* clean error banner + retry (NOT a raw JSON dump) */
+    .mc-error { display: flex; align-items: center; gap: .5rem;
+      margin: 0 .7rem .5rem; padding: .5rem .65rem;
+      background: color-mix(in srgb, var(--warn) 14%, var(--panel));
+      border: 1px solid var(--warn); border-radius: 10px;
+      font-size: .78rem; line-height: 1.4; }
+    .mc-error .mce-msg { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+    .mc-error .mce-act { display: flex; align-items: center; gap: .3rem;
+      flex-shrink: 0; }
+    .mc-error .mce-retry { padding: .25rem .6rem; background: var(--accent);
+      color: #06201e; border: 0; border-radius: 999px; font-weight: 600;
+      font-size: .72rem; cursor: pointer; }
+    .mc-error .mce-retry:disabled { opacity: .5; cursor: not-allowed; }
+    .mc-error .mce-x { background: none; border: 0; color: var(--fg-dim);
+      font-size: 1rem; line-height: 1; cursor: pointer; }
+    .mc-error .mce-x:hover { color: var(--fg); }
+
+    /* long-text hardening: never a horizontal smear in the narrow dock */
+    .mc-asst, .mc-user:not(.mc-turn) { overflow-wrap: anywhere;
+      word-break: break-word; }
+    .mc-asst.prose pre, .mc-asst.prose table { white-space: pre-wrap;
+      word-break: break-word; max-width: 100%; overflow-x: auto; }
     .mc-expand { display: block; text-align: center; padding: .45rem;
       font-size: .74rem; color: var(--fg-dim); text-decoration: none;
       border-top: 1px solid var(--border-soft); }
@@ -1102,6 +1368,29 @@
     .mnem-bubble-x { background: none; border: 0; color: var(--fg-dim);
       cursor: pointer; font-weight: 700; font-size: 1rem; line-height: 1; }
     .mnem-bubble-x:hover { color: var(--fg); }
+
+    /* v3.2: shared inline cite popover (context-aware [mnemo:id]) --
+       a node preview in place instead of a blind redirect. */
+    .mnemo-cite-pop { position: fixed; z-index: 70; display: none;
+      max-height: min(60vh, 420px); overflow: auto;
+      background: var(--panel); color: var(--fg);
+      border: 1px solid var(--accent); border-radius: var(--radius-lg);
+      box-shadow: var(--shadow); font-size: .82rem; }
+    .mnemo-cite-pop .ccp-head { display: flex; align-items: center;
+      gap: .5rem; padding: .5rem .65rem; position: sticky; top: 0;
+      background: var(--panel);
+      border-bottom: 1px solid var(--border, #2a3140); }
+    .mnemo-cite-pop .ccp-id { font-weight: 600; flex: 1; min-width: 0;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      font-family: var(--mono, monospace); font-size: .78rem; }
+    .mnemo-cite-pop .ccp-open { color: var(--accent);
+      text-decoration: none; white-space: nowrap; }
+    .mnemo-cite-pop .ccp-open:hover { text-decoration: underline; }
+    .mnemo-cite-pop .ccp-x { background: none; border: 0; color: var(--fg-dim);
+      cursor: pointer; font-size: 1rem; line-height: 1; }
+    .mnemo-cite-pop .ccp-x:hover { color: var(--fg); }
+    .mnemo-cite-pop .ccp-body { padding: .65rem .8rem; line-height: 1.5; }
+    .mnemo-cite-pop .ccp-body pre { white-space: pre-wrap; word-break: break-word; }
   </style>
 
   <!-- Modal -->

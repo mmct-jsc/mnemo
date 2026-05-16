@@ -2,6 +2,110 @@
 
 All notable changes to mnemo are documented here.
 
+## [3.2.0] - 2026-05-16
+
+**Two critical fixes + the companion's page-aware tools.** v3.2 began
+as "the agentic page companion"; a long live review uncovered two
+serious pre-existing defects this release now fixes.
+
+- **FIX: the broken Nebula is restored.** `main` (and the published
+  v3.1.0) shipped the **v2.6.8 perfectionize renderer**, which froze
+  on init (no motion, wrong placement, pegged the CPU). The documented
+  v2.6.6 revert (`a341c89`) had **never merged to main** (PR #53 was an
+  empty no-op). v3.2.0 restores the kept-good v2.6.6 nebula verbatim
+  (`graph.html` @ `8caf257`) -- live-verified: 11k nodes in perpetual
+  organic motion, no freeze. A livelier/agentic nebula is deferred to a
+  future renderer swap (never via cosmos config/wiring -- a documented
+  ceiling, reference_cosmos_gl_nebula.md).
+- **FIX: the daemon can be stopped again.** The pid file was a single
+  shared path regardless of port, and `remove_pid_file()` unlinked
+  unconditionally -- a second daemon (e.g. a preview on :7399) exiting
+  orphaned the live one, so `mnemo daemon stop/status/restart` went
+  blind and a stale process kept serving old code. The pid file is now
+  **port-scoped** (`mnemo-<port>.pid`) and removal is **ownership-
+  guarded**; `status`/`stop`/`restart` gained `--port`.
+- **Live page-context.** New safe `mnemo_page_context` tool +
+  `window.mnemoPageContext()` (base default `{page,path}`; Settings /
+  node-detail overrides carry weights/k / selected node). `mnemoChat()`
+  PATCHes it onto the conversation before every run so the companion
+  grounds on the current screen. (The Nebula override was reverted with
+  the renderer -- it never touches cosmos.)
+- **Context-aware citations.** Inline `[mnemo:id]` is no longer a blind
+  redirect: `window.mnemoCite`/`mnemoCitePopover` (base.html) render a
+  shared inline node preview via the existing marked/Prism pipeline;
+  full-page `/node/<id>` is the last-resort fallback only.
+- **Session + retune tools.** Safe `mnemo_session_nodes` (the
+  conversation's cited/used nodes + 1-hop neighbours) and confirm
+  `mnemo_highlight_nodes` / `mnemo_apply_retune` (bounded, recoverable
+  scoring-weight apply with a Settings before/after validate). These
+  are server-side tools; none touch the cosmos renderer.
+- **Dock + navigate fixes.** The dock user bubble no longer renders as
+  a giant box wrapping the real one (the turn wrapper's role class
+  collided with `.mc-user`). `mnemo_navigate` no longer hard-reloads
+  when you're already on the target page (which killed the dock SSE +
+  the in-flight run); the model is guided to prefer in-page tools and
+  treat navigate as terminal.
+- **FIX: a brick-the-conversation 400 self-heals.** An interrupted run
+  (SSE/daemon killed mid tool-dispatch) left an assistant `tool_use`
+  with no persisted `tool_result`, so history replay 400'd on every
+  subsequent message forever (`tool_use ids ... without tool_result`).
+  History reconstruction now synthesizes an error `tool_result` for
+  any orphaned `tool_use` -- the conversation recovers and Retry works.
+- **Chat UX completion.** Both `/chat` and the dock gain a clean
+  in-thread error banner + one-click **Retry** (replacing the raw
+  provider-JSON dump), a **copy-message** button, a **scroll-to-latest**
+  pill, a proper circular icon **send** button (the dock's bare `→` is
+  gone), and long-text hardening so a long message never smears
+  horizontally.
+- **Chat UX refinement (Claude-grade).** The thread is now
+  **bottom-anchored** -- a short conversation sits just above the
+  composer instead of pinned at the top with a huge empty void.
+  **Delete a conversation** (rail) and **start a new one from the
+  dock** header. `mnemo_navigate` opens the target in a **new tab** so
+  "show me in nebula" no longer drops the connection mid-answer. Inline
+  `[mnemo:id]` on `/chat` uses the existing citation **side panel**
+  (no floating popover overlapping the thread). `scrollbar-gutter:
+  stable` stops the "Latest" pill/content jittering on scroll; the send
+  icon is truly centred; the thinking indicator fades in/out instead of
+  popping; the Nebula close button + citation-panel typography refined.
+- **Chat UX hardening (live-verified).** Fixed a regression where
+  clicking an inline `[mnemo:id]` did nothing: the `mnemo-cite`
+  CustomEvent is dispatched on `document` but was listened for on
+  `window` (a non-bubbling document event never reaches a window
+  listener) -- now `bubbles:true` + an `@mnemo-cite.document` listener.
+  This also restored code/other-type citation previews (the renderer
+  was fine; the click never reached it). `/chat` is now a true
+  **single window** (page-scoped `html,body` overflow lock + the
+  correct 64px topbar offset -- the old calc used a wrong 116px, which
+  was the void/scroll; not `position:fixed`, which a base.html
+  ancestor transform broke). The Mnem side now shares **one consistent
+  left gutter** -- assistant prose, tool calls, and tool results align
+  to the exact same x (was ~11px off). Verified end-to-end via the
+  preview with a real Anthropic turn: "show me in nebula" opens
+  `/graph` in a new tab with the conversation intact (no "connection
+  dropped").
+- **Chat layout, fully root-caused (supersedes the item above).** The
+  earlier "single window" attempt used a page-scoped `html,body`
+  overflow lock + zeroed `body>main`, which desynced `/chat`'s chrome
+  from every other page. Reverted to the **app-standard full-window
+  convention** the Nebula page uses (`{% block layout %}` +
+  `<main class="full">` + `calc(100vh - 65px)`; no global overrides).
+  Then the real "messages shrink / aren't left aligned" cause was
+  found by measuring the user's *exact* conversation: the centre
+  column was a **second `<main>`** (`<main class="chat-thread">`
+  nested in `<main class="full">`) that inherited app.css
+  `main{max-width:1600px;margin:2rem auto}` -- as a grid item the
+  auto inline margins made it shrink-to-fit + centre instead of
+  filling its cell. Now a plain `<div>`; the message body **fills the
+  thread** (the 46rem reading cap is removed -- it had left the body
+  at ~53% of a wide screen with a large dead gap next to the
+  citations panel), **left-flush** by the rail, with assistant prose,
+  tool calls, and the user/composer all sharing one column.
+  Cited **code in the side panel now wraps** instead of clipping
+  (Prism forces the inner `<code>` to `white-space:pre`; an
+  `!important` rule overrides the vendored sheet). All verified live
+  with hard geometry numbers (prose 277->1270px, no overflow).
+
 ## [3.1.0] - 2026-05-16
 
 **Mnem becomes a real companion.** v3.1 closes every gap from the

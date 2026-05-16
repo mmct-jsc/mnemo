@@ -35,8 +35,8 @@ class DaemonStatus:
     stale: bool  # PID file present but process not alive
 
 
-def read_pid() -> int | None:
-    f = paths.pid_file()
+def read_pid(port: int = DEFAULT_PORT) -> int | None:
+    f = paths.pid_file(port)
     if not f.exists():
         return None
     try:
@@ -60,8 +60,8 @@ def is_alive(pid: int) -> bool:
     return True
 
 
-def status() -> DaemonStatus:
-    pid = read_pid()
+def status(port: int = DEFAULT_PORT) -> DaemonStatus:
+    pid = read_pid(port)
     if pid is None:
         return DaemonStatus(running=False, pid=None, pid_file_present=False, stale=False)
     alive = is_alive(pid)
@@ -79,12 +79,12 @@ def start(*, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> int:
     Raises ``RuntimeError`` if the daemon is already running, or if it fails
     to publish its PID file within ``START_TIMEOUT_SECONDS``.
     """
-    s = status()
+    s = status(port)
     if s.running:
         raise RuntimeError(f"daemon already running (pid {s.pid})")
     if s.pid_file_present:
         # Stale PID; clean up before respawn.
-        paths.pid_file().unlink(missing_ok=True)
+        paths.pid_file(port).unlink(missing_ok=True)
 
     paths.ensure_runtime_dirs()
     cmd = [
@@ -124,18 +124,18 @@ def start(*, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> int:
     deadline = time.time() + START_TIMEOUT_SECONDS
     while time.time() < deadline:
         time.sleep(0.1)
-        pid = read_pid()
+        pid = read_pid(port)
         if pid is not None and is_alive(pid):
             return pid
     raise RuntimeError(f"daemon did not write its pid file within {START_TIMEOUT_SECONDS}s")
 
 
-def stop() -> bool:
+def stop(port: int = DEFAULT_PORT) -> bool:
     """Stop the daemon if running. Returns True if a daemon was stopped."""
-    s = status()
+    s = status(port)
     if not s.running:
         if s.stale:
-            paths.pid_file().unlink(missing_ok=True)
+            paths.pid_file(port).unlink(missing_ok=True)
         return False
     pid = s.pid
     assert pid is not None
@@ -153,19 +153,29 @@ def stop() -> bool:
     while time.time() < deadline:
         time.sleep(0.1)
         if not is_alive(pid):
-            paths.pid_file().unlink(missing_ok=True)
+            paths.pid_file(port).unlink(missing_ok=True)
             return True
     log.warning("daemon pid %d did not exit within %ds", pid, STOP_TIMEOUT_SECONDS)
     return False
 
 
-def write_pid_file(pid: int | None = None) -> Path:
+def write_pid_file(pid: int | None = None, *, port: int = DEFAULT_PORT) -> Path:
     """Used by the foreground server entry point to publish its PID."""
     paths.ensure_runtime_dirs()
-    p = paths.pid_file()
+    p = paths.pid_file(port)
     p.write_text(str(pid if pid is not None else os.getpid()))
     return p
 
 
-def remove_pid_file() -> None:
-    paths.pid_file().unlink(missing_ok=True)
+def remove_pid_file(port: int = DEFAULT_PORT) -> None:
+    """Ownership-guarded: only unlink the pid file if it still names
+    THIS process. A duplicate / other-port daemon exiting must never
+    wipe the live daemon's pid file (that orphaned it -> `mnemo daemon
+    stop/status` went blind -> stale code kept serving)."""
+    p = paths.pid_file(port)
+    try:
+        on_disk = int(p.read_text().strip())
+    except (OSError, ValueError):
+        return
+    if on_disk == os.getpid():
+        p.unlink(missing_ok=True)

@@ -49,7 +49,14 @@ DEFAULT_SYSTEM = (
     "You are Mnem, the mnemo companion -- a knowledge assistant over the "
     "user's memory and code graph. Use the mnemo_* tools to research "
     "before answering. Cite every claim you draw from a node inline as "
-    "[mnemo:<node_id>] so the UI can link it. Be concise and concrete."
+    "[mnemo:<node_id>] so the UI can link it. Be concise and concrete. "
+    "You can act IN the user's current page: call mnemo_page_context to "
+    "see where they are, then prefer the in-page tools "
+    "(mnemo_select_node / mnemo_set_filter / mnemo_session_nodes / "
+    "mnemo_highlight_nodes / mnemo_apply_retune) over redirecting. Use "
+    "mnemo_navigate ONLY to send the user to a genuinely different "
+    "page, and only as your FINAL action -- a page load ends the turn, "
+    "so do all in-page work first."
 )
 
 _CITE_RE = re.compile(r"\[mnemo:([^\]\s]+)\]")
@@ -136,7 +143,64 @@ class AgentLoop:
                 )
             # 'tool_call' rows are folded into the assistant block above;
             # 'system' rows (unused in phase 2) are skipped.
-        return pmsgs
+        return self._repair_tool_pairs(pmsgs)
+
+    @staticmethod
+    def _repair_tool_pairs(pmsgs: list[dict]) -> list[dict]:
+        """Every assistant ``tool_use`` MUST be answered by a
+        ``tool_result`` in the immediately-following message (Anthropic
+        400s otherwise: 'tool_use ids ... without tool_result blocks
+        immediately after', and every other provider translator has the
+        same contract). An interrupted run (SSE/daemon killed
+        mid-dispatch) persists the assistant tool_use but never its
+        tool_result row -> the replayed history is invalid and the
+        conversation is bricked FOREVER. Self-heal: synthesize an
+        error tool_result for any orphaned tool_use so the model can
+        still continue. Healthy pairs pass through untouched."""
+        out: list[dict] = []
+        i, n = 0, len(pmsgs)
+        while i < n:
+            m = pmsgs[i]
+            out.append(m)
+            content = m.get("content")
+            if m.get("role") == "assistant" and isinstance(content, list):
+                ids = [
+                    b["id"]
+                    for b in content
+                    if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("id")
+                ]
+                if ids:
+                    covered: set[str] = set()
+                    j = i + 1
+                    while j < n and pmsgs[j].get("role") == "tool":
+                        for blk in pmsgs[j].get("content", []) or []:
+                            covered.add(blk.get("tool_use_id"))
+                        out.append(pmsgs[j])
+                        j += 1
+                    missing = [tid for tid in ids if tid not in covered]
+                    if missing:
+                        out.append(
+                            {
+                                "role": "tool",
+                                "content": [
+                                    {
+                                        "tool_use_id": tid,
+                                        "content": json.dumps(
+                                            {
+                                                "error": "tool result missing: "
+                                                "the previous run was interrupted"
+                                            }
+                                        ),
+                                        "is_error": True,
+                                    }
+                                    for tid in missing
+                                ],
+                            }
+                        )
+                    i = j
+                    continue
+            i += 1
+        return out
 
     # --- the loop --------------------------------------------------------
 
@@ -249,8 +313,10 @@ class AgentLoop:
                 yield {"type": "done", "stop_reason": stop_reason}
                 return
 
-            # Dispatch tools (phase 2: all registered tools are safe).
-            ctx = ToolContext(store=self._store, embedder=self._embedder)
+            # Dispatch tools. ToolContext carries the running conv id so
+            # mnemo_page_context (v3.2) resolves the live, client-PATCHed
+            # page state.
+            ctx = ToolContext(store=self._store, embedder=self._embedder, conversation_id=conv_id)
             result_blocks: list[dict] = []
             # Skill guidance is pinned AFTER the tool turn (a user turn
             # between a tool_use and its tool_result would break the

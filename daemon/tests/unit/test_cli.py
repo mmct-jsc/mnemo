@@ -431,7 +431,7 @@ def test_cli_daemon_restart_stops_then_starts(
     cmd), not the daemon. `restart` does both in one command, in
     order, with clear messages -- no real process is spawned here."""
     calls: list[str] = []
-    monkeypatch.setattr("mnemo.daemon.stop", lambda: calls.append("stop") or True)
+    monkeypatch.setattr("mnemo.daemon.stop", lambda **kw: calls.append("stop") or True)
     monkeypatch.setattr(
         "mnemo.daemon.start",
         lambda **kw: calls.append("start") or 4242,
@@ -446,7 +446,7 @@ def test_cli_daemon_restart_stops_then_starts(
 def test_cli_daemon_restart_when_not_running(
     runner: CliRunner, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr("mnemo.daemon.stop", lambda: False)
+    monkeypatch.setattr("mnemo.daemon.stop", lambda **kw: False)
     monkeypatch.setattr("mnemo.daemon.start", lambda **kw: 99)
     result = runner.invoke(app, ["daemon", "restart"])
     assert result.exit_code == 0, result.stdout

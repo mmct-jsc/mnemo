@@ -36,6 +36,11 @@
       thinking: false,
       working: false, // drives the orbiting-dots "working" animation
       pending: null,
+      // v3.2 chat-UX: a clean in-thread error banner + one-click retry
+      // (not a raw JSON dump), and a scroll-to-latest affordance.
+      error: null,
+      lastUserText: '',
+      showJump: false,
       hasMore: false,
       total: 0,
       tokensTotal: 0,
@@ -115,6 +120,20 @@
         el.style.height = Math.min(el.scrollHeight, 180) + 'px';
       },
 
+      // v3.2: the LIVE page state the companion grounds on. Prefer the
+      // page's window.mnemoPageContext() override (graph/settings/code
+      // expose their real state); fall back to the static opts.
+      livePageContext: function () {
+        try {
+          if (typeof window.mnemoPageContext === 'function') {
+            return window.mnemoPageContext();
+          }
+        } catch (e) {
+          /* a page override threw -- fall back to the static context */
+        }
+        return this.pageContext || null;
+      },
+
       // --- lifecycle ----------------------------------------------------
       init: function () {
         var self = this;
@@ -142,7 +161,8 @@
       newConversation: function () {
         var self = this;
         var body = { name: 'New chat' };
-        if (this.pageContext) body.page_context = this.pageContext;
+        var pc0 = this.livePageContext();
+        if (pc0) body.page_context = pc0;
         return fetch('/v1/chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -161,8 +181,45 @@
           });
       },
 
+      // v3.2: delete (archive) a conversation. If it was the active
+      // one, fall back to the newest remaining (or a fresh chat).
+      deleteConversation: function (id, ev) {
+        var self = this;
+        if (ev && ev.stopPropagation) ev.stopPropagation();
+        if (!id) return Promise.resolve();
+        return fetch('/v1/chat/' + id, { method: 'DELETE' })
+          .then(function () {
+            return self.loadConversations();
+          })
+          .then(function () {
+            if (self.activeId !== id) return;
+            self.activeId = null;
+            self.messages = [];
+            if (self.conversations.length) {
+              self.openConversation(self.conversations[0].id);
+            } else {
+              self.error = null;
+              self.showJump = false;
+            }
+          })
+          .catch(function () {
+            if (window.toast) window.toast('Could not delete chat', 'error');
+          });
+      },
+
+      // v3.2: inline [mnemo:id] click on a surface that HAS the
+      // citation side-panel (the /chat page) -> use it (no floating
+      // popover overlapping the thread). window.mnemoCite (base.html)
+      // dispatches mnemo-cite only when .cite-preview exists.
+      onCiteEvent: function (id) {
+        if (id) this.previewNode(id);
+      },
+
       openConversation: function (id) {
         var self = this;
+        // keep the error banner across the post-error reload (same
+        // conv) but clear it when the user switches conversations.
+        if (id !== this.activeId) this.error = null;
         this.activeId = id;
         this.citations = [];
         this.citeSel = '';
@@ -180,6 +237,7 @@
             self.provider = data.provider || self.provider;
             self.collectCitations();
             self.loadBookmarks();
+            self.showJump = false;
             self.scroll(true);
           });
       },
@@ -297,12 +355,19 @@
         this.citations = seen;
       },
 
-      // [mnemo:<id>] -> a cite link. Run AFTER markdown render (marked
-      // keeps the literal brackets; they aren't markdown syntax).
+      // [mnemo:<id>] -> a context-aware cite link. Run AFTER markdown
+      // render (marked keeps the literal brackets; not md syntax). The
+      // href stays /node/<id> so middle-click / no-JS still works, but
+      // the click routes through window.mnemoCite (base.html): on
+      // Nebula it focuses the node in the live graph; elsewhere it
+      // opens a shared inline popover; the full-page redirect is only
+      // the final fallback (v3.2 S3.3 -- NO blind redirect).
       _citeLinks: function (html) {
         return (html || '').replace(
           /\[mnemo:([^\]\s]+)\]/g,
-          '<a href="/node/$1" class="cite-link" onclick="event.stopPropagation()">[mnemo:$1]</a>'
+          '<a href="/node/$1" class="cite-link" data-cite="$1" ' +
+            "onclick=\"return window.mnemoCite ? window.mnemoCite('$1', event) : true\">" +
+            '[mnemo:$1]</a>'
         );
       },
 
@@ -490,6 +555,98 @@
         if (this.nearBottom()) this.scroll(false);
       },
 
+      // v3.2: "jump to latest" affordance. The scroll event fires
+      // dozens of times/sec during the pin sequence + streaming-follow
+      // + smooth scrolls; recomputing showJump on EACH (with
+      // x-transition.opacity) made the pill "flicker like crazy".
+      // Fix: DEBOUNCE -- only re-evaluate once scrolling has SETTLED
+      // (so continuous programmatic scroll never flips it) -- plus
+      // HYSTERESIS: a wide show band / narrow hide band so it cannot
+      // oscillate around a single threshold.
+      onScroll: function () {
+        var self = this;
+        if (self._jumpT) clearTimeout(self._jumpT);
+        self._jumpT = setTimeout(function () {
+          self._jumpT = null;
+          var l = self.$refs.log;
+          if (!l || !self.messages.length) {
+            self.showJump = false;
+            return;
+          }
+          var dist = l.scrollHeight - l.scrollTop - l.clientHeight;
+          if (self.showJump) {
+            if (dist < 90) self.showJump = false; // clearly back at bottom
+          } else if (dist > 260) {
+            self.showJump = true; // clearly scrolled up
+          }
+        }, 160);
+      },
+      jumpToLatest: function () {
+        if (this._jumpT) {
+          clearTimeout(this._jumpT);
+          this._jumpT = null;
+        }
+        this.showJump = false;
+        this.scroll(false);
+      },
+
+      // v3.2: a clean human error message (NOT the raw provider JSON
+      // blob the user saw dumped in the thread).
+      _humanError: function (raw) {
+        var msg = String(raw || 'Something went wrong.');
+        if (/tool_use\b[\s\S]*tool_result/.test(msg)) {
+          return 'That conversation had an interrupted tool call. It has been repaired -- retry to continue.';
+        }
+        if (/invalid_request_error/.test(msg)) {
+          return 'The provider rejected the request. Retry, or start a new chat if it persists.';
+        }
+        if (/\b(401|403|api[_ -]?key|authentication)\b/i.test(msg)) {
+          return 'The provider key was rejected -- check Settings - chat.';
+        }
+        if (/\b(429|rate.?limit|overloaded|529)\b/i.test(msg)) {
+          return 'The provider is rate-limited or overloaded. Wait a moment, then retry.';
+        }
+        // keep it short -- the full text is one line, never a JSON wall
+        return msg.length > 240 ? msg.slice(0, 237) + '…' : msg;
+      },
+      retry: function () {
+        if (!this.lastUserText || this.streaming) return Promise.resolve();
+        this.error = null;
+        this.draft = this.lastUserText;
+        return this.sendMessage();
+      },
+      dismissError: function () {
+        this.error = null;
+      },
+
+      copyText: function (t) {
+        var s = String(t == null ? '' : t);
+        var done = function () {
+          if (window.toast) window.toast('Copied to clipboard', 'success');
+        };
+        try {
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(s).then(done, function () {});
+            return;
+          }
+        } catch (e) {
+          /* fall through to the legacy path */
+        }
+        try {
+          var ta = document.createElement('textarea');
+          ta.value = s;
+          ta.style.position = 'fixed';
+          ta.style.opacity = '0';
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand('copy');
+          document.body.removeChild(ta);
+          done();
+        } catch (e) {
+          if (window.toast) window.toast('Copy failed', 'error');
+        }
+      },
+
       sendMessage: function () {
         var self = this;
         var text = this.draft.trim();
@@ -504,6 +661,8 @@
         }
         return chain.then(function () {
           var id = self.activeId;
+          self.lastUserText = text; // for one-click retry on error
+          self.error = null;
           self.draft = '';
           if (self.$refs.draft) self.$refs.draft.style.height = 'auto';
           self.messages.push({
@@ -512,13 +671,30 @@
             content: { text: text },
           });
           self.scroll(false);
-          return fetch('/v1/chat/' + id + '/message', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text: text }),
-          }).then(function () {
-            self.streamRun(id);
-          });
+          // v3.2: refresh the conversation's page_context with the
+          // CURRENT screen before the run, so the model grounds on what
+          // the user is actually looking at (not the create-time state).
+          var pc = self.livePageContext();
+          var pre = pc
+            ? fetch('/v1/chat/' + id, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ page_context: pc }),
+              }).catch(function () {
+                /* stale context must never block the message */
+              })
+            : Promise.resolve();
+          return pre
+            .then(function () {
+              return fetch('/v1/chat/' + id + '/message', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text: text }),
+              });
+            })
+            .then(function () {
+              self.streamRun(id);
+            });
         });
       },
 
@@ -635,9 +811,23 @@
           var d = JSON.parse(e.data);
           var a = d.args || {};
           if (d.action === 'navigate' && a.path) {
-            setTimeout(function () {
-              window.location.href = a.path;
-            }, 600);
+            var here = (location.pathname.replace(/\/+$/, '') || '/');
+            var dest =
+              (String(a.path).split('?')[0].split('#')[0].replace(/\/+$/, '') ||
+                '/');
+            if (dest === here) {
+              // ALREADY on the target -- do NOT reload. A full page
+              // load kills this dock's SSE + the in-flight agent loop.
+              if (window.toast) window.toast('Mnem: already on ' + here, 'info');
+            } else {
+              // A DIFFERENT page: open in a NEW TAB. location.href would
+              // tear down this dock's SSE + abandon the running agent
+              // loop server-side ("The connection dropped" mid-answer,
+              // e.g. 'show me in nebula'). A new tab keeps the
+              // conversation alive AND takes the user where they asked.
+              if (window.toast) window.toast('Mnem opened ' + dest + ' in a new tab', 'info');
+              window.open(a.path, '_blank', 'noopener');
+            }
           } else if (d.action === 'select_node') {
             document.dispatchEvent(
               new CustomEvent('mnemo-select-node', { detail: a })
@@ -645,6 +835,10 @@
           } else if (d.action === 'set_filter') {
             document.dispatchEvent(
               new CustomEvent('mnemo-set-filter', { detail: a })
+            );
+          } else if (d.action === 'highlight_nodes') {
+            document.dispatchEvent(
+              new CustomEvent('mnemo-highlight-nodes', { detail: a })
             );
           } else if (d.action === 'scroll_to' && a.selector) {
             var el = document.querySelector(a.selector);
@@ -666,12 +860,14 @@
           finish('idle');
         });
         es.addEventListener('error', function (e) {
+          var raw = '';
           try {
-            var d = JSON.parse(e.data || '{}');
-            if (d.message && window.toast) window.toast(d.message, 'error');
+            raw = (JSON.parse(e.data || '{}').message) || '';
           } catch (err) {
-            /* bare connection-close */
+            /* bare connection-close -- no payload */
           }
+          // a clean in-thread banner + Retry, NOT a raw JSON wall
+          self.error = self._humanError(raw || 'The connection dropped.');
           finish('alert');
         });
       },

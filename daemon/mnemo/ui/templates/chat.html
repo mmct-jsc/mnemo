@@ -1,9 +1,14 @@
 {% extends "base.html" %}
 {% block title %} - chat{% endblock %}
 
-{% block content %}
+{# Use {% block layout %} + <main class="full"> -- the SAME app-wide
+   full-window convention the Nebula page uses (consistent chrome, no
+   global html/body/main overrides). #}
+{% block layout %}
 <script src="/static/chat.js?v={{ mnemo_version }}" defer></script>
-<section class="mn" x-data="mnemoChat({ surface: 'page' })" x-init="init()">
+<main class="full">
+<section class="mn" x-data="mnemoChat({ surface: 'page' })" x-init="init()"
+         @mnemo-cite.document="onCiteEvent($event.detail.node_id)">
 
   <!-- left rail: conversations -->
   <aside class="chat-rail">
@@ -23,6 +28,13 @@
               <li :class="{active: c.id === activeId}" @click="openConversation(c.id)">
                 <span class="cv-name" x-text="c.name"></span>
                 <span class="cv-time" x-text="relTime(c.updated_at)"></span>
+                <button class="cv-del" type="button"
+                        @click="deleteConversation(c.id, $event)"
+                        title="Delete chat" aria-label="Delete chat">
+                  <svg viewBox="0 0 24 24" width="13" height="13" fill="none"
+                       stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                       stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M10 11v6M14 11v6"/></svg>
+                </button>
               </li>
             </template>
           </ul>
@@ -34,8 +46,12 @@
     </div>
   </aside>
 
-  <!-- centre: the thread -->
-  <main class="chat-thread">
+  <!-- centre: the thread (a plain <div>, NOT a 2nd <main> -- a nested
+       <main> inherits app.css `main{max-width:1600px;margin:2rem auto}`
+       and, as a grid item, the auto inline margins shrink-to-fit +
+       centre it instead of filling the cell -> the "messages shrink /
+       not left aligned" bug). -->
+  <div class="chat-thread">
 
     <!-- running token budget bar (tokens_total vs per-provider cap) -->
     <div class="tok-bar" :class="{ warn: budgetWarn }" x-show="activeId" x-cloak>
@@ -54,7 +70,7 @@
       </template>
     </div>
 
-    <div class="thread-scroll" x-ref="log">
+    <div class="thread-scroll" x-ref="log" @scroll.passive="onScroll()">
       <div class="thread-col">
 
         <!-- scroll-up lazy-history sentinel (IntersectionObserver) -->
@@ -104,6 +120,16 @@
                 <img class="ava" src="/static/mnem/idle.svg" width="30" height="30" alt="Mnem">
                 <div class="assistant-body">
                   <div class="prose" x-html="renderMarkdown(m.content.text || '')"></div>
+                  <div class="msg-tools">
+                    <button class="msg-copy" type="button"
+                            @click="copyText(m.content.text || '')"
+                            title="Copy message" aria-label="Copy message">
+                      <svg viewBox="0 0 24 24" width="14" height="14" fill="none"
+                           stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                           stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                      <span>Copy</span>
+                    </button>
+                  </div>
                   <template x-for="(d, di) in extractDrafts(m.content.text || '')"
                             :key="m.key + '-d' + di">
                     <div class="draft-card">
@@ -137,13 +163,19 @@
         </template>
 
         <!-- live streaming assistant -->
-        <div class="turn turn-assistant" x-show="streaming" x-cloak>
+        <div class="turn turn-assistant" x-show="streaming" x-cloak
+             x-transition:enter="ce-fade" x-transition:enter-start="ce-fade-0"
+             x-transition:enter-end="ce-fade-1">
           <div class="turn-assistant">
             <img class="ava" :src="'/static/mnem/' + (thinking ? 'thinking' : 'speaking') + '.svg'"
                  width="30" height="30" alt="Mnem">
             <div class="assistant-body">
               <div class="prose" x-ref="liveBody"></div>
-              <div class="mnem-working" x-show="working" x-cloak aria-label="Mnem is working">
+              <div class="mnem-working" x-show="working" x-cloak aria-label="Mnem is working"
+                   x-transition:enter="ce-fade" x-transition:enter-start="ce-fade-0"
+                   x-transition:enter-end="ce-fade-1"
+                   x-transition:leave="ce-fade" x-transition:leave-start="ce-fade-1"
+                   x-transition:leave-end="ce-fade-0">
                 <span></span><span></span><span></span>
               </div>
             </div>
@@ -169,20 +201,44 @@
       </div>
     </div>
 
+    <!-- scroll-to-latest: only when scrolled up off the bottom -->
+    <button class="chat-jump" type="button" x-show="showJump" x-cloak
+            x-transition.opacity @click="jumpToLatest()"
+            aria-label="Jump to latest">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none"
+           stroke="currentColor" stroke-width="2.4" stroke-linecap="round"
+           stroke-linejoin="round"><path d="M12 5v14M5 12l7 7 7-7"/></svg>
+      <span>Latest</span>
+    </button>
+
+    <!-- clean error banner + one-click retry (NOT a raw JSON wall) -->
+    <div class="chat-error" x-show="error" x-cloak x-transition.opacity role="alert">
+      <svg class="ce-ic" viewBox="0 0 24 24" width="18" height="18" fill="none"
+           stroke="currentColor" stroke-width="2" stroke-linecap="round"
+           stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16h.01"/></svg>
+      <span class="ce-msg" x-text="error"></span>
+      <button class="ce-retry" type="button" @click="retry()"
+              :disabled="streaming || !lastUserText">Retry</button>
+      <button class="ce-x" type="button" @click="dismissError()"
+              aria-label="dismiss">×</button>
+    </div>
+
     <form class="composer" @submit.prevent="sendMessage()">
       <textarea x-ref="draft" x-model="draft" rows="1"
-                placeholder="Ask Mnem anything…  (Enter to send · Shift+Enter for newline)"
+                placeholder="Ask Mnem anything…"
+                title="Enter to send · Shift+Enter for a new line"
                 :disabled="streaming"
                 @input="grow($event.target)"
                 @keydown.enter.prevent="if (!$event.shiftKey) sendMessage()"
                 @keydown.enter.shift="$nextTick(() => grow($refs.draft))"></textarea>
-      <button class="send" :disabled="streaming || !draft.trim()" aria-label="send">
-        <svg viewBox="0 0 24 24" width="18" height="18" fill="none"
+      <button class="send" :disabled="streaming || !draft.trim()"
+              :title="streaming ? 'Mnem is replying…' : 'Send (Enter)'" aria-label="Send">
+        <svg class="send-ic" viewBox="0 0 24 24" width="18" height="18" fill="none"
              stroke="currentColor" stroke-width="2.2" stroke-linecap="round"
-             stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+             stroke-linejoin="round"><path d="M7 11l5-5 5 5M12 6v13"/></svg>
       </button>
     </form>
-  </main>
+  </div>
 
   <!-- right: citation side panel -->
   <aside class="chat-cite">
@@ -201,12 +257,20 @@
     <div class="cite-preview" x-ref="citePreview" x-show="citeSel" x-cloak></div>
   </aside>
 </section>
+</main>
 
 
 <style>
   /* ---- mnemo v3 chat : "knowledge terminal", Claude-grade ---- */
+  /* 1-window via the SAME app convention as Nebula: this page emits
+     the layout block + a full-bleed main (no html/body/main
+     overrides -> chrome stays IDENTICAL to every other page) and the
+     shell is calc(100vh - 65px) -- the exact value .nebula-shell uses
+     for the topbar. The thread/rail scroll internally; the document
+     does not. (Comment kept free of brace-percent so Jinja does not
+     parse it as a tag.) */
   .mn { display: grid; grid-template-columns: 252px minmax(0,1fr) 280px;
-    height: calc(100dvh - 116px); min-height: 0; background:
+    height: calc(100vh - 65px); min-height: 0; background:
       radial-gradient(80% 60% at 50% -10%, rgba(126,231,224,.05), transparent 60%),
       var(--bg); }
   .mn [x-cloak] { display: none !important; }
@@ -229,7 +293,7 @@
     text-transform: uppercase; letter-spacing: .14em; color: var(--fg-dim);
     padding: .9rem .55rem .35rem; }
   .rail-group ul { list-style: none; margin: 0; padding: 0; }
-  .rail-group li { display: flex; align-items: baseline; gap: .5rem;
+  .rail-group li { display: flex; align-items: center; gap: .5rem;
     padding: .5rem .6rem; border-radius: var(--radius); cursor: pointer;
     color: var(--fg-muted); transition: var(--transition); }
   .rail-group li:hover { background: var(--panel); color: var(--fg); }
@@ -237,7 +301,20 @@
     box-shadow: inset 2px 0 0 var(--accent); }
   .cv-name { flex: 1; overflow: hidden; text-overflow: ellipsis;
     white-space: nowrap; font-size: .88rem; }
-  .cv-time { font-family: var(--mono); font-size: .68rem; color: var(--fg-dim); }
+  .cv-time { font-family: var(--mono); font-size: .68rem; color: var(--fg-dim);
+    transition: opacity .15s ease; }
+  .cv-del { display: grid; place-items: center; width: 22px; height: 22px;
+    flex-shrink: 0; padding: 0; margin: -2px -2px -2px 0;
+    background: none; border: 0; color: var(--fg-dim); cursor: pointer;
+    border-radius: 6px; opacity: 0;
+    transition: opacity .15s ease, color .15s ease, background .15s ease; }
+  .rail-group li:hover .cv-del, .cv-del:focus-visible { opacity: 1; }
+  /* on hover the timestamp yields to the delete button (no jump) */
+  .rail-group li:hover .cv-time { opacity: 0; position: absolute;
+    pointer-events: none; }
+  .rail-group li { position: relative; }
+  .cv-del:hover { color: var(--warn);
+    background: color-mix(in srgb, var(--warn) 18%, transparent); }
   .rail-empty { color: var(--fg-dim); font-size: .82rem; padding: 1rem .8rem; }
 
   /* thread */
@@ -254,9 +331,20 @@
      last message" bug). The JS opts into smooth explicitly via
      scrollTo({behavior:'smooth'}) only for live-follow; the
      open/pin must be instant. */
-  .thread-scroll { flex: 1 1 0; min-height: 0; overflow-y: auto; }
-  .thread-col { max-width: 46rem; margin: 0 auto; padding: 2rem 1.5rem 1rem;
-    display: flex; flex-direction: column; gap: 1.5rem; }
+  /* scrollbar-gutter:stable reserves the scrollbar track at all times
+     -- without it the centered "Latest" pill (and the content) jump
+     left/right as the scrollbar appears/disappears on scroll. */
+  .thread-scroll { flex: 1 1 0; min-height: 0; overflow-y: auto;
+    scrollbar-gutter: stable; }
+  /* min-height:100% + justify-content:flex-end => the conversation
+     BOTTOM-anchors (grows up from just above the composer) like every
+     chat app, instead of a short thread pinned at the top with a huge
+     empty void below it. The .welcome state keeps margin:auto so it
+     still centres (auto margins beat justify-content). */
+  .thread-col { margin: 0; padding: 2rem 2rem 1rem;
+    min-height: 100%; box-sizing: border-box;
+    display: flex; flex-direction: column; justify-content: flex-end;
+    gap: 1.5rem; }
   .turn { animation: turn-in .32s cubic-bezier(.2,.7,.3,1) both; }
   @keyframes turn-in { from { opacity: 0; transform: translateY(8px); } }
 
@@ -265,7 +353,15 @@
     border-radius: 14px 14px 4px 14px; padding: .7rem 1rem; max-width: 80%;
     white-space: pre-wrap; line-height: 1.55; }
 
-  .turn-assistant { display: flex; gap: .85rem; align-items: flex-start; }
+  /* `.turn > .turn-assistant` -- scope the avatar+body flex ROW to the
+     INNER element only. The outer `.turn` ALSO gets class
+     `turn-assistant` via :class="'turn-'+m.role"; if the flex rule hit
+     it too, the outer became display:flex and its single inner child
+     was flex:0 1 auto -> CONTENT-SIZED (the assistant prose collapsed
+     to ~63px and a short message "shrank"). The outer must stay a
+     full-width block. (Same class of bug as the dock .mc-user one.) */
+  .turn > .turn-assistant { display: flex; gap: .85rem;
+    align-items: flex-start; }
   .ava { border-radius: 50%; flex-shrink: 0; margin-top: 2px;
     box-shadow: 0 0 0 1px var(--border-soft), 0 4px 14px rgba(0,0,0,.35); }
   .assistant-body { min-width: 0; flex: 1; padding-top: 2px; }
@@ -355,7 +451,11 @@
   .lo-dot:nth-child(3) { animation-delay: .3s; }
 
   /* tool chips */
-  .tool-chip { margin-left: 3.4rem; }
+  /* one Mnem-side gutter: tool calls/results start at the EXACT same
+     x as the assistant prose (avatar 30px + the .turn-assistant
+     .85rem gap), so the whole Mnem side reads as one consistent
+     column instead of the old ~11px-off 3.4rem guess. */
+  .tool-chip { margin-left: calc(30px + .85rem); }
   .tool-chip summary { display: inline-flex; align-items: center; gap: .5rem;
     list-style: none; cursor: pointer; padding: .35rem .7rem;
     background: var(--panel); border: 1px solid var(--border-soft);
@@ -371,7 +471,7 @@
     border: 1px solid var(--border-soft); border-radius: var(--radius);
     padding: .6rem .8rem; font-size: .76rem; color: var(--fg-muted);
     overflow-x: auto; }
-  .tool-done { margin-left: 3.4rem; font-family: var(--mono);
+  .tool-done { margin-left: calc(30px + .85rem); font-family: var(--mono);
     font-size: .74rem; color: var(--ok); opacity: .75; }
 
   /* draft card */
@@ -435,8 +535,8 @@
 
   /* composer */
   .composer { display: flex; align-items: flex-end; gap: .6rem;
-    max-width: 46rem; margin: 0 auto; width: 100%;
-    padding: .9rem 1.5rem 1.4rem; }
+    margin: 0; width: 100%;
+    padding: .9rem 2rem 1.4rem; }
   .composer textarea { flex: 1; resize: none; max-height: 180px;
     padding: .8rem 1rem; background: var(--panel);
     border: 1px solid var(--border); border-radius: 14px; color: var(--fg);
@@ -444,14 +544,67 @@
     transition: border-color var(--transition); }
   .composer textarea:focus { outline: none; border-color: var(--accent);
     box-shadow: 0 0 0 3px var(--accent-soft); }
-  .send { width: 42px; height: 42px; flex-shrink: 0; border: 0;
-    border-radius: 12px; background: var(--accent); color: #06201e;
+  .send { width: 44px; height: 44px; flex-shrink: 0; border: 0;
+    border-radius: 50%; background: var(--accent); color: #06201e;
     cursor: pointer; display: grid; place-items: center;
-    transition: var(--transition); }
+    box-shadow: 0 4px 14px -4px var(--accent);
+    transition: transform var(--transition), background var(--transition),
+      box-shadow var(--transition), opacity var(--transition); }
+  .send .send-ic { display: block; } /* place-items centers it; no nudge */
   .send:disabled { background: var(--panel); color: var(--fg-dim);
-    cursor: not-allowed; }
+    box-shadow: none; opacity: .6; cursor: not-allowed; }
   .send:not(:disabled):hover { background: var(--accent-hover);
-    transform: translateY(-1px); }
+    transform: translateY(-2px); box-shadow: 0 6px 18px -4px var(--accent); }
+  .send:not(:disabled):active { transform: translateY(0); }
+
+  /* per-message tools (copy) -- revealed on hover of the turn */
+  .msg-tools { display: flex; gap: .35rem; margin-top: .35rem;
+    opacity: 0; transition: opacity var(--transition); }
+  .turn:hover .msg-tools, .msg-tools:focus-within { opacity: 1; }
+  .msg-copy { display: inline-flex; align-items: center; gap: .3rem;
+    padding: .2rem .5rem; font-size: .72rem; color: var(--fg-muted);
+    background: transparent; border: 1px solid var(--border-soft);
+    border-radius: 999px; cursor: pointer; transition: var(--transition); }
+  .msg-copy:hover { color: var(--fg); border-color: var(--fg-muted); }
+
+  /* scroll-to-latest */
+  .chat-jump { position: absolute; left: 50%; bottom: 92px;
+    transform: translateX(-50%); z-index: 4;
+    display: inline-flex; align-items: center; gap: .35rem;
+    padding: .42rem .8rem .42rem .65rem; font-size: .78rem;
+    color: var(--fg); background: var(--panel);
+    border: 1px solid var(--border); border-radius: 999px;
+    box-shadow: var(--shadow); cursor: pointer;
+    transition: var(--transition); }
+  .chat-jump:hover { border-color: var(--accent); color: var(--accent);
+    transform: translateX(-50%) translateY(-1px); }
+
+  /* clean error banner (replaces the raw-JSON dump) */
+  .chat-error { display: flex; align-items: center; gap: .6rem;
+    margin: 0; width: 100%;
+    padding: .65rem .9rem; box-sizing: border-box;
+    background: color-mix(in srgb, var(--warn) 12%, var(--panel));
+    border: 1px solid var(--warn); border-radius: 12px;
+    color: var(--fg); font-size: .85rem; }
+  .chat-error .ce-ic { color: var(--warn); flex-shrink: 0; }
+  .chat-error .ce-msg { flex: 1; min-width: 0; line-height: 1.45;
+    overflow-wrap: anywhere; }
+  .chat-error .ce-retry { flex-shrink: 0; padding: .35rem .8rem;
+    background: var(--accent); color: #06201e; border: 0;
+    border-radius: 999px; font-weight: 600; font-size: .8rem;
+    cursor: pointer; }
+  .chat-error .ce-retry:disabled { opacity: .5; cursor: not-allowed; }
+  .chat-error .ce-x { flex-shrink: 0; background: none; border: 0;
+    color: var(--fg-dim); font-size: 1.1rem; line-height: 1;
+    cursor: pointer; }
+  .chat-error .ce-x:hover { color: var(--fg); }
+
+  /* long-text hardening: never overflow / never a horizontal smear */
+  .prose, .bubble-user { overflow-wrap: anywhere; word-break: break-word; }
+  .prose pre { white-space: pre-wrap; word-break: break-word;
+    max-width: 100%; overflow-x: auto; }
+  .prose code { overflow-wrap: anywhere; }
+  .prose table { display: block; max-width: 100%; overflow-x: auto; }
 
   /* citation panel */
   .chat-cite { border-left: 1px solid var(--border-soft); overflow-y: auto;
@@ -474,7 +627,38 @@
     white-space: nowrap; }
   .cite-preview { font-size: .82rem; line-height: 1.6; color: var(--fg-muted);
     border-top: 1px solid var(--border-soft); padding-top: .8rem;
-    max-height: 50vh; overflow: auto; }
+    max-height: 50vh; overflow: auto; overflow-wrap: anywhere; }
+  /* the cited node body renders markdown -- tame the giant H1 and the
+     horizontally-scrolling code block in the narrow side panel
+     (live-review "citation weird"). */
+  .cite-preview h1, .cite-preview h2 { font-size: .95rem; line-height: 1.3;
+    margin: .6rem 0 .4rem; color: var(--fg); }
+  .cite-preview h3, .cite-preview h4 { font-size: .85rem; margin: .5rem 0 .3rem;
+    color: var(--fg); }
+  .cite-preview p, .cite-preview li { font-size: .8rem; }
+  .cite-preview pre { white-space: pre-wrap; word-break: break-word;
+    max-width: 100%; font-size: .72rem; padding: .6rem .7rem; }
+  .cite-preview code { overflow-wrap: anywhere; }
+  /* Prism ships `code[class*="language-"] { white-space: pre }` which
+     keeps the INNER highlighted <code> from wrapping -> the cited code
+     is a rigid block CLIPPED in the narrow side panel. Force it to
+     wrap (a h-scrollbar in a ~250px panel is unusable). !important
+     because we override a vendored 3rd-party sheet of unknown order. */
+  .cite-preview pre code,
+  .cite-preview pre[class*="language-"],
+  .cite-preview code[class*="language-"] {
+    white-space: pre-wrap !important; word-break: break-word;
+    overflow-wrap: anywhere; }
+  .cite-preview table { display: block; max-width: 100%; overflow-x: auto; }
+
+  /* v3.2 UX refine ---------------------------------------------------- */
+  /* smooth fade for the thinking / streaming turn (was a sudden pop) */
+  .ce-fade { transition: opacity .26s ease, transform .26s ease; }
+  .ce-fade-0 { opacity: 0; transform: translateY(4px); }
+  .ce-fade-1 { opacity: 1; transform: translateY(0); }
+  /* (removed the min-height/flex band-aids -- they were compensating
+     for the collapsed-width bug fixed above; with .assistant-body
+     flex:1 in a full-width inner row the prose fills naturally.) */
 
   @media (max-width: 1100px) {
     .mn { grid-template-columns: 1fr; }
