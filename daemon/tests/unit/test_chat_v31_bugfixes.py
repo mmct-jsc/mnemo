@@ -65,6 +65,21 @@ def test_dock_image_is_not_natively_draggable() -> None:
     assert "innerWidth || " in BASE_HTML or "vw =" in BASE_HTML
 
 
+def test_dock_drag_mutates_the_tracked_reactive_component() -> None:
+    """Root cause of "drag still failing": the @pointerdown handler's
+    `this` is a child-scoped wrapper, NOT Alpine.$data('.mnem-wrap')
+    (the proxy the :style="posStyle" effect tracks), so mutating
+    this.pos never re-ran the binding -- data moved, DOM didn't. The
+    drag MUST mutate the tracked component (Alpine.$data(el)) AND drive
+    the root element imperatively for the high-frequency move."""
+    assert "Alpine.$data(el)" in BASE_HTML  # mutate the tracked proxy
+    # imperative position write on the root during the drag (pipeline
+    # 18: direct DOM for high-frequency interaction; don't fight the
+    # reactive layer per move)
+    assert "el.style.left" in BASE_HTML
+    assert "el.style.top" in BASE_HTML
+
+
 # --- Bug 3/4: real markdown rendering, one-shot ------------------------
 
 

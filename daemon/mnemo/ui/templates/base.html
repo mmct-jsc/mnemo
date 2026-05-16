@@ -752,50 +752,74 @@
       _vh() {
         return window.innerHeight || document.documentElement.clientHeight || 0;
       },
+      // Write the position straight onto the root element. The drag is
+      // high-frequency direct manipulation -- driving the DOM
+      // imperatively (pipeline 18) is frame-perfect AND sidesteps the
+      // Alpine nested-scope reactivity pitfall (see dragStart).
+      _applyXY(el, nx, ny) {
+        el.style.left = nx + 'px';
+        el.style.top = ny + 'px';
+        el.style.right = 'auto';
+        el.style.bottom = 'auto';
+      },
       dragStart(e) {
         // Stop the browser's native image/text drag-and-drop -- without
         // this the launcher <img> starts an HTML5 drag and the custom
-        // pointer drag never tracks (the live-review "drag failed" bug).
+        // pointer drag never tracks.
         e.preventDefault();
         var el = e.currentTarget.closest('.mnem-wrap');
         var btn = e.currentTarget;
+        // ROOT CAUSE of "drag still failing": this handler's `this` is
+        // a child-scoped wrapper, NOT Alpine.$data('.mnem-wrap') -- the
+        // proxy the :style="posStyle" effect actually tracks. Mutating
+        // this.pos never re-ran the binding (data moved, DOM didn't).
+        // Mutate the TRACKED component + drive the DOM directly.
+        var cmp = (window.Alpine && window.Alpine.$data(el)) || this;
         var r = el.getBoundingClientRect();
-        if (this.pos.x == null) { this.pos.x = r.left; this.pos.y = r.top; }
-        this._start = { px: e.clientX, py: e.clientY, ox: this.pos.x, oy: this.pos.y };
-        this._moved = false;
-        this.dragging = true;
+        if (cmp.pos.x == null) {
+          cmp.pos.x = r.left;
+          cmp.pos.y = r.top;
+        }
+        var start = { px: e.clientX, py: e.clientY, ox: cmp.pos.x, oy: cmp.pos.y };
+        cmp._moved = false;
+        cmp.dragging = true;
         try { btn.setPointerCapture(e.pointerId); } catch (_) { /* tolerate */ }
-        var self = this;
+        var apply = this._applyXY;
         var mv = function (ev) {
-          var dx = ev.clientX - self._start.px;
-          var dy = ev.clientY - self._start.py;
-          if (Math.abs(dx) + Math.abs(dy) > 4) self._moved = true;
-          var nx = self._start.ox + dx;
-          var ny = self._start.oy + dy;
-          var vw = self._vw();
-          var vh = self._vh();
+          var dx = ev.clientX - start.px;
+          var dy = ev.clientY - start.py;
+          if (Math.abs(dx) + Math.abs(dy) > 4) cmp._moved = true;
+          var nx = start.ox + dx;
+          var ny = start.oy + dy;
+          var vw = cmp._vw();
+          var vh = cmp._vh();
           // Only clamp when the viewport size is actually known
           // (a 0-size/offscreen renderer must not push it off-screen).
           if (vw) nx = Math.max(6, Math.min(vw - el.offsetWidth - 6, nx));
           if (vh) ny = Math.max(6, Math.min(vh - el.offsetHeight - 6, ny));
-          self.pos.x = nx;
-          self.pos.y = ny;
+          cmp.pos.x = nx; // reactive (tracked proxy) -> survives re-render
+          cmp.pos.y = ny;
+          apply(el, nx, ny); // immediate, frame-perfect visual
         };
         var up = function () {
           document.removeEventListener('pointermove', mv);
           document.removeEventListener('pointerup', up);
           try { btn.releasePointerCapture(e.pointerId); } catch (_) { /* tolerate */ }
-          self.dragging = false;
-          if (self._moved) self.snapToEdge();
+          cmp.dragging = false;
+          if (cmp._moved) cmp.snapToEdge(el);
         };
         document.addEventListener('pointermove', mv);
         document.addEventListener('pointerup', up);
       },
-      snapToEdge() {
-        var el = this.$el;
+      snapToEdge(rootEl) {
+        // Called as cmp.snapToEdge(el) from the drag (this === the
+        // tracked Alpine component). rootEl is passed because $el is
+        // not reliably bound when invoked outside a directive.
+        var el = rootEl || this.$el;
         var vw = this._vw();
         if (!vw) {
           // viewport unknown -- keep the dropped position, just persist
+          this._applyXY(el, this.pos.x, this.pos.y);
           localStorage.setItem('mnem.pos', JSON.stringify(this.pos));
           return;
         }
@@ -807,6 +831,7 @@
         if (vh) {
           this.pos.y = Math.max(12, Math.min(vh - el.offsetHeight - 12, this.pos.y));
         }
+        this._applyXY(el, this.pos.x, this.pos.y);
         localStorage.setItem('mnem.pos', JSON.stringify(this.pos));
       },
       _armDwell() {
