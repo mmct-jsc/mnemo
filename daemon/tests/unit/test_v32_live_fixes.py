@@ -196,16 +196,34 @@ def test_cite_on_chat_page_uses_side_panel_not_overlapping_popover() -> None:
     assert "bubbles: true" in BASE_HTML
 
 
-def test_chat_is_a_single_window_no_document_scroll() -> None:
-    # /chat is one viewport: page-scoped html/body overflow lock + the
-    # CORRECT 64px topbar offset (the old calc used a wrong 116px =>
-    # the void/scroll). NOT position:fixed (a base.html ancestor
-    # transform makes fixed resolve against it -> collapsed y:134/h:0).
-    assert "html, body { height: 100%; overflow: hidden; margin: 0; }" in CHAT_HTML
-    assert "body > main { margin: 0; padding: 0; }" in CHAT_HTML
-    assert "height: calc(100dvh - 64px)" in CHAT_HTML
-    assert "calc(100dvh - 116px)" not in CHAT_HTML
+def test_chat_uses_the_app_standard_full_window_pattern() -> None:
+    # The global html/body/main overrides were an over-reach that made
+    # /chat's chrome inconsistent with every other page ("does not sync
+    # with others"). Reverted to the SAME convention the Nebula page
+    # uses: override {% block layout %} + <main class="full"> + the
+    # canonical calc(100vh - 65px) topbar offset. NO global overrides.
+    assert "{% block layout %}" in CHAT_HTML
+    assert '<main class="full">' in CHAT_HTML
+    assert "{% block content %}" not in CHAT_HTML
+    assert "height: calc(100vh - 65px)" in CHAT_HTML
+    # the reverted over-reach must NOT come back: the specific global
+    # ELEMENT overrides that desynced /chat from the app chrome. (A
+    # blanket ``"overflow: hidden" not in`` is wrong -- legit component
+    # rules like .tok-track / .draft-card / .cv-name use it; the
+    # over-reach was page-scoped `html, body {` / `body > main {`.)
+    assert "html, body {" not in CHAT_HTML
+    assert "html,body {" not in CHAT_HTML
+    assert "body > main {" not in CHAT_HTML
     assert ".mn { position: fixed" not in CHAT_HTML
+
+
+def test_assistant_message_does_not_collapse_width() -> None:
+    # :class="'turn-'+m.role" makes the OUTER .turn also match
+    # .turn-assistant; if the flex rule hit it, the inner row became
+    # content-sized and the prose collapsed to ~63px ("short message
+    # shrinks"). The flex row is scoped to the INNER element only.
+    assert ".turn > .turn-assistant { display: flex;" in CHAT_HTML
+    assert "\n  .turn-assistant { display: flex" not in CHAT_HTML
 
 
 def test_mnem_side_gutter_is_consistent() -> None:
