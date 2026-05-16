@@ -48,3 +48,20 @@ def test_root_defines_the_primitive_tokens(app_css: str) -> None:
             f"{token} must be a :root primitive (C1 token layer). A value "
             f"lives in exactly one place; consumers use var({token[:-1]})."
         )
+
+
+def _css_body(app_css: str) -> str:
+    """Everything AFTER the :root block -- consumers, not token defs."""
+    return app_css[app_css.index("}", app_css.index(":root")) + 1 :]
+
+
+def test_app_css_uses_tokens_not_raw_literals(app_css: str) -> None:
+    body = _css_body(app_css)
+    assert "calc(100vh - 65px)" not in body, (
+        "Use calc(100vh - var(--topbar-h)); a raw 65px topbar literal is "
+        "the v3.2-class bug (gotcha 35)."
+    )
+    assert "1600px" not in body, "max-width must be var(--content-max)."
+    assert "#06201e" not in body, "accent-fg text must be var(--accent-fg)."
+    assert "#1a0f0c" not in body, "warn-fg text must be var(--warn-fg)."
+    assert "999px" not in body, "pill radius must be var(--radius-pill)."
