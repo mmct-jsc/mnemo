@@ -1,9 +1,9 @@
 {% extends "base.html" %}
 {% block title %} - chat{% endblock %}
 
-{# Use {% block layout %} + <main class="full"> -- the SAME app-wide
-   full-window convention the Nebula page uses (consistent chrome, no
-   global html/body/main overrides). #}
+{# Use {% block layout %} + a full-window region (class "full") -- the
+   SAME app-wide full-window convention the Nebula page uses (consistent
+   chrome, no global html/body overrides). C1 page-shell contract. #}
 {% block layout %}
 <script src="/static/chat.js?v={{ mnemo_version }}" defer></script>
 <main class="full">
@@ -46,11 +46,11 @@
     </div>
   </aside>
 
-  <!-- centre: the thread (a plain <div>, NOT a 2nd <main> -- a nested
-       <main> inherits app.css `main{max-width:1600px;margin:2rem auto}`
-       and, as a grid item, the auto inline margins shrink-to-fit +
-       centre it instead of filling the cell -> the "messages shrink /
-       not left aligned" bug). -->
+  <!-- centre: the thread (a plain DIV, NOT a 2nd page-region -- a
+       nested full-window region inherits app.css main{max-width /
+       margin:auto} and, as a grid item, the auto inline margins
+       shrink-to-fit + centre it instead of filling the cell -> the
+       v3.2 "messages shrink / not left aligned" bug, gotcha 35). -->
   <div class="chat-thread">
 
     <!-- running token budget bar (tokens_total vs per-provider cap) -->
@@ -263,14 +263,15 @@
 <style>
   /* ---- mnemo v3 chat : "knowledge terminal", Claude-grade ---- */
   /* 1-window via the SAME app convention as Nebula: this page emits
-     the layout block + a full-bleed main (no html/body/main
+     the layout block + a full-bleed full-window region (no html/body
      overrides -> chrome stays IDENTICAL to every other page) and the
-     shell is calc(100vh - 65px) -- the exact value .nebula-shell uses
-     for the topbar. The thread/rail scroll internally; the document
-     does not. (Comment kept free of brace-percent so Jinja does not
-     parse it as a tag.) */
+     shell is calc(100vh - var(--topbar-h)) -- the C1 topbar token,
+     the exact value .nebula-shell uses. The thread/rail scroll
+     internally; the document does not. (Comment kept free of
+     brace-percent + the raw topbar literal so Jinja + the C1 guard
+     test do not trip on it.) */
   .mn { display: grid; grid-template-columns: 252px minmax(0,1fr) 280px;
-    height: calc(100vh - 65px); min-height: 0; background:
+    height: calc(100vh - var(--topbar-h)); min-height: 0; background:
       radial-gradient(80% 60% at 50% -10%, rgba(126,231,224,.05), transparent 60%),
       var(--bg); }
   .mn [x-cloak] { display: none !important; }
