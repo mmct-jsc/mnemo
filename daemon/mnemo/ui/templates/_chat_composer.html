@@ -1,0 +1,37 @@
+{# C3 (v4.3) shared composer. ONE source for both surfaces; the send
+   button + icon are single-sourced here so Task 6's optical-balance
+   path fix is a single edit that both surfaces inherit. Gated by the
+   CHAT_SURFACES matrix. Per-surface class + textarea affordances are
+   preserved exactly (page = .composer/.send/.send-ic with grow +
+   shift-enter; dock = .mc-composer/.mc-send, compact). #}
+{% if chat_surfaces[surface].composer %}
+{% if surface == 'dock' %}
+<form class="mc-composer" @submit.prevent="sendMessage()">
+  <textarea x-ref="draft" x-model="draft" rows="1" placeholder="Ask Mnem…"
+            :disabled="streaming"
+            @keydown.enter.prevent="if (!$event.shiftKey) sendMessage()"></textarea>
+  <button class="mc-send" :disabled="streaming || !draft.trim()"
+          :title="streaming ? 'Mnem is replying…' : 'Send (Enter)'" aria-label="Send">
+    <svg class="send-ic" viewBox="0 0 24 24" width="16" height="16" fill="none"
+         stroke="currentColor" stroke-width="2.4" stroke-linecap="round"
+         stroke-linejoin="round"><path d="M7 11l5-5 5 5M12 6v13"/></svg>
+  </button>
+</form>
+{% else %}
+<form class="composer" @submit.prevent="sendMessage()">
+  <textarea x-ref="draft" x-model="draft" rows="1"
+            placeholder="Ask Mnem anything…"
+            title="Enter to send · Shift+Enter for a new line"
+            :disabled="streaming"
+            @input="grow($event.target)"
+            @keydown.enter.prevent="if (!$event.shiftKey) sendMessage()"
+            @keydown.enter.shift="$nextTick(() => grow($refs.draft))"></textarea>
+  <button class="send" :disabled="streaming || !draft.trim()"
+          :title="streaming ? 'Mnem is replying…' : 'Send (Enter)'" aria-label="Send">
+    <svg class="send-ic" viewBox="0 0 24 24" width="18" height="18" fill="none"
+         stroke="currentColor" stroke-width="2.2" stroke-linecap="round"
+         stroke-linejoin="round"><path d="M7 11l5-5 5 5M12 6v13"/></svg>
+  </button>
+</form>
+{% endif %}
+{% endif %}

@@ -806,9 +806,8 @@
           <div class="load-older" x-ref="topSentinel" :class="{ on: hasMore }">
             <template x-if="hasMore"><span class="lo-pill">earlier messages</span></template>
           </div>
-          <p class="mc-empty" x-show="!messages.length && !streaming" x-cloak>
-            I'm Mnem. Ask me about this page or your memory graph.
-          </p>
+          {# C3 (v4.3): dock gains the shared welcome + examples. #}
+          {% with surface = 'dock' %}{% include "_chat_examples.html" %}{% endwith %}
           <template x-for="m in messages" :key="m.key">
             <div class="mc-turn" :class="'mc-' + m.role">
               <template x-if="m.role === 'user'">
@@ -875,17 +874,7 @@
                   aria-label="dismiss">×</button>
         </div>
       </div>
-      <form class="mc-composer" @submit.prevent="sendMessage()">
-        <textarea x-ref="draft" x-model="draft" rows="1" placeholder="Ask Mnem…"
-                  :disabled="streaming"
-                  @keydown.enter.prevent="if (!$event.shiftKey) sendMessage()"></textarea>
-        <button class="mc-send" :disabled="streaming || !draft.trim()"
-                :title="streaming ? 'Mnem is replying…' : 'Send (Enter)'" aria-label="Send">
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="none"
-               stroke="currentColor" stroke-width="2.4" stroke-linecap="round"
-               stroke-linejoin="round"><path d="M7 11l5-5 5 5M12 6v13"/></svg>
-        </button>
-      </form>
+      {% with surface = 'dock' %}{% include "_chat_composer.html" %}{% endwith %}
       <a class="mc-expand" href="/chat">Open full chat ↗</a>
     </div>
 

@@ -40,6 +40,8 @@ CHAT_HTML = (_UI / "templates" / "chat.html").read_text(encoding="utf-8")
 # v4.3 (C3): the rail (delete affordance) moved into a SHARED partial
 # that both chat.html and the dock include -- single-source, no drift.
 CHAT_RAIL = (_UI / "templates" / "_chat_rail.html").read_text(encoding="utf-8")
+# v4.3 (C3): the composer (incl. the send button) is a shared partial.
+CHAT_COMPOSER = (_UI / "templates" / "_chat_composer.html").read_text(encoding="utf-8")
 GRAPH_HTML = (_UI / "templates" / "graph.html").read_text(encoding="utf-8")
 
 
@@ -156,9 +158,13 @@ def test_dock_wires_error_copy_jump_and_real_send_button() -> None:
     # the "dumb" bare text-arrow send button is gone -- it's a proper
     # icon button now (aria-label Send + an inline svg, circular).
     assert ">→</button>" not in BASE_HTML
-    assert 'class="mc-send"' in BASE_HTML
-    assert 'aria-label="Send"' in BASE_HTML
-    assert ".mc-send svg" in BASE_HTML  # styled icon, not a glyph
+    # v4.3 (C3): the dock composer (incl. the send button) is now the
+    # SHARED _chat_composer.html partial -- base.html includes it; the
+    # mc-send button + aria-label live in the partial (single-source).
+    assert "_chat_composer.html" in BASE_HTML
+    assert 'class="mc-send"' in CHAT_COMPOSER
+    assert 'aria-label="Send"' in CHAT_COMPOSER
+    assert ".mc-send svg" in BASE_HTML  # styled icon CSS stays in base
     # long-text no longer smears horizontally in the narrow dock
     assert "overflow-wrap: anywhere" in BASE_HTML
 
