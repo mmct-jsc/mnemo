@@ -1617,5 +1617,28 @@ function nebula() {
     },
   };
 }
+
+// v3.2: override the base.html page-context default with Nebula's LIVE
+// state so the companion can act in the graph (highlight the session's
+// related nodes, focus a node) instead of redirecting. Read off the
+// nebula() Alpine proxy via Alpine.$data (gotcha 20: never trust a
+// stale handler `this`). Any partial failure still returns {page,path}.
+window.mnemoPageContext = function () {
+  var ctx = { page: 'graph', path: location.pathname };
+  try {
+    var el = document.querySelector('.nebula-shell');
+    var d = el && window.Alpine && window.Alpine.$data(el);
+    if (d) {
+      ctx.selected_node_id = d.selected ? d.selected.id : null;
+      ctx.query = d.filterText || '';
+      ctx.workspace = d.contextWorkspaceName || null;
+      // cap so a 1M-node nebula can't blow the model context
+      ctx.visible_node_ids = Object.keys(d._pointById || {}).slice(0, 60);
+    }
+  } catch (e) {
+    /* partial context is still useful -- never throw from here */
+  }
+  return ctx;
+};
 </script>
 {% endblock %}

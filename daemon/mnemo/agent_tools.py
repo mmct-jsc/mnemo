@@ -53,7 +53,10 @@ class ToolContext:
 
     store: Store
     embedder: Any | None = None
-    # phase 4 adds: project_key, conversation_id, ui_action sink.
+    # v3.2: the running conversation id (when invoked by the agent
+    # loop). Lets safe tools resolve the live, client-PATCHed
+    # ``page_context``. None when invoked by MCP / outside a chat.
+    conversation_id: str | None = None
 
 
 @dataclass
@@ -402,6 +405,45 @@ def _mnemo_get_code_lines(ctx: ToolContext, *, source_path: str, start: int, end
         "start": start,
         "end": end,
         "lines": "\n".join(slice_),
+    }
+
+
+# --- 7. mnemo_page_context (v3.2) ---------------------------------------
+#
+# The companion must ground on the CURRENT screen, not guess. The chat
+# client calls ``window.mnemoPageContext()`` and PATCHes the result onto
+# the conversation before every run (design v3.2 S3.1); this tool hands
+# the model that live state plus the server-known view so it can act in
+# the page ("what's selected here / related in this session") instead of
+# blindly redirecting.
+
+
+@_tool(
+    name="mnemo_page_context",
+    risk=RISK_SAFE,
+    description=(
+        "The user's CURRENT screen: the live page state the UI attached "
+        "to this conversation (page, path, selected node, visible nodes, "
+        "query, weights, ...). Call this FIRST when the user says 'this "
+        "page' / 'here' / 'what's on screen' so you act in-context."
+    ),
+    parameters=_obj({}, []),
+)
+def _mnemo_page_context(ctx: ToolContext) -> dict:
+    cid = ctx.conversation_id
+    conv = ctx.store.get_conversation(cid) if cid else None
+    if conv is None:
+        return {
+            "available": False,
+            "page_context": None,
+            "conversation_id": cid,
+            "project_key": None,
+        }
+    return {
+        "available": conv.page_context is not None,
+        "page_context": conv.page_context,
+        "conversation_id": conv.id,
+        "project_key": conv.project_key,
     }
 
 

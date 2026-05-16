@@ -62,6 +62,17 @@
     window.mnemoColorFor = (t) => (
       (t && window.MNEMO_TYPE_COLORS[t]) || window.MNEMO_TYPE_COLOR_FALLBACK
     );
+
+    // v3.2: live page-context provider. base.html ships the DEFAULT
+    // (the nav page + the live path). Interactive pages (graph /
+    // settings / code) reassign window.mnemoPageContext with their own
+    // live state; mnemoChat() calls it and PATCHes the result onto the
+    // conversation before every run so the companion grounds on the
+    // CURRENT screen instead of guessing. Defined here (head, before
+    // Alpine + deferred page scripts) so a default always exists.
+    window.mnemoPageContext = function () {
+      return { page: {{ page | default('') | tojson }}, path: location.pathname };
+    };
   </script>
   <script defer>
     // Toast bus + localStorage-backed notification history.

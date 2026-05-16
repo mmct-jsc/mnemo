@@ -263,5 +263,16 @@ function nodePage({ raw, isBase, nodeType, sourcePath }) {
     },
   };
 }
+
+// v3.2: this detail page IS a single selected node -- tell the
+// companion so a [mnemo:id] / "this node" grounds in-context (and the
+// citation-aware handler can act in place) rather than re-redirecting.
+window.mnemoPageContext = function () {
+  return {
+    page: 'nodes',
+    path: location.pathname,
+    selected_node_id: {{ node.id | tojson }},
+  };
+};
 </script>
 {% endblock %}
