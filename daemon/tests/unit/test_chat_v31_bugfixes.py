@@ -191,3 +191,29 @@ def test_dock_clamps_persisted_position_into_the_viewport() -> None:
     js = BASE_HTML
     assert "_clampPos" in js
     assert "addEventListener('resize'" in js or 'addEventListener("resize"' in js
+
+
+def test_proactive_bubble_is_fixed_and_anchored_not_reflowing() -> None:
+    """The nudge bubble lived in .mnem-wrap's flex flow, so showing it
+    shoved Mnem out of place; the WIP also used width:max-content +
+    a pre-layout offsetWidth read -> clipped to "Want m to". Fix: it's
+    its own position:fixed element with a DEFINITE width, glued to the
+    launcher via _positionBubble() (post-layout, same anchor math as
+    the panel), and the nudge re-anchors instead of reflowing."""
+    css = BASE_HTML
+    import re
+
+    m = re.search(r"\.mnem-bubble \{[^}]*\}", css, re.S)
+    assert m
+    rule = m.group(0)
+    assert "position: fixed" in rule
+    assert "width: min(" in rule  # definite width, NOT max-content
+    assert "max-content" not in rule
+    assert "_positionBubble" in css
+    # the nudge re-anchors (no flex reflow of the launcher)
+    assert "this._repositionSoon(); // glue it to the launcher" in css
+    # _repositionSoon drives BOTH panel + bubble post-layout
+    assert "self._positionPanel(); self._positionBubble();" in css
+    # the verified panel anchoring + its contract are untouched
+    assert "_positionPanel" in css
+    assert "lr.right - pw" in css
