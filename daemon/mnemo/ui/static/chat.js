@@ -36,6 +36,11 @@
       thinking: false,
       working: false, // drives the orbiting-dots "working" animation
       pending: null,
+      // v3.2 chat-UX: a clean in-thread error banner + one-click retry
+      // (not a raw JSON dump), and a scroll-to-latest affordance.
+      error: null,
+      lastUserText: '',
+      showJump: false,
       hasMore: false,
       total: 0,
       tokensTotal: 0,
@@ -178,6 +183,9 @@
 
       openConversation: function (id) {
         var self = this;
+        // keep the error banner across the post-error reload (same
+        // conv) but clear it when the user switches conversations.
+        if (id !== this.activeId) this.error = null;
         this.activeId = id;
         this.citations = [];
         this.citeSel = '';
@@ -195,6 +203,7 @@
             self.provider = data.provider || self.provider;
             self.collectCitations();
             self.loadBookmarks();
+            self.showJump = false;
             self.scroll(true);
           });
       },
@@ -512,6 +521,73 @@
         if (this.nearBottom()) this.scroll(false);
       },
 
+      // v3.2: show a "jump to latest" affordance only when the user
+      // has scrolled up off the bottom (Claude/ChatGPT behaviour).
+      onScroll: function () {
+        this.showJump = this.messages.length > 0 && !this.nearBottom();
+      },
+      jumpToLatest: function () {
+        this.showJump = false;
+        this.scroll(false);
+      },
+
+      // v3.2: a clean human error message (NOT the raw provider JSON
+      // blob the user saw dumped in the thread).
+      _humanError: function (raw) {
+        var msg = String(raw || 'Something went wrong.');
+        if (/tool_use\b[\s\S]*tool_result/.test(msg)) {
+          return 'That conversation had an interrupted tool call. It has been repaired -- retry to continue.';
+        }
+        if (/invalid_request_error/.test(msg)) {
+          return 'The provider rejected the request. Retry, or start a new chat if it persists.';
+        }
+        if (/\b(401|403|api[_ -]?key|authentication)\b/i.test(msg)) {
+          return 'The provider key was rejected -- check Settings - chat.';
+        }
+        if (/\b(429|rate.?limit|overloaded|529)\b/i.test(msg)) {
+          return 'The provider is rate-limited or overloaded. Wait a moment, then retry.';
+        }
+        // keep it short -- the full text is one line, never a JSON wall
+        return msg.length > 240 ? msg.slice(0, 237) + '…' : msg;
+      },
+      retry: function () {
+        if (!this.lastUserText || this.streaming) return Promise.resolve();
+        this.error = null;
+        this.draft = this.lastUserText;
+        return this.sendMessage();
+      },
+      dismissError: function () {
+        this.error = null;
+      },
+
+      copyText: function (t) {
+        var s = String(t == null ? '' : t);
+        var done = function () {
+          if (window.toast) window.toast('Copied to clipboard', 'success');
+        };
+        try {
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(s).then(done, function () {});
+            return;
+          }
+        } catch (e) {
+          /* fall through to the legacy path */
+        }
+        try {
+          var ta = document.createElement('textarea');
+          ta.value = s;
+          ta.style.position = 'fixed';
+          ta.style.opacity = '0';
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand('copy');
+          document.body.removeChild(ta);
+          done();
+        } catch (e) {
+          if (window.toast) window.toast('Copy failed', 'error');
+        }
+      },
+
       sendMessage: function () {
         var self = this;
         var text = this.draft.trim();
@@ -526,6 +602,8 @@
         }
         return chain.then(function () {
           var id = self.activeId;
+          self.lastUserText = text; // for one-click retry on error
+          self.error = null;
           self.draft = '';
           if (self.$refs.draft) self.$refs.draft.style.height = 'auto';
           self.messages.push({
@@ -723,12 +801,14 @@
           finish('idle');
         });
         es.addEventListener('error', function (e) {
+          var raw = '';
           try {
-            var d = JSON.parse(e.data || '{}');
-            if (d.message && window.toast) window.toast(d.message, 'error');
+            raw = (JSON.parse(e.data || '{}').message) || '';
           } catch (err) {
-            /* bare connection-close */
+            /* bare connection-close -- no payload */
           }
+          // a clean in-thread banner + Retry, NOT a raw JSON wall
+          self.error = self._humanError(raw || 'The connection dropped.');
           finish('alert');
         });
       },

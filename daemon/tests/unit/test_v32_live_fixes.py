@@ -36,6 +36,7 @@ from mnemo.chat import DEFAULT_SYSTEM
 _UI = Path(__file__).resolve().parents[2] / "mnemo" / "ui"
 BASE_HTML = (_UI / "templates" / "base.html").read_text(encoding="utf-8")
 CHAT_JS = (_UI / "static" / "chat.js").read_text(encoding="utf-8")
+CHAT_HTML = (_UI / "templates" / "chat.html").read_text(encoding="utf-8")
 GRAPH_HTML = (_UI / "templates" / "graph.html").read_text(encoding="utf-8")
 
 
@@ -108,3 +109,51 @@ def test_nebula_is_the_documented_kept_good_v266_renderer() -> None:
         "window.mnemoPageContext",
     ):
         assert m not in GRAPH_HTML, f"v3.2 re-crept onto nebula: {m}"
+
+
+# --- chat-UX completion (live review #N: copy / scroll / error+retry) --
+
+
+def test_chat_js_has_the_missing_common_utils() -> None:
+    # the shared brain gained: clean error banner + one-click retry
+    # (NOT a raw provider-JSON dump), copy-message, scroll-to-latest.
+    for sym in (
+        "copyText:",
+        "retry:",
+        "dismissError:",
+        "onScroll:",
+        "jumpToLatest:",
+        "_humanError:",
+        "lastUserText",
+        "showJump",
+    ):
+        assert sym in CHAT_JS, f"chat.js missing util: {sym}"
+    # the SSE error handler sets a clean banner string, not a toast dump
+    assert "self.error = self._humanError(" in CHAT_JS
+    # the raw provider JSON is summarised, never shown whole
+    assert "invalid_request_error" in CHAT_JS  # mapped to a human line
+
+
+def test_chat_page_wires_error_copy_jump() -> None:
+    assert 'class="chat-error"' in CHAT_HTML
+    assert 'class="chat-jump"' in CHAT_HTML
+    assert 'class="msg-copy"' in CHAT_HTML
+    assert '@scroll.passive="onScroll()"' in CHAT_HTML
+    assert "retry()" in CHAT_HTML
+    assert "copyText(" in CHAT_HTML
+
+
+def test_dock_wires_error_copy_jump_and_real_send_button() -> None:
+    assert 'class="mc-error"' in BASE_HTML
+    assert 'class="mc-jump"' in BASE_HTML
+    assert 'class="mc-copy"' in BASE_HTML
+    assert '@scroll.passive="onScroll()"' in BASE_HTML
+    assert "retry()" in BASE_HTML
+    # the "dumb" bare text-arrow send button is gone -- it's a proper
+    # icon button now (aria-label Send + an inline svg, circular).
+    assert ">→</button>" not in BASE_HTML
+    assert 'class="mc-send"' in BASE_HTML
+    assert 'aria-label="Send"' in BASE_HTML
+    assert ".mc-send svg" in BASE_HTML  # styled icon, not a glyph
+    # long-text no longer smears horizontally in the narrow dock
+    assert "overflow-wrap: anywhere" in BASE_HTML
