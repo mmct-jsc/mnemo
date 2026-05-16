@@ -2,6 +2,50 @@
 
 All notable changes to mnemo are documented here.
 
+## [4.0.0] - 2026-05-17
+
+**C1 Design-System / Page-Shell contract.** First of the v4.x
+contract-pattern refactor (design: `docs/plans/2026-05-16-mnemo-v4-
+design.md`). A pure refactor -- **zero behaviour change, every page
+pixel-identical** (live-verified with geometry probes) -- that gives
+the UI a contract backbone so the class of layout bug that cost the
+multi-round v3.2 `/chat` saga (gotcha 35) cannot be reintroduced
+silently.
+
+### Added
+- **Token layer** in `app.css :root`: `--topbar-h`, `--content-max`,
+  `--page-pad`, `--radius-pill`, `--accent-fg`, `--warn-fg`,
+  `--measure*` -- every primitive value lives in exactly one place
+  (mirrors the proven `palette.py` single-source model).
+- **Page-shell contract** with two documented modes (centered vs
+  full-window) in `docs/architecture.md`.
+- **Guard test** `daemon/tests/unit/test_design_system_contract.py`
+  (template-grep, mirrors `test_nebula_progressive`): forbids raw
+  `65px`/`1600px`/`999px`/`#06201e`/`#1a0f0c` outside `:root`,
+  `html,body`/`body>main` scoping in any page, a nested second
+  `<main>`, and re-defining a shared primitive. This is the contract's
+  teeth.
+
+### Changed
+- `app.css` + `chat.html`/`base.html` now consume the tokens; zero raw
+  literals outside `:root`. Computed values byte-identical.
+- Shared primitives (`.mnem-working`, `.load-older`/`.lo-pill`/
+  `.lo-dot`, `@keyframes mnem-bob`, canonical `.link-button`,
+  `.btn-pill`) single-sourced in `app.css`; removed the divergent
+  duplicates from `chat.html`/`base.html`.
+
+### Fixed
+- The companion dock's "working" dots were 5px and its `@keyframes
+  mnem-bob`/`.lo-dot` were undefined off `/chat` (silently dead
+  animation). The dock now uses the canonical 6px primitive on every
+  page (the intended de-divergence of single-sourcing).
+
+### Tests
+- v3.1/v3.2 chat tests evolved from the raw `calc(100vh - 65px)`
+  literal to `calc(100vh - var(--topbar-h))` (same contract-evolution
+  as v3.2 itself evolved them from `100dvh`; computed height
+  byte-identical). Full suite green; ruff clean.
+
 ## [3.2.0] - 2026-05-16
 
 **Two critical fixes + the companion's page-aware tools.** v3.2 began
