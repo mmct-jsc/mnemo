@@ -439,6 +439,25 @@ a:hover { color: var(--accent-hover); }
   transition: opacity .15s ease, color .15s ease; }
 .mnem-chat .mc-turn:hover .bm-star, .mnem-chat .bm-star.on { opacity: 1; }
 .mnem-chat .bm-star.on, .mnem-chat .bm-star:hover { color: var(--accent); }
+
+/* C3 (v4.3): dock welcome + suggested-questions (shared
+   _chat_examples partial). Dock-scoped + self-sufficient (renders off
+   /chat where chat.html's .welcome CSS is absent); compact for the
+   narrow dock. The page keeps chat.html's .welcome rules unchanged. */
+.welcome--dock { text-align: center; margin: auto; padding: 1.4rem 1rem;
+  display: flex; flex-direction: column; align-items: center; }
+.welcome--dock .welcome-mark { border-radius: 50%; margin-bottom: .6rem; }
+.welcome--dock h1 { font-size: 1rem; margin: 0 0 .3rem; }
+.welcome--dock p { color: var(--fg-muted); font-size: .82rem;
+  max-width: 22rem; margin: 0 auto 1rem; line-height: 1.5; }
+.welcome--dock .examples { display: flex; flex-direction: column;
+  gap: .4rem; width: 100%; }
+.welcome--dock .example { text-align: left; padding: .5rem .7rem;
+  background: var(--panel); border: 1px solid var(--border-soft);
+  border-radius: var(--radius); color: var(--fg-muted);
+  font-size: .8rem; cursor: pointer; transition: var(--transition); }
+.welcome--dock .example:hover { border-color: var(--accent);
+  color: var(--fg); }
 .rail--dock .rail-empty { color: var(--fg-dim); font-size: .76rem;
   padding: .4rem; margin: 0; }
 

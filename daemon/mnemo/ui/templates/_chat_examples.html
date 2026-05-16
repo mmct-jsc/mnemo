@@ -1,0 +1,28 @@
+{# C3 (v4.3) shared welcome / suggested-questions. ONE source; the
+   dock GAINS the examples (parity). The `&& !sending` on x-show is the
+   1-message-at-a-time fix: the eager `sending` flag (set synchronously
+   in sendExample/sendMessage BEFORE the async newConversation await
+   window) makes the welcome vanish the instant a question is clicked,
+   so it can't coexist with the outgoing message. Gated by the
+   CHAT_SURFACES matrix. #}
+{% if chat_surfaces[surface].examples %}
+<div class="welcome welcome--{{ surface }}"
+     x-show="!messages.length && !streaming && !sending" x-cloak>
+  <img class="welcome-mark" src="/static/mnem/idle.svg"
+       width="{{ 56 if surface == 'dock' else 72 }}"
+       height="{{ 56 if surface == 'dock' else 72 }}" alt="">
+  {% if surface == 'dock' %}
+  <h1>I'm Mnem</h1>
+  <p>Ask me about this page or your memory graph.</p>
+  {% else %}
+  <h1>How can I help with your memory graph?</h1>
+  <p>I'm Mnem &mdash; I can query your notes &amp; code, trace
+     provenance, and draft new memory. I cite every node I use.</p>
+  {% endif %}
+  <div class="examples">
+    <template x-for="ex in examples" :key="ex">
+      <button class="example" @click="sendExample(ex)" x-text="ex"></button>
+    </template>
+  </div>
+</div>
+{% endif %}
