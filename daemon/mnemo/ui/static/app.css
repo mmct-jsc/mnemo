@@ -390,6 +390,77 @@ a:hover { color: var(--accent-hover); }
 .settings-tabs a.active { color: var(--fg);
   border-bottom-color: var(--accent); }
 
+/* C3 (v4.3): the SHARED chat rail's dock variant. The dock renders
+   off /chat where chat.html's <style> (.chat-rail page styling) is
+   absent, so .rail--dock is self-sufficient: a compact, bounded,
+   scrollable conversation switcher (the switch/back capability the
+   dock silently lacked pre-v4.3). The page variant keeps chat.html's
+   .chat-rail rules untouched. */
+.rail--dock { flex: 0 0 auto; max-height: 32vh; overflow-y: auto;
+  border-bottom: 1px solid var(--border-soft);
+  padding: .3rem .5rem .4rem; font-size: .8rem; }
+.rail--dock .rail-group-label { font-size: .66rem; color: var(--fg-dim);
+  text-transform: uppercase; letter-spacing: .04em; margin: .4rem 0 .15rem; }
+.rail--dock ul { list-style: none; margin: 0; padding: 0; }
+.rail--dock li { display: flex; align-items: center; gap: .4rem;
+  padding: .3rem .4rem; border-radius: var(--radius); cursor: pointer; }
+.rail--dock li:hover { background: var(--panel-2); }
+.rail--dock li.active { background: var(--accent-soft); color: var(--accent); }
+.rail--dock .cv-name { flex: 1; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }
+.rail--dock .cv-time { font-size: .64rem; color: var(--fg-dim); flex: 0 0 auto; }
+.rail--dock .cv-del { background: none; border: 0; color: var(--fg-dim);
+  cursor: pointer; padding: .12rem; display: inline-flex; }
+.rail--dock .cv-del:hover { color: var(--warn); }
+.rail--dock .cv-ren { background: none; border: 0; color: var(--fg-dim);
+  cursor: pointer; padding: .12rem; display: inline-flex; }
+.rail--dock .cv-ren:hover { color: var(--accent); }
+.rail--dock .cv-rename { flex: 1; min-width: 0; font-size: .78rem;
+  padding: .15rem .3rem; background: var(--bg);
+  border: 1px solid var(--accent); border-radius: var(--radius);
+  color: var(--fg); }
+
+/* C3 (v4.3): dock bookmark UI (shared _chat_bookmarks partial). Dock-
+   scoped + self-sufficient (renders off /chat where chat.html's bm CSS
+   is absent). The dock strip is a compact horizontal tick row at the
+   thread top (the page uses a vertical left-gutter minimap). */
+.mnem-chat .bm-strip { display: flex; flex-wrap: wrap; gap: 3px;
+  padding: .3rem .5rem; border-bottom: 1px solid var(--border-soft); }
+.mnem-chat .bm-tick { height: 6px; width: 18px; flex: 0 0 auto;
+  padding: 0; border: 0; border-radius: 3px; cursor: pointer;
+  background: var(--accent); opacity: .4;
+  transition: opacity .15s ease, transform .15s ease; }
+.mnem-chat .bm-tick:hover { opacity: 1; transform: scaleY(1.5); }
+.mc-turn-meta { display: flex; justify-content: flex-end;
+  min-height: .9rem; margin-top: -.2rem; }
+.mnem-chat .bm-star { background: none; border: 0; cursor: pointer;
+  padding: 0 .15rem; color: var(--fg-dim); font-size: .85rem;
+  line-height: 1; opacity: .55;
+  transition: opacity .15s ease, color .15s ease; }
+.mnem-chat .mc-turn:hover .bm-star, .mnem-chat .bm-star.on { opacity: 1; }
+.mnem-chat .bm-star.on, .mnem-chat .bm-star:hover { color: var(--accent); }
+
+/* C3 (v4.3): dock welcome + suggested-questions (shared
+   _chat_examples partial). Dock-scoped + self-sufficient (renders off
+   /chat where chat.html's .welcome CSS is absent); compact for the
+   narrow dock. The page keeps chat.html's .welcome rules unchanged. */
+.welcome--dock { text-align: center; margin: auto; padding: 1.4rem 1rem;
+  display: flex; flex-direction: column; align-items: center; }
+.welcome--dock .welcome-mark { border-radius: 50%; margin-bottom: .6rem; }
+.welcome--dock h1 { font-size: 1rem; margin: 0 0 .3rem; }
+.welcome--dock p { color: var(--fg-muted); font-size: .82rem;
+  max-width: 22rem; margin: 0 auto 1rem; line-height: 1.5; }
+.welcome--dock .examples { display: flex; flex-direction: column;
+  gap: .4rem; width: 100%; }
+.welcome--dock .example { text-align: left; padding: .5rem .7rem;
+  background: var(--panel); border: 1px solid var(--border-soft);
+  border-radius: var(--radius); color: var(--fg-muted);
+  font-size: .8rem; cursor: pointer; transition: var(--transition); }
+.welcome--dock .example:hover { border-color: var(--accent);
+  color: var(--fg); }
+.rail--dock .rail-empty { color: var(--fg-dim); font-size: .76rem;
+  padding: .4rem; margin: 0; }
+
 code, pre { font-family: var(--mono); font-size: 0.85em; }
 pre {
   background: var(--panel);

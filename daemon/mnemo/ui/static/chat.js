@@ -58,6 +58,11 @@
       _streamCtl: null,
       _io: null,
       _loadingOlder: false,
+      // v4.3 (C3): eager "a send is in flight" flag. Set synchronously
+      // on click BEFORE the async newConversation()/setTimeout window,
+      // so the welcome/examples can't coexist with the outgoing
+      // message ("1 message at a time" UX).
+      sending: false,
       examples: [
         'What do we know about MQTT broker auth?',
         'Trace why the Nebula renderer was reverted.',
@@ -179,6 +184,23 @@
               });
             });
           });
+      },
+
+      // v4.3 (C3): rename a conversation. Backend was already complete
+      // (PATCH /v1/chat/{id} + ChatPatchIn.name +
+      // store.rename_conversation) -- this is the only missing piece.
+      // Shared by both surfaces via the _chat_rail partial.
+      renameConversation: function (id, name) {
+        var self = this;
+        var nm = (name || '').trim();
+        if (!id || !nm) return Promise.resolve();
+        return fetch('/v1/chat/' + id, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: nm }),
+        }).then(function () {
+          return self.loadConversations();
+        });
       },
 
       // v3.2: delete (archive) a conversation. If it was the active
@@ -647,10 +669,20 @@
         }
       },
 
+      // v4.3 (C3): example click -> eager sending flag THEN send, so
+      // the welcome/examples vanish on click (not 300-600ms later when
+      // the async newConversation() resolves). No visible draft flash.
+      sendExample: function (ex) {
+        this.sending = true;
+        this.draft = ex;
+        return this.sendMessage();
+      },
+
       sendMessage: function () {
         var self = this;
         var text = this.draft.trim();
         if (!text || this.streaming) return Promise.resolve();
+        this.sending = true; // eager: hide welcome before the await window
         var chain = Promise.resolve();
         if (!this.activeId) {
           chain = this.newConversation().then(function () {
@@ -670,6 +702,7 @@
             role: 'user',
             content: { text: text },
           });
+          self.sending = false; // message is in the thread now
           self.scroll(false);
           // v3.2: refresh the conversation's page_context with the
           // CURRENT screen before the run, so the model grounds on what

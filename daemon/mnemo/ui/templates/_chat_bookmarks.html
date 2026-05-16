@@ -1,0 +1,24 @@
+{# C3 (v4.3) shared bookmark UI. ONE source for the gutter strip AND
+   the per-turn star; the includer passes bm='strip' or bm='star'.
+   The mnemoChat() factory already shares bookmarks[] / isBookmarked /
+   toggleBookmark / loadBookmarks / jumpTo (loadBookmarks even already
+   runs in the dock scope via the shared openConversation) -- pre-v4.3
+   the dock just never RENDERED any of it ("does not verify the
+   bookmark feature"). Gated by the CHAT_SURFACES matrix. `m` (the
+   x-for message) is an Alpine runtime var resolved where the star is
+   pasted into the message loop. #}
+{% if chat_surfaces[surface].bookmarks %}
+{% if bm == 'strip' %}
+<div class="bm-strip" x-show="bookmarks.length" x-cloak>
+  <template x-for="b in bookmarks" :key="b.id">
+    <button class="bm-tick" @click="jumpTo(b.message_seq)"
+            :title="b.label || ('message ' + b.message_seq)"></button>
+  </template>
+</div>
+{% elif bm == 'star' %}
+<button class="bm-star" :class="{ on: isBookmarked(m.seq) }"
+        @click="toggleBookmark(m.seq)"
+        :aria-label="isBookmarked(m.seq) ? 'remove bookmark' : 'bookmark'"
+        x-text="isBookmarked(m.seq) ? '★' : '☆'"></button>
+{% endif %}
+{% endif %}

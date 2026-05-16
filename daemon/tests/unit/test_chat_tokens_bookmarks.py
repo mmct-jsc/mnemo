@@ -19,6 +19,9 @@ _UI = Path(__file__).resolve().parents[2] / "mnemo" / "ui"
 CHAT_JS = (_UI / "static" / "chat.js").read_text(encoding="utf-8")
 CHAT_HTML = (_UI / "templates" / "chat.html").read_text(encoding="utf-8")
 BASE_HTML = (_UI / "templates" / "base.html").read_text(encoding="utf-8")
+# v4.3 (C3): bookmark UI moved into a SHARED partial that chat.html +
+# the dock both include (single-source; the dock GAINED bookmarks).
+CHAT_BM = (_UI / "templates" / "_chat_bookmarks.html").read_text(encoding="utf-8")
 
 
 # --- token budget -------------------------------------------------------
@@ -55,10 +58,14 @@ def test_shared_module_has_bookmark_methods() -> None:
 
 
 def test_chat_page_has_bookmark_star_and_jump_strip() -> None:
-    assert "bm-star" in CHAT_HTML  # per-turn star affordance
-    assert "toggleBookmark(" in CHAT_HTML
-    assert "bm-strip" in CHAT_HTML  # the slim jump strip / minimap
-    assert "jumpTo(" in CHAT_HTML
+    # v4.3 (C3): single-sourced in _chat_bookmarks.html (chat.html
+    # includes it; the dock now does too). Same contract-evolution as
+    # v4.0 moved tokenized literals -- capability preserved + on both.
+    assert "_chat_bookmarks.html" in CHAT_HTML  # page includes it
+    assert "bm-star" in CHAT_BM  # per-turn star affordance
+    assert "toggleBookmark(" in CHAT_BM
+    assert "bm-strip" in CHAT_BM  # the slim jump strip / minimap
+    assert "jumpTo(" in CHAT_BM
 
 
 def test_dock_keeps_the_token_chip() -> None:

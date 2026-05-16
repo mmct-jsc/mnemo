@@ -56,6 +56,9 @@ def test_chat_page_renders_tool_calls_and_drafts(chat_html: str) -> None:
 
 
 def test_chat_page_has_conversation_rail_and_prompt(chat_html: str) -> None:
-    assert "newConversation" in chat_html or "new chat" in chat_html.lower()
-    assert "sendMessage" in chat_html  # composer @submit
+    # v4.3 (C3): the conversation rail is the SHARED _chat_rail.html
+    # partial now (single-source; the dock includes the same one).
+    assert "_chat_rail.html" in chat_html  # rail via the shared partial
+    # v4.3 (C3): composer is the shared _chat_composer.html now too:
+    assert "_chat_composer.html" in chat_html  # composer via shared partial
     assert "load-older" in chat_html  # pinned-thread lazy-history sentinel
