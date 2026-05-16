@@ -25,6 +25,7 @@ from __future__ import annotations
 import fnmatch
 import json
 import os
+import re
 import time
 import uuid
 from collections.abc import Callable
@@ -447,6 +448,97 @@ def _mnemo_page_context(ctx: ToolContext) -> dict:
     }
 
 
+# --- 8. mnemo_session_nodes (v3.2) --------------------------------------
+#
+# "What's related in THIS session?" -- the cited / tool-used node ids of
+# the running conversation + their 1-hop neighbours. The companion calls
+# this then mnemo_highlight_nodes to light up the subgraph on Nebula
+# instead of guessing (design v3.2 S3.4).
+
+_SESSION_CITE_RE = re.compile(r"\[mnemo:([^\]\s]+)\]")
+# the tool args that unambiguously name a node (so a tool the user
+# acted on counts as "used" even without an inline citation).
+_NODE_ID_ARGS = ("node_id", "start_id")
+
+
+@_tool(
+    name="mnemo_session_nodes",
+    risk=RISK_SAFE,
+    description=(
+        "The nodes this conversation has cited or acted on, plus their "
+        "1-hop neighbours. Use to ground 'what's related in this "
+        "session / show it on the graph' before mnemo_highlight_nodes."
+    ),
+    parameters=_obj({}, []),
+)
+def _mnemo_session_nodes(ctx: ToolContext) -> dict:
+    cid = ctx.conversation_id
+    empty = {
+        "conversation_id": cid,
+        "node_ids": [],
+        "neighbor_ids": [],
+        "edges": [],
+        "count": 0,
+    }
+    if not cid or ctx.store.get_conversation(cid) is None:
+        return empty
+
+    seeds: list[str] = []
+
+    def _add(nid: object) -> None:
+        if isinstance(nid, str) and nid and nid not in seeds:
+            seeds.append(nid)
+
+    for msg in ctx.store.list_messages(cid):
+        c = msg.content or {}
+        if msg.role == "assistant":
+            for nid in c.get("citations") or []:
+                _add(nid)
+            for m in _SESSION_CITE_RE.finditer(c.get("text") or ""):
+                _add(m.group(1))
+        elif msg.role == "tool_call":
+            args = c.get("args") or {}
+            for k in _NODE_ID_ARGS:
+                _add(args.get(k))
+        elif msg.role == "tool_result":
+            res = c.get("result")
+            if isinstance(res, dict):
+                _add(res.get("node_id"))
+
+    # Keep only seeds that still exist (a node may have been deleted).
+    existing = ctx.store.get_nodes_by_ids(seeds)
+    node_ids = [s for s in seeds if s in existing]
+
+    edges = ctx.store.get_edges_for_nodes(node_ids) if node_ids else []
+    node_set = set(node_ids)
+    neighbors: list[str] = []
+    edges_out: list[dict] = []
+    for e in edges:
+        edges_out.append(
+            {
+                "src": e.src_id,
+                "dst": e.dst_id,
+                "relation": e.relation,
+                "confidence": e.confidence,
+            }
+        )
+        for endpoint in (e.src_id, e.dst_id):
+            if endpoint not in node_set and endpoint not in neighbors:
+                neighbors.append(endpoint)
+    # only surface neighbours that are real nodes
+    if neighbors:
+        nb_existing = ctx.store.get_nodes_by_ids(neighbors)
+        neighbors = [n for n in neighbors if n in nb_existing]
+
+    return {
+        "conversation_id": cid,
+        "node_ids": node_ids,
+        "neighbor_ids": neighbors,
+        "edges": edges_out,
+        "count": len(node_ids),
+    }
+
+
 # --- write / exec tools (confirm) ---------------------------------------
 
 
@@ -702,6 +794,23 @@ def _mnemo_scroll_to(ctx: ToolContext, *, selector: str) -> dict:
 )
 def _mnemo_open_panel(ctx: ToolContext, *, panel_id: str) -> dict:
     return _ui("open_panel", {"panel_id": panel_id})
+
+
+@_tool(
+    name="mnemo_highlight_nodes",
+    risk=RISK_CONFIRM,
+    description=(
+        "Highlight a SET of nodes on the live Nebula graph (greys the "
+        "rest by opacity -- never hides). Pair with mnemo_session_nodes "
+        "to light up 'what's related in this session'."
+    ),
+    parameters=_obj(
+        {"node_ids": {"type": "array", "items": {"type": "string"}}},
+        ["node_ids"],
+    ),
+)
+def _mnemo_highlight_nodes(ctx: ToolContext, *, node_ids: list[str]) -> dict:
+    return _ui("highlight_nodes", {"node_ids": node_ids})
 
 
 # --- Skill tools (v3.1 phase 4) -----------------------------------------

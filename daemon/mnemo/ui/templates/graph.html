@@ -578,6 +578,36 @@ function nebula() {
           this.focusNode(pid);
         }
       });
+      // v3.2 P4: light up the session subgraph. cosmos greys the rest
+      // by OPACITY (never hides -- the nebula stays whole), the same
+      // selectPointsByIndices contract selectByIndex/applyFilters use.
+      document.addEventListener('mnemo-highlight-nodes', (e) => {
+        const ids = (e.detail && e.detail.node_ids) || [];
+        const idxs = [];
+        for (const id of ids) {
+          const ix = this._idIndex && this._idIndex[id];
+          if (ix !== undefined && ix !== null) idxs.push(ix);
+        }
+        if (!idxs.length) {
+          window.toast && window.toast('No session nodes in this scope', 'info');
+          return;
+        }
+        try {
+          if (this.cg && this.cg.selectPointsByIndices) {
+            this.cg.selectPointsByIndices(idxs);
+          }
+          if (this.cg && this.cg.setFocusedPointByIndex) {
+            this.cg.setFocusedPointByIndex(idxs[0]);
+          }
+          this._flyTo(idxs[0]);
+        } catch (_) { /* engine mid-rebuild -- best-effort */ }
+        // surface the first as the panel selection for context
+        const rec = this._points[idxs[0]];
+        if (rec) this.selected = { ...rec };
+        this._scheduleLabels();
+        window.toast &&
+          window.toast('Highlighting ' + idxs.length + ' session nodes', 'info');
+      });
     },
 
     async _loadWorkspaceScope() {
