@@ -724,6 +724,7 @@
         this.pos.y = Math.max(8, Math.min(vh - h - 8, this.pos.y));
         this._applyXY(el, this.pos.x, this.pos.y);
         localStorage.setItem('mnem.pos', JSON.stringify(this.pos));
+        if (this.state !== 'closed') this._positionPanel(); // keep glued
       },
       init() {
         if (this.hiddenOnChat) return;
@@ -769,11 +770,17 @@
           this.state === 'pinned' ? 'pinned' : (this.state === 'closed' ? 'closed' : 'docked-open')
         );
       },
-      open() { this.state = 'docked-open'; this.bubble = ''; this.persist(); },
+      open() {
+        this.state = 'docked-open';
+        this.bubble = '';
+        this.persist();
+        this._repositionSoon();
+      },
       onClick() {
         if (this._moved) { this._moved = false; return; } // a drag, not a click
         this.state = this.state === 'closed' ? 'docked-open' : 'closed';
         this.persist();
+        if (this.state !== 'closed') this._repositionSoon();
       },
       _vw() {
         return window.innerWidth || document.documentElement.clientWidth || 0;
@@ -790,6 +797,47 @@
         el.style.top = ny + 'px';
         el.style.right = 'auto';
         el.style.bottom = 'auto';
+      },
+      // Anchor the mini-chat panel ADJACENT to the companion launcher
+      // and flip the side based on where the launcher sits, then clamp
+      // it fully on-screen -- so the panel "sticks to" the companion
+      // wherever it is dragged (not a detached corner). Imperative DOM
+      // writes (no Alpine reactivity dependency -- gotcha #20).
+      _positionPanel() {
+        var root = (this.$el && this.$el.classList
+          && this.$el.classList.contains('mnem-wrap'))
+          ? this.$el : document.querySelector('.mnem-wrap');
+        if (!root || this.state === 'closed') return;
+        var panel = root.querySelector('.mnem-chat');
+        var launcher = root.querySelector('.mnem-dock');
+        if (!panel || !launcher) return;
+        var lr = launcher.getBoundingClientRect();
+        var vw = document.documentElement.clientWidth || this._vw();
+        var vh = document.documentElement.clientHeight || this._vh();
+        if (!vw || !lr.width) return;
+        var pw = panel.offsetWidth || 360;
+        var ph = panel.offsetHeight || 460;
+        var gap = 12;
+        var lcx = lr.left + lr.width / 2;
+        var lcy = lr.top + lr.height / 2;
+        // launcher on the right half -> panel right edge aligns to the
+        // launcher's right (opens leftward); else align left edges.
+        var left = lcx > vw / 2 ? lr.right - pw : lr.left;
+        // launcher in the bottom half -> open ABOVE it; else BELOW.
+        var top = lcy > vh / 2 ? lr.top - ph - gap : lr.bottom + gap;
+        left = Math.max(8, Math.min(vw - pw - 8, left));
+        top = Math.max(8, Math.min(vh - ph - 8, top));
+        panel.style.left = left + 'px';
+        panel.style.top = top + 'px';
+        panel.style.right = 'auto';
+        panel.style.bottom = 'auto';
+      },
+      // The panel is x-show'd: it has no box until Alpine flips display,
+      // so re-anchor on the next frame(s).
+      _repositionSoon() {
+        var self = this;
+        requestAnimationFrame(function () { self._positionPanel(); });
+        setTimeout(function () { self._positionPanel(); }, 60);
       },
       dragStart(e) {
         // Stop the browser's native image/text drag-and-drop -- without
@@ -829,6 +877,7 @@
           cmp.pos.x = nx; // reactive (tracked proxy) -> survives re-render
           cmp.pos.y = ny;
           apply(el, nx, ny); // immediate, frame-perfect visual
+          if (cmp.state !== 'closed') cmp._positionPanel(); // follow
         };
         var up = function () {
           document.removeEventListener('pointermove', mv);
@@ -836,6 +885,7 @@
           try { btn.releasePointerCapture(e.pointerId); } catch (_) { /* tolerate */ }
           cmp.dragging = false;
           if (cmp._moved) cmp.snapToEdge(el);
+          if (cmp.state !== 'closed') cmp._positionPanel(); // re-anchor
         };
         document.addEventListener('pointermove', mv);
         document.addEventListener('pointerup', up);
@@ -917,15 +967,15 @@
       .mnem-dock img { animation: none !important; } }
 
     /* the 380px mini-chat panel -- the SAME mnemoChat component as /chat */
-    /* DECOUPLED from the launcher: its own fixed, viewport-clamped
-       element anchored to the safe bottom-right corner. Was flex-
-       stacked above the draggable launcher in .mnem-wrap and top-
-       anchored after a drag -> opening it shoved the launcher
-       off-screen and could exceed the viewport ("popup push it too
-       hard" / "out of the window"). min()/dvh => it can NEVER overflow
-       the viewport regardless of where the launcher was dragged. */
-    .mnem-chat { position: fixed; right: 18px; bottom: 18px; z-index: 61;
-      width: min(380px, calc(100vw - 32px));
+    /* Its OWN fixed element (not flex-stacked on the launcher, which
+       shoved it off-screen). _positionPanel() in JS anchors it
+       ADJACENT to the companion launcher and flips side/vertical based
+       on where the launcher sits, then clamps it fully on-screen, so
+       it "sticks to" the companion wherever it is dragged. The
+       right/bottom here is only a pre-JS first-paint fallback;
+       min()/dvh => it can never exceed the viewport. */
+    .mnem-chat { position: fixed; right: 16px; bottom: 84px; z-index: 61;
+      width: min(380px, calc(100vw - 24px));
       height: min(30rem, calc(100dvh - 96px));
       max-height: calc(100dvh - 96px);
       background: var(--panel); border: 1px solid var(--border);

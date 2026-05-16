@@ -419,3 +419,36 @@ def test_cli_init(
     listing = runner.invoke(app, ["source", "list", "--json"])
     sources = json.loads(listing.stdout)
     assert any(s["kind"] == "claude_md" for s in sources)
+
+
+# --- daemon restart (v3.1 live-review: no `mnemo daemon restart`) ----------
+
+
+def test_cli_daemon_restart_stops_then_starts(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`mnemo daemon stop && start` ran the Windows `start` (blank
+    cmd), not the daemon. `restart` does both in one command, in
+    order, with clear messages -- no real process is spawned here."""
+    calls: list[str] = []
+    monkeypatch.setattr("mnemo.daemon.stop", lambda: calls.append("stop") or True)
+    monkeypatch.setattr(
+        "mnemo.daemon.start",
+        lambda **kw: calls.append("start") or 4242,
+    )
+    result = runner.invoke(app, ["daemon", "restart"])
+    assert result.exit_code == 0, result.stdout
+    assert calls == ["stop", "start"]  # stop BEFORE start
+    assert "daemon stopped" in result.stdout
+    assert "pid 4242" in result.stdout
+
+
+def test_cli_daemon_restart_when_not_running(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("mnemo.daemon.stop", lambda: False)
+    monkeypatch.setattr("mnemo.daemon.start", lambda **kw: 99)
+    result = runner.invoke(app, ["daemon", "restart"])
+    assert result.exit_code == 0, result.stdout
+    assert "was not running" in result.stdout
+    assert "pid 99" in result.stdout
