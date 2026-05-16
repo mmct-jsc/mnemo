@@ -109,6 +109,13 @@ def mount_ui(
 
     templates.env.globals["type_colors"] = _palette.TYPE_COLORS
     templates.env.globals["type_color_fallback"] = _palette.FALLBACK_COLOR
+    # C3 (v4.3): single-source chat surface capability matrix, same
+    # pattern as the palette -- shared partials self-gate on it so a
+    # surface opts into a capability instead of re-implementing or
+    # silently missing it.
+    from mnemo.ui.chat_surface import CHAT_SURFACES
+
+    templates.env.globals["chat_surfaces"] = CHAT_SURFACES
     if STATIC_DIR.is_dir():
         app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
