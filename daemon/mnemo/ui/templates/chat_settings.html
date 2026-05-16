@@ -34,7 +34,11 @@
         <h3 x-text="name"></h3>
         <div class="row">
           <label>Model</label>
-          <input type="text" x-model="data.providers[name].model">
+          <select x-model="data.providers[name].model">
+            <template x-for="m in modelsFor(name)" :key="m">
+              <option :value="m" x-text="m"></option>
+            </template>
+          </select>
         </div>
         <div class="row">
           <label>API key</label>
@@ -42,6 +46,13 @@
                  :placeholder="data.providers[name].has_key ? 'set (hidden)' : 'paste key to set'"
                  x-model="keyInput[name]">
           <span class="hint" x-show="name==='ollama'">local &mdash; no key</span>
+        </div>
+        <div class="row">
+          <label>Resolved from</label>
+          <span class="hint" x-text="data.providers[name].key_tier || 'not set'"></span>
+          <button type="button" class="link-button danger-link"
+                  x-show="data.providers[name].has_key || data.providers[name].key_tier"
+                  @click="removeKey(name)">Remove key</button>
         </div>
       </div>
     </template>
@@ -100,15 +111,46 @@ function settingsPage() {
     loading: true,
     saved: false,
     data: { default_provider: 'anthropic', providers: {}, companion: {} },
+    registry: [],
     keyInput: {},
     retention: '',
-    get providerNames() { return Object.keys(this.data.providers || {}); },
+    // C4 (v4.2): registry-driven -- every REGISTERED provider appears,
+    // not just configured ones (union with any config-only names).
+    get providerNames() {
+      const reg = (this.registry || []).map(p => p.name);
+      const cfg = Object.keys(this.data.providers || {});
+      return [...new Set([...reg, ...cfg])];
+    },
+    modelsFor(name) {
+      const r = (this.registry || []).find(p => p.name === name);
+      return r ? r.known_models : [];
+    },
+    _stubUnconfigured() {
+      for (const p of (this.registry || [])) {
+        if (!this.data.providers[p.name]) {
+          this.data.providers[p.name] =
+            { model: p.default_model, has_key: false, key_tier: null };
+        }
+      }
+    },
     async load() {
-      const r = await fetch('/v1/settings');
-      this.data = await r.json();
+      const [s, pr] = await Promise.all([
+        fetch('/v1/settings').then(r => r.json()),
+        fetch('/v1/providers').then(r => r.json()),
+      ]);
+      this.registry = pr;
+      this.data = s;
+      this._stubUnconfigured();
       this.retention = this.data.chat_history_retention_days == null
         ? '' : String(this.data.chat_history_retention_days);
       this.loading = false;
+    },
+    async removeKey(name) {
+      const r = await fetch('/v1/settings/providers/' + name + '/key',
+        { method: 'DELETE' });
+      this.data = await r.json();
+      this._stubUnconfigured();
+      this.flash();
     },
     flash() { this.saved = true; setTimeout(() => { this.saved = false; }, 1500); },
     async saveProviders() {

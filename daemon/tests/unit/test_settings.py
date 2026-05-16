@@ -150,3 +150,18 @@ def test_delete_provider_key_endpoint(client: TestClient, monkeypatch) -> None:
     body = r.json()
     assert "providers" in body
     assert "default_provider" in body
+
+
+def test_provider_tab_is_registry_driven(client: TestClient) -> None:
+    """C4 (v4.2): the provider tab consumes the C2 registry (every
+    registered provider appears), the model is a picker (not free
+    text), and key-tier + delete-key are surfaced."""
+    html = client.get("/settings/chat").text
+    assert "/v1/providers" in html, "provider tab must fetch the C2 registry"
+    assert 'x-model="data.providers[name].model"' in html
+    prov_section = html.split("Providers", 1)[1][:6000]
+    assert "<select" in prov_section, "model must be a picker, not free text"
+    assert "known_models" in html or "modelsFor(" in html
+    assert "key_tier" in html, "read-only key tier surfaced"
+    assert "/v1/settings/providers/" in html
+    assert "/key" in html  # DELETE-key wire
