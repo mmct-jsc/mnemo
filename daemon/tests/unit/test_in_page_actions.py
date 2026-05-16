@@ -59,16 +59,19 @@ def test_base_defines_context_aware_cite_handler_and_popover() -> None:
 # --- in-page ui_action listeners ---------------------------------------
 
 
-def test_graph_listens_for_companion_actions() -> None:
-    # the gap closed: graph.html now LISTENS for the events chat.js
-    # already dispatches, via a dedicated wiring method.
-    assert "_wireCompanionActions" in GRAPH_HTML
-    assert "'mnemo-select-node'" in GRAPH_HTML or '"mnemo-select-node"' in GRAPH_HTML
-    assert "mnemo-set-filter" in GRAPH_HTML
-    assert "mnemo-open-panel" in GRAPH_HTML
-    # select drives the live graph; filter drives the REAL pipeline
-    assert "focusNode" in GRAPH_HTML
-    assert "applyFilters" in GRAPH_HTML
+def test_graph_page_does_not_wire_the_companion_into_cosmos() -> None:
+    """CLOSED OUTCOME (revert-over-perfectionize): injecting companion
+    listeners into nebula() re-triggered the v2.6.8 cosmos hang.
+    graph.html is reverted byte-identical to the pre-v3.2 known-good --
+    the companion does NOT touch the cosmos renderer. The in-page
+    citation/popover (base.html) + the session/highlight TOOLS still
+    exist; only the renderer wiring is gone (reference_cosmos_gl_nebula:
+    a live nebula needs a renderer swap, not wiring)."""
+    assert "_wireCompanionActions" not in GRAPH_HTML
+    assert "mnemo-select-node" not in GRAPH_HTML
+    assert "mnemo-set-filter" not in GRAPH_HTML
+    # the context-aware cite handler still lives in base.html (no graph)
+    assert "window.mnemoCite" in BASE_HTML
 
 
 def test_settings_listens_for_companion_panel_action() -> None:

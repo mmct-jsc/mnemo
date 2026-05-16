@@ -15,11 +15,16 @@ Three user-reported issues, each root-caused before fixing:
      the navigate when already on that path (the run continues); guide
      the model (DEFAULT_SYSTEM) to prefer in-page tools + treat
      navigate as terminal.
-  3. Nebula: lovely zoomed out, an unreadable hairball zoomed in (15k
-     links). Root cause: per-edge alpha 0.78 + linkWidth 1.6 +
-     scaleLinksOnZoom:true (links FATTEN on zoom-in). Fix: soft alpha,
-     thinner width, scaleLinksOnZoom:false; selection greyout still
-     makes the focused web pop.
+  3. Nebula: lovely zoomed out, a hairball zoomed in. ATTEMPTED a link
+     softening (alpha/width/scaleLinksOnZoom) -- it RE-TRIGGERED the
+     v2.6.8 cosmos converge-and-stop hang (init froze in degenerate
+     clumps, the layout never settled, the GPU/CPU pegged the laptop).
+     Per feedback_revert_over_perfectionize + reference_cosmos_gl_nebula
+     (the documented closed outcome behind the v2.6.8->v2.6.6 revert),
+     the fix was REVERTED -- graph.html restored to the P4 known-good.
+     The zoomed-in density is an ACCEPTED limitation pending a renderer
+     swap; do NOT re-tune cosmos config. The guard test below locks
+     that closed outcome so it can't silently recur.
 """
 
 from __future__ import annotations
@@ -69,17 +74,37 @@ def test_default_system_prefers_in_page_actions_over_navigate() -> None:
 # --- 3. nebula links: soft but visible, no zoom-in hairball ------------
 
 
-def test_nebula_links_are_softened_and_dont_scale_on_zoom() -> None:
-    # the dominant "mess when zoomed in" cause: links fattened with
-    # zoom. Off now.
-    assert "scaleLinksOnZoom: false" in GRAPH_HTML
-    assert "scaleLinksOnZoom: true" not in GRAPH_HTML
-    # the hard-coded over-bright per-edge alpha (0.78) is gone, replaced
-    # by a soft named constant
-    assert "= 0.78;" not in GRAPH_HTML
-    assert "LINK_ALPHA" in GRAPH_HTML
-    # thinner base width (was 1.6) so dense regions don't smear
-    assert "linkWidth: 1.6" not in GRAPH_HTML
-    # the never-fade distance range stays (prior reasoning is sound --
-    # don't reintroduce the zoom-in fade)
-    assert "linkVisibilityDistanceRange" in GRAPH_HTML
+def test_nebula_is_the_documented_kept_good_v266_renderer() -> None:
+    """CLOSED OUTCOME (revert-over-perfectionize, FINAL + root-caused).
+
+    The nebula "stuck" was NEVER my v3.2 graph edits per se -- it was
+    that ``main`` itself carries the BROKEN v2.6.8 perfectionize
+    renderer: the documented v2.6.6 revert (``a341c89``, restoring
+    ``graph.html @ 8caf257``) NEVER merged to main (PR #53 was an empty
+    no-op), and release/3.0.0 was cut from that main. So every
+    "revert to main / a002b34 / P4" reverted graph.html *to the broken
+    v2.6.8*. The fix is `git checkout 8caf257 -- graph.html` --
+    the kept-good v2.6.6 (reference_cosmos_gl_nebula.md). Live-verified
+    over 15s: all 11010 nodes in perpetual motion, growing deltas,
+    healthy spread, NO freeze (the v2.6.8 froze hard at ~8s).
+
+    This guard pins graph.html to the v2.6.6 kept-good: NO v3.2 wiring,
+    NO v2.6.8 perfectionize artefacts. A livelier/agentic nebula needs
+    a renderer swap, never cosmos config/wiring (the closed ceiling)."""
+    # v2.6.6 kept-good anchors (the never-cool perpetual sim)
+    assert "NEVER-COOL SIM + CACHED SEED" in GRAPH_HTML
+    assert "this.cg.start(useCache ? 0.35 : 1)" in GRAPH_HTML
+    assert "simulationDecay: 1000000000" in GRAPH_HTML
+    # ZERO v2.6.8 perfectionize artefacts (the regression on main)
+    for m in ("_pinAll", "_flyTo", "setPinnedPoints", "SUPERSEDES", "v2.6.8", "_fitToView"):
+        assert m not in GRAPH_HTML, f"v2.6.8 perfectionize re-crept onto nebula: {m}"
+    # ZERO v3.2 artefacts on the nebula page
+    for m in (
+        "LINK_ALPHA",
+        "scaleLinksOnZoom: false",
+        "_wireCompanionActions",
+        "mnemo-highlight-nodes",
+        "mnemo-select-node",
+        "window.mnemoPageContext",
+    ):
+        assert m not in GRAPH_HTML, f"v3.2 re-crept onto nebula: {m}"

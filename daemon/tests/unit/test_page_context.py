@@ -149,10 +149,16 @@ def test_chat_js_attaches_live_page_context_each_run() -> None:
     assert "method: 'PATCH'" in CHAT_JS or 'method: "PATCH"' in CHAT_JS
 
 
-def test_graph_page_overrides_page_context_with_live_state() -> None:
-    assert "window.mnemoPageContext" in GRAPH_HTML
-    assert "selected_node_id" in GRAPH_HTML
-    assert "visible_node_ids" in GRAPH_HTML
+def test_graph_page_is_pristine_no_v32_wiring() -> None:
+    """CLOSED OUTCOME: the v3.2 graph-page override re-triggered the
+    v2.6.8 cosmos hang; graph.html was reverted byte-identical to the
+    pre-v3.2 known-good. The nebula uses ONLY the base.html default
+    page-context -- no override, no companion wiring on the renderer.
+    A livelier/agentic nebula needs a renderer swap, NOT wiring
+    (reference_cosmos_gl_nebula.md)."""
+    assert "window.mnemoPageContext" not in GRAPH_HTML
+    assert "visible_node_ids" not in GRAPH_HTML
+    assert "_wireCompanionActions" not in GRAPH_HTML
 
 
 def test_settings_page_overrides_page_context_with_weights() -> None:
