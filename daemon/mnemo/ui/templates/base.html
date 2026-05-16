@@ -185,10 +185,20 @@
           if (ev && ev.preventDefault) ev.preventDefault();
           return false;
         }
-        window.mnemoCitePopover(
-          id,
-          (ev && (ev.currentTarget || ev.target)) || document.body
-        );
+        // On a surface that already has the citation side-panel (the
+        // /chat page) use it -- a floating popover there overlaps the
+        // thread + composer (live-review: "the node model does not
+        // display properly"). The dock has no panel -> popover.
+        if (document.querySelector('.cite-preview')) {
+          document.dispatchEvent(
+            new CustomEvent('mnemo-cite', { detail: { node_id: id } })
+          );
+        } else {
+          window.mnemoCitePopover(
+            id,
+            (ev && (ev.currentTarget || ev.target)) || document.body
+          );
+        }
         if (ev && ev.preventDefault) ev.preventDefault();
         return false;
       } catch (e) {
@@ -769,6 +779,12 @@
         <strong>Mnem</strong>
         <span class="mc-tok" x-show="tokensTotal" x-cloak
               x-text="tokensTotal ? (tokensTotal.toLocaleString() + ' tok') : ''"></span>
+        <button class="mc-new" @click="newConversation()"
+                title="New chat" aria-label="New chat">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none"
+               stroke="currentColor" stroke-width="2" stroke-linecap="round"
+               stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+        </button>
         <button class="mc-x" @click="$dispatch('mnem-close')" aria-label="close">×</button>
       </div>
       <div class="mc-thread" x-ref="log" @scroll.passive="onScroll()">
@@ -801,9 +817,15 @@
               </template>
             </div>
           </template>
-          <div class="mc-turn mc-assistant" x-show="streaming" x-cloak>
+          <div class="mc-turn mc-assistant" x-show="streaming" x-cloak
+               x-transition:enter="ce-fade" x-transition:enter-start="ce-fade-0"
+               x-transition:enter-end="ce-fade-1">
             <div class="mc-asst prose" x-ref="liveBody"></div>
-            <div class="mnem-working" x-show="working" x-cloak>
+            <div class="mnem-working" x-show="working" x-cloak
+                 x-transition:enter="ce-fade" x-transition:enter-start="ce-fade-0"
+                 x-transition:enter-end="ce-fade-1"
+                 x-transition:leave="ce-fade" x-transition:leave-start="ce-fade-1"
+                 x-transition:leave-end="ce-fade-0">
               <span></span><span></span><span></span>
             </div>
           </div>
@@ -1189,11 +1211,26 @@
       font-size: .9rem; }
     .mc-tok { margin-left: auto; font-family: var(--mono); font-size: .66rem;
       color: var(--fg-dim); }
+    .mc-new { display: grid; place-items: center; width: 24px; height: 24px;
+      margin-left: .35rem; padding: 0; background: none; border: 0;
+      color: var(--fg-dim); cursor: pointer; border-radius: 7px;
+      transition: color .15s ease, background .15s ease; }
+    .mc-new:hover { color: var(--accent);
+      background: color-mix(in srgb, var(--accent) 16%, transparent); }
     .mc-x { background: none; border: 0; color: var(--fg-dim); cursor: pointer;
-      font-size: 1.05rem; line-height: 1; margin-left: .3rem; }
+      font-size: 1.05rem; line-height: 1; margin-left: .2rem; }
     .mc-x:hover { color: var(--fg); }
-    .mc-thread { flex: 1 1 0; min-height: 0; overflow-y: auto; }
-    .mc-col { padding: .85rem; display: flex; flex-direction: column;
+    /* reserve the scrollbar track so the centered "Latest" pill +
+       content don't jitter left/right as it appears on scroll. */
+    .mc-thread { flex: 1 1 0; min-height: 0; overflow-y: auto;
+      scrollbar-gutter: stable; }
+    .ce-fade { transition: opacity .26s ease, transform .26s ease; }
+    .ce-fade-0 { opacity: 0; transform: translateY(3px); }
+    .ce-fade-1 { opacity: 1; transform: translateY(0); }
+    /* bottom-anchor the dock thread too (no void above the composer
+       on a short conversation); .mc-empty keeps margin:auto -> centred */
+    .mc-col { padding: .85rem; min-height: 100%; box-sizing: border-box;
+      display: flex; flex-direction: column; justify-content: flex-end;
       gap: .75rem; }
     .mc-empty { color: var(--fg-dim); font-size: .82rem; line-height: 1.5;
       text-align: center; margin: auto; padding: 1.5rem .5rem; }
@@ -1253,7 +1290,7 @@
       box-shadow: 0 3px 10px -3px var(--accent);
       transition: transform var(--transition), background var(--transition),
         box-shadow var(--transition), opacity var(--transition); }
-    .mc-send svg { transform: translateY(-.5px); }
+    .mc-send svg { display: block; } /* grid place-items centers it */
     .mc-send:disabled { background: var(--bg); color: var(--fg-dim);
       box-shadow: none; opacity: .55; cursor: not-allowed; }
     .mc-send:not(:disabled):hover { background: var(--accent-hover);

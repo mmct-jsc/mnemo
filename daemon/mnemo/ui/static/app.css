@@ -4233,12 +4233,18 @@ dl.meta dd { margin: 0; color: var(--fg); }
   background: rgba(255, 255, 255, 0.05);
   border: 1px solid var(--border);
   color: var(--fg-muted);
-  font-size: 1.1rem;
+  /* the &times; glyph sits optically high; a slightly smaller size +
+     flex centering + zeroed box reads as truly centred in the circle
+     (live-review: "close button not centered"). */
+  font-size: 0.95rem;
   line-height: 1;
+  padding: 0;
+  text-align: center;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  aspect-ratio: 1;
   transition:
     background 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
     color 220ms cubic-bezier(0.2, 0.8, 0.2, 1),

@@ -3,7 +3,8 @@
 
 {% block content %}
 <script src="/static/chat.js?v={{ mnemo_version }}" defer></script>
-<section class="mn" x-data="mnemoChat({ surface: 'page' })" x-init="init()">
+<section class="mn" x-data="mnemoChat({ surface: 'page' })" x-init="init()"
+         @mnemo-cite.window="onCiteEvent($event.detail.node_id)">
 
   <!-- left rail: conversations -->
   <aside class="chat-rail">
@@ -23,6 +24,13 @@
               <li :class="{active: c.id === activeId}" @click="openConversation(c.id)">
                 <span class="cv-name" x-text="c.name"></span>
                 <span class="cv-time" x-text="relTime(c.updated_at)"></span>
+                <button class="cv-del" type="button"
+                        @click="deleteConversation(c.id, $event)"
+                        title="Delete chat" aria-label="Delete chat">
+                  <svg viewBox="0 0 24 24" width="13" height="13" fill="none"
+                       stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                       stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M10 11v6M14 11v6"/></svg>
+                </button>
               </li>
             </template>
           </ul>
@@ -147,13 +155,19 @@
         </template>
 
         <!-- live streaming assistant -->
-        <div class="turn turn-assistant" x-show="streaming" x-cloak>
+        <div class="turn turn-assistant" x-show="streaming" x-cloak
+             x-transition:enter="ce-fade" x-transition:enter-start="ce-fade-0"
+             x-transition:enter-end="ce-fade-1">
           <div class="turn-assistant">
             <img class="ava" :src="'/static/mnem/' + (thinking ? 'thinking' : 'speaking') + '.svg'"
                  width="30" height="30" alt="Mnem">
             <div class="assistant-body">
               <div class="prose" x-ref="liveBody"></div>
-              <div class="mnem-working" x-show="working" x-cloak aria-label="Mnem is working">
+              <div class="mnem-working" x-show="working" x-cloak aria-label="Mnem is working"
+                   x-transition:enter="ce-fade" x-transition:enter-start="ce-fade-0"
+                   x-transition:enter-end="ce-fade-1"
+                   x-transition:leave="ce-fade" x-transition:leave-start="ce-fade-1"
+                   x-transition:leave-end="ce-fade-0">
                 <span></span><span></span><span></span>
               </div>
             </div>
@@ -203,7 +217,8 @@
 
     <form class="composer" @submit.prevent="sendMessage()">
       <textarea x-ref="draft" x-model="draft" rows="1"
-                placeholder="Ask Mnem anything…  (Enter to send · Shift+Enter for newline)"
+                placeholder="Ask Mnem anything…"
+                title="Enter to send · Shift+Enter for a new line"
                 :disabled="streaming"
                 @input="grow($event.target)"
                 @keydown.enter.prevent="if (!$event.shiftKey) sendMessage()"
@@ -262,7 +277,7 @@
     text-transform: uppercase; letter-spacing: .14em; color: var(--fg-dim);
     padding: .9rem .55rem .35rem; }
   .rail-group ul { list-style: none; margin: 0; padding: 0; }
-  .rail-group li { display: flex; align-items: baseline; gap: .5rem;
+  .rail-group li { display: flex; align-items: center; gap: .5rem;
     padding: .5rem .6rem; border-radius: var(--radius); cursor: pointer;
     color: var(--fg-muted); transition: var(--transition); }
   .rail-group li:hover { background: var(--panel); color: var(--fg); }
@@ -270,7 +285,20 @@
     box-shadow: inset 2px 0 0 var(--accent); }
   .cv-name { flex: 1; overflow: hidden; text-overflow: ellipsis;
     white-space: nowrap; font-size: .88rem; }
-  .cv-time { font-family: var(--mono); font-size: .68rem; color: var(--fg-dim); }
+  .cv-time { font-family: var(--mono); font-size: .68rem; color: var(--fg-dim);
+    transition: opacity .15s ease; }
+  .cv-del { display: grid; place-items: center; width: 22px; height: 22px;
+    flex-shrink: 0; padding: 0; margin: -2px -2px -2px 0;
+    background: none; border: 0; color: var(--fg-dim); cursor: pointer;
+    border-radius: 6px; opacity: 0;
+    transition: opacity .15s ease, color .15s ease, background .15s ease; }
+  .rail-group li:hover .cv-del, .cv-del:focus-visible { opacity: 1; }
+  /* on hover the timestamp yields to the delete button (no jump) */
+  .rail-group li:hover .cv-time { opacity: 0; position: absolute;
+    pointer-events: none; }
+  .rail-group li { position: relative; }
+  .cv-del:hover { color: var(--warn);
+    background: color-mix(in srgb, var(--warn) 18%, transparent); }
   .rail-empty { color: var(--fg-dim); font-size: .82rem; padding: 1rem .8rem; }
 
   /* thread */
@@ -287,9 +315,20 @@
      last message" bug). The JS opts into smooth explicitly via
      scrollTo({behavior:'smooth'}) only for live-follow; the
      open/pin must be instant. */
-  .thread-scroll { flex: 1 1 0; min-height: 0; overflow-y: auto; }
+  /* scrollbar-gutter:stable reserves the scrollbar track at all times
+     -- without it the centered "Latest" pill (and the content) jump
+     left/right as the scrollbar appears/disappears on scroll. */
+  .thread-scroll { flex: 1 1 0; min-height: 0; overflow-y: auto;
+    scrollbar-gutter: stable; }
+  /* min-height:100% + justify-content:flex-end => the conversation
+     BOTTOM-anchors (grows up from just above the composer) like every
+     chat app, instead of a short thread pinned at the top with a huge
+     empty void below it. The .welcome state keeps margin:auto so it
+     still centres (auto margins beat justify-content). */
   .thread-col { max-width: 46rem; margin: 0 auto; padding: 2rem 1.5rem 1rem;
-    display: flex; flex-direction: column; gap: 1.5rem; }
+    min-height: 100%; box-sizing: border-box;
+    display: flex; flex-direction: column; justify-content: flex-end;
+    gap: 1.5rem; }
   .turn { animation: turn-in .32s cubic-bezier(.2,.7,.3,1) both; }
   @keyframes turn-in { from { opacity: 0; transform: translateY(8px); } }
 
@@ -483,7 +522,7 @@
     box-shadow: 0 4px 14px -4px var(--accent);
     transition: transform var(--transition), background var(--transition),
       box-shadow var(--transition), opacity var(--transition); }
-  .send .send-ic { transform: translateY(-1px); }
+  .send .send-ic { display: block; } /* place-items centers it; no nudge */
   .send:disabled { background: var(--panel); color: var(--fg-dim);
     box-shadow: none; opacity: .6; cursor: not-allowed; }
   .send:not(:disabled):hover { background: var(--accent-hover);
@@ -560,7 +599,30 @@
     white-space: nowrap; }
   .cite-preview { font-size: .82rem; line-height: 1.6; color: var(--fg-muted);
     border-top: 1px solid var(--border-soft); padding-top: .8rem;
-    max-height: 50vh; overflow: auto; }
+    max-height: 50vh; overflow: auto; overflow-wrap: anywhere; }
+  /* the cited node body renders markdown -- tame the giant H1 and the
+     horizontally-scrolling code block in the narrow side panel
+     (live-review "citation weird"). */
+  .cite-preview h1, .cite-preview h2 { font-size: .95rem; line-height: 1.3;
+    margin: .6rem 0 .4rem; color: var(--fg); }
+  .cite-preview h3, .cite-preview h4 { font-size: .85rem; margin: .5rem 0 .3rem;
+    color: var(--fg); }
+  .cite-preview p, .cite-preview li { font-size: .8rem; }
+  .cite-preview pre { white-space: pre-wrap; word-break: break-word;
+    max-width: 100%; font-size: .72rem; padding: .6rem .7rem; }
+  .cite-preview code { overflow-wrap: anywhere; }
+  .cite-preview table { display: block; max-width: 100%; overflow-x: auto; }
+
+  /* v3.2 UX refine ---------------------------------------------------- */
+  /* smooth fade for the thinking / streaming turn (was a sudden pop) */
+  .ce-fade { transition: opacity .26s ease, transform .26s ease; }
+  .ce-fade-0 { opacity: 0; transform: translateY(4px); }
+  .ce-fade-1 { opacity: 1; transform: translateY(0); }
+  /* short assistant replies sat unbalanced next to the avatar -- give
+     the body a comfortable min-height so 1-liners read as a real turn */
+  .turn-assistant .assistant-body { min-height: 30px;
+    display: flex; flex-direction: column; justify-content: center; }
+  .turn-assistant .assistant-body .prose { align-self: stretch; }
 
   @media (max-width: 1100px) {
     .mn { grid-template-columns: 1fr; }
