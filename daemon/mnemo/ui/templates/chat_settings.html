@@ -12,6 +12,8 @@
     </div>
   </header>
 
+  {% include "_settings_tabs.html" %}
+
   <div class="tabs" role="tablist">
     <button :class="{active: tab==='providers'}" @click="tab='providers'">Providers &amp; keys</button>
     <button :class="{active: tab==='companion'}" @click="tab='companion'">Companion</button>
@@ -143,6 +145,10 @@ function settingsPage() {
       this._stubUnconfigured();
       this.retention = this.data.chat_history_retention_days == null
         ? '' : String(this.data.chat_history_retention_days);
+      // C4 (v4.2): the shared settings strip deep-links via #hash;
+      // honor it so the cross-route tab lands on the right section.
+      var h = location.hash.slice(1);
+      if (['providers', 'companion', 'permissions'].includes(h)) this.tab = h;
       this.loading = false;
     },
     async removeKey(name) {
