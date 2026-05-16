@@ -458,14 +458,29 @@
 
       scroll: function (instant) {
         var self = this;
+        // $nextTick fires after Alpine flushes the DOM but BEFORE the
+        // browser lays out / paints the freshly x-html'd markdown, so
+        // scrollHeight is still small -> a single scroll lands at the
+        // top (the "doesn't go to the last message" bug). Pin again on
+        // the next frame and once more shortly after (covers
+        // markdown/font reflow). scrollTop=scrollHeight is instant +
+        // reliable for the open/pin; keep smooth only for live follow.
         this.$nextTick(function () {
           var l = self.$refs.log;
-          if (l) {
-            l.scrollTo({
-              top: l.scrollHeight,
-              behavior: instant ? 'auto' : 'smooth',
-            });
-          }
+          if (!l) return;
+          var pin = function () {
+            if (!self.$refs.log) return;
+            if (instant) {
+              l.scrollTop = l.scrollHeight;
+            } else {
+              l.scrollTo({ top: l.scrollHeight, behavior: 'smooth' });
+            }
+          };
+          pin();
+          requestAnimationFrame(function () {
+            requestAnimationFrame(pin);
+          });
+          setTimeout(pin, 80);
         });
       },
 

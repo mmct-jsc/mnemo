@@ -705,6 +705,26 @@
         if (p.x == null) return '';
         return 'left:' + p.x + 'px; top:' + p.y + 'px; right:auto; bottom:auto;';
       },
+      // Keep the (now launcher-only) wrap fully inside the CURRENT
+      // viewport. A persisted mnem.pos from a bigger window / another
+      // device / a stale save would otherwise strand the dock
+      // off-screen. Imperative apply (like the drag) so it does not
+      // depend on which proxy `this` is.
+      _clampPos() {
+        if (this.pos.x == null) return; // default CSS corner -- fine
+        var el = (this.$el && this.$el.classList && this.$el.classList.contains('mnem-wrap'))
+          ? this.$el : document.querySelector('.mnem-wrap');
+        // clientWidth/Height = visible area WITHOUT the scrollbar
+        // gutter (innerWidth includes it -> a few px overhang).
+        var vw = document.documentElement.clientWidth || this._vw();
+        var vh = document.documentElement.clientHeight || this._vh();
+        if (!vw || !el) return; // unknown viewport -- leave untouched
+        var w = el.offsetWidth || 56, h = el.offsetHeight || 56;
+        this.pos.x = Math.max(8, Math.min(vw - w - 8, this.pos.x));
+        this.pos.y = Math.max(8, Math.min(vh - h - 8, this.pos.y));
+        this._applyXY(el, this.pos.x, this.pos.y);
+        localStorage.setItem('mnem.pos', JSON.stringify(this.pos));
+      },
       init() {
         if (this.hiddenOnChat) return;
         this.state = localStorage.getItem('mnem.docked') || 'closed';
@@ -712,6 +732,15 @@
           var sp = JSON.parse(localStorage.getItem('mnem.pos') || 'null');
           if (sp && typeof sp.x === 'number') this.pos = sp;
         } catch (e) { /* corrupt -- default position */ }
+        // clamp the persisted position into THIS viewport, and re-clamp
+        // whenever the window resizes.
+        this.$nextTick(() => this._clampPos());
+        var self = this;
+        var rt;
+        window.addEventListener('resize', function () {
+          clearTimeout(rt);
+          rt = setTimeout(function () { self._clampPos(); }, 120);
+        });
         document.addEventListener('mnemo-mnem-mood', (e) => {
           if (e.detail && e.detail.mood) this.mood = e.detail.mood;
         });
@@ -888,7 +917,17 @@
       .mnem-dock img { animation: none !important; } }
 
     /* the 380px mini-chat panel -- the SAME mnemoChat component as /chat */
-    .mnem-chat { width: 380px; height: 30rem; max-height: 70vh;
+    /* DECOUPLED from the launcher: its own fixed, viewport-clamped
+       element anchored to the safe bottom-right corner. Was flex-
+       stacked above the draggable launcher in .mnem-wrap and top-
+       anchored after a drag -> opening it shoved the launcher
+       off-screen and could exceed the viewport ("popup push it too
+       hard" / "out of the window"). min()/dvh => it can NEVER overflow
+       the viewport regardless of where the launcher was dragged. */
+    .mnem-chat { position: fixed; right: 18px; bottom: 18px; z-index: 61;
+      width: min(380px, calc(100vw - 32px));
+      height: min(30rem, calc(100dvh - 96px));
+      max-height: calc(100dvh - 96px);
       background: var(--panel); border: 1px solid var(--border);
       border-radius: var(--radius-lg); display: flex; flex-direction: column;
       overflow: hidden; box-shadow: 0 18px 50px rgba(0,0,0,.55);
@@ -903,7 +942,7 @@
     .mc-x { background: none; border: 0; color: var(--fg-dim); cursor: pointer;
       font-size: 1.05rem; line-height: 1; margin-left: .3rem; }
     .mc-x:hover { color: var(--fg); }
-    .mc-thread { flex: 1; overflow-y: auto; }
+    .mc-thread { flex: 1 1 0; min-height: 0; overflow-y: auto; }
     .mc-col { padding: .85rem; display: flex; flex-direction: column;
       gap: .75rem; }
     .mc-empty { color: var(--fg-dim); font-size: .82rem; line-height: 1.5;

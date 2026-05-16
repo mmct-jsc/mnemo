@@ -110,3 +110,61 @@ def test_citation_preview_is_one_shot_not_the_stalling_stream() -> None:
     assert "window.mnemoRenderBody(" not in CHAT_JS
     assert "previewMarkup" in CHAT_JS
     assert "window.mnemoMd" in CHAT_JS
+
+
+# --- Live-review round 3: layout / viewport bugs -----------------------
+
+
+def test_chat_thread_is_a_bounded_flex_scroller() -> None:
+    """Composer fell off the bottom + the last message was unreachable
+    + scroll() no-op'd because .thread-scroll (flex:1; overflow-y:auto)
+    and its .chat-thread grid item lacked min-height:0, so the scroller
+    expanded to content instead of bounding + scrolling internally."""
+    css = CHAT_HTML
+    # canonical flexbox-scroll fix on the /chat thread
+    assert "min-height: 0" in css
+    # the scroller must take remaining space AND be allowed to shrink
+    assert "flex: 1 1 0" in css or "flex: 1 1 0%" in css
+    # dvh so the mobile URL bar doesn't push the composer off
+    assert "100dvh" in css
+    # pin-to-bottom must survive post-$nextTick markdown layout:
+    # re-pin on a rAF + a short timeout, instant via scrollTop
+    assert "requestAnimationFrame" in CHAT_JS
+    assert "l.scrollTop = l.scrollHeight" in CHAT_JS
+    # .thread-scroll must NOT carry scroll-behavior:smooth -- it
+    # animates every programmatic pin (fired nextTick+rAF+timeout) so
+    # the smooth scrolls stomp each other and never reach the bottom.
+    import re
+
+    m = re.search(r"\.thread-scroll \{[^}]*\}", css, re.S)
+    assert m
+    assert "scroll-behavior" not in m.group(0)
+
+
+def test_dock_panel_is_decoupled_and_viewport_bounded() -> None:
+    """The 380px panel was flex-stacked above the draggable launcher in
+    .mnem-wrap and top-anchored after a drag, so opening it shoved the
+    launcher off-screen ("popup push it too hard") and could exceed the
+    viewport. It must be its OWN fixed, viewport-clamped element."""
+    css = BASE_HTML
+    # .mnem-chat decoupled to position:fixed (not in the launcher flow)
+    import re
+
+    m = re.search(r"\.mnem-chat \{[^}]*\}", css, re.S)
+    assert m, ".mnem-chat rule not found"
+    rule = m.group(0)
+    assert "position: fixed" in rule
+    # never exceeds the viewport (min()/calc against dvh/vw)
+    assert "100dvh" in rule
+    assert "min(" in rule
+    # dock thread also gets the bounded-scroller fix
+    assert "min-height: 0" in css
+
+
+def test_dock_clamps_persisted_position_into_the_viewport() -> None:
+    """A stale/oversized mnem.pos (smaller window, other device, or
+    bad save) stranded the dock off-screen because init() applied it
+    verbatim. It must clamp on load AND on resize."""
+    js = BASE_HTML
+    assert "_clampPos" in js
+    assert "addEventListener('resize'" in js or 'addEventListener("resize"' in js
