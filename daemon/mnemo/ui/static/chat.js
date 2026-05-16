@@ -312,12 +312,19 @@
         this.citations = seen;
       },
 
-      // [mnemo:<id>] -> a cite link. Run AFTER markdown render (marked
-      // keeps the literal brackets; they aren't markdown syntax).
+      // [mnemo:<id>] -> a context-aware cite link. Run AFTER markdown
+      // render (marked keeps the literal brackets; not md syntax). The
+      // href stays /node/<id> so middle-click / no-JS still works, but
+      // the click routes through window.mnemoCite (base.html): on
+      // Nebula it focuses the node in the live graph; elsewhere it
+      // opens a shared inline popover; the full-page redirect is only
+      // the final fallback (v3.2 S3.3 -- NO blind redirect).
       _citeLinks: function (html) {
         return (html || '').replace(
           /\[mnemo:([^\]\s]+)\]/g,
-          '<a href="/node/$1" class="cite-link" onclick="event.stopPropagation()">[mnemo:$1]</a>'
+          '<a href="/node/$1" class="cite-link" data-cite="$1" ' +
+            "onclick=\"return window.mnemoCite ? window.mnemoCite('$1', event) : true\">" +
+            '[mnemo:$1]</a>'
         );
       },
 

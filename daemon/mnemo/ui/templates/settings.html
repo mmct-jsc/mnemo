@@ -369,6 +369,26 @@ window.mnemoPageContext = function () {
   }
   return ctx;
 };
+
+// v3.2: the companion's panel/retune ui_action had no listener here.
+// Bring the retune card into view + flash it so "let's retune" acts
+// on THIS page (the deeper confirm-and-apply flow lands in P5).
+(function () {
+  function focusRetune() {
+    var card = document.querySelector('.retune-card');
+    if (!card) return;
+    card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    card.classList.add('retune-flash');
+    setTimeout(function () {
+      card.classList.remove('retune-flash');
+    }, 1400);
+  }
+  document.addEventListener('mnemo-open-panel', function (e) {
+    var pid = e.detail && e.detail.panel_id;
+    if (!pid || /retune|tune|weight/i.test(pid)) focusRetune();
+  });
+  document.addEventListener('mnemo-retune', focusRetune);
+})();
 </script>
 
 <style>
@@ -472,6 +492,15 @@ window.mnemoPageContext = function () {
 
   /* v1.2 phase 6: retune panel */
   .retune-card { display: grid; gap: 0.85rem; }
+  /* v3.2: companion "let's retune" focus cue */
+  .retune-card.retune-flash {
+    animation: retune-flash 1.4s ease-out;
+    border-radius: var(--radius-lg, 10px);
+  }
+  @keyframes retune-flash {
+    0%, 100% { box-shadow: 0 0 0 0 transparent; }
+    25% { box-shadow: 0 0 0 3px var(--accent, #7ee7e0); }
+  }
   .retune-actions { display: flex; gap: 0.6rem; align-items: center; }
   .retune-report { display: grid; gap: 1rem; }
   .retune-mrr-grid {

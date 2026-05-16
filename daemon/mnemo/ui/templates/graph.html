@@ -538,9 +538,46 @@ function nebula() {
         }
       });
 
+      this._wireCompanionActions();
+
       if (!this.contextProject) {
         this._subscribeWorkspaceEvents();
       }
+    },
+
+    // v3.2: the companion's ui_action CustomEvents (dispatched by
+    // chat.js AND by the context-aware [mnemo:id] handler) had NO
+    // listener -- close that gap so Mnem acts IN the live graph:
+    // focus a node, drive the REAL filter pipeline, open the panel.
+    _wireCompanionActions() {
+      document.addEventListener('mnemo-select-node', (e) => {
+        const id = e.detail && e.detail.node_id;
+        if (id) this.focusNode(id);
+      });
+      document.addEventListener('mnemo-set-filter', (e) => {
+        const k = e.detail && e.detail.filter_kind;
+        const v = e.detail && e.detail.value;
+        if (k === 'type' && v != null) {
+          this.typeFilters[v] = true; // surface that type
+          this.applyFilters();
+          this._persistState();
+        } else if (k === 'confidence') {
+          this.minConfidence = Math.max(0, Math.min(100, Number(v) || 0));
+          this.applyFilters();
+          this._persistState();
+        } else if (k === 'text' || k === 'query') {
+          this.filterText = String(v == null ? '' : v);
+          this.applyFilters();
+        }
+      });
+      document.addEventListener('mnemo-open-panel', (e) => {
+        // the Nebula detail panel is the selected-node panel; if a
+        // node id was passed, focus it (which opens the panel).
+        const pid = e.detail && (e.detail.panel_id || e.detail.node_id);
+        if (pid && this._idIndex && this._idIndex[pid] !== undefined) {
+          this.focusNode(pid);
+        }
+      });
     },
 
     async _loadWorkspaceScope() {

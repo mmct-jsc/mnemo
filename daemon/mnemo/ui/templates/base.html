@@ -73,6 +73,128 @@
     window.mnemoPageContext = function () {
       return { page: {{ page | default('') | tojson }}, path: location.pathname };
     };
+
+    // v3.2: a shared inline cite popover. Renders a node's body with
+    // the SAME window.mnemoMd / Prism globals the chat previewMarkup
+    // uses (DRY) -- no navigating away. Reused by window.mnemoCite and
+    // available to any surface. Lazily builds one fixed element.
+    window.mnemoCitePopover = function (id, anchorEl) {
+      var pop = document.getElementById('mnemo-cite-pop');
+      if (!pop) {
+        pop = document.createElement('div');
+        pop.id = 'mnemo-cite-pop';
+        pop.className = 'mnemo-cite-pop';
+        pop.setAttribute('role', 'dialog');
+        document.body.appendChild(pop);
+        document.addEventListener('mousedown', function (e) {
+          if (
+            pop.style.display === 'block' &&
+            !pop.contains(e.target) &&
+            !(e.target.closest && e.target.closest('.cite-link'))
+          ) {
+            pop.style.display = 'none';
+          }
+        });
+        document.addEventListener('keydown', function (e) {
+          if (e.key === 'Escape') pop.style.display = 'none';
+        });
+      }
+      pop.innerHTML =
+        '<div class="ccp-head"><span class="ccp-id"></span>' +
+        '<a class="ccp-open" href="/node/' + id + '">open ↗</a>' +
+        '<button class="ccp-x" aria-label="close">×</button></div>' +
+        '<div class="ccp-body">loading…</div>';
+      pop.querySelector('.ccp-id').textContent = id;
+      pop.querySelector('.ccp-x').onclick = function () {
+        pop.style.display = 'none';
+      };
+      pop.style.display = 'block';
+      try {
+        var r = anchorEl.getBoundingClientRect();
+        var vw = document.documentElement.clientWidth || 1024;
+        var vh = document.documentElement.clientHeight || 768;
+        var pw = Math.min(360, vw - 24);
+        pop.style.width = pw + 'px';
+        pop.style.left = Math.min(Math.max(8, r.left), vw - pw - 8) + 'px';
+        var ph = pop.offsetHeight || 240;
+        var top = r.bottom + 8;
+        if (top + ph > vh - 8) top = Math.max(8, r.top - ph - 8);
+        pop.style.top = top + 'px';
+      } catch (e) {
+        /* still visible, just unpositioned */
+      }
+      var box = pop.querySelector('.ccp-body');
+      fetch('/v1/nodes/' + id)
+        .then(function (rs) {
+          return rs.ok ? rs.json() : null;
+        })
+        .then(function (n) {
+          if (!n) {
+            box.innerHTML = '<a href="/node/' + id + '">open ' + id + '</a>';
+            return;
+          }
+          if (n.name) pop.querySelector('.ccp-id').textContent = n.name;
+          var isCode = window.mnemoIsCodeType && window.mnemoIsCodeType(n.type);
+          var ext = window.mnemoLanguageOf
+            ? window.mnemoLanguageOf(n.source_path)
+            : 'none';
+          var body = n.body || '';
+          if (isCode && ext !== 'markdown' && ext !== 'none') {
+            var esc = body
+              .replace(/&/g, '&amp;')
+              .replace(/</g, '&lt;')
+              .replace(/>/g, '&gt;');
+            box.innerHTML =
+              '<pre class="mnemo-code language-' + ext +
+              '"><code class="language-' + ext + '">' + esc + '</code></pre>';
+            if (window.Prism) {
+              try {
+                window.Prism.highlightElement(box.querySelector('code'));
+              } catch (e) {
+                /* tolerate */
+              }
+            }
+          } else {
+            box.innerHTML = window.mnemoMd
+              ? window.mnemoMd(body)
+              : '<pre>' + body.replace(/&/g, '&amp;').replace(/</g, '&lt;') + '</pre>';
+          }
+        })
+        .catch(function () {
+          box.innerHTML = '<a href="/node/' + id + '">open ' + id + '</a>';
+        });
+    };
+
+    // v3.2: context-aware [mnemo:id]. Nebula/code can show the node in
+    // place -> dispatch an in-page select (graph.html listens);
+    // everywhere else -> the shared inline popover. A full-page
+    // /node/<id> redirect is ONLY the final fallback, reached by
+    // returning true so the <a href> navigates (S3.3: no blind
+    // redirect). Returns false (preventDefault) when handled in-context.
+    window.mnemoCite = function (id, ev) {
+      try {
+        var pc =
+          typeof window.mnemoPageContext === 'function'
+            ? window.mnemoPageContext()
+            : {};
+        var page = pc && pc.page;
+        if (page === 'graph' || page === 'code') {
+          document.dispatchEvent(
+            new CustomEvent('mnemo-select-node', { detail: { node_id: id } })
+          );
+          if (ev && ev.preventDefault) ev.preventDefault();
+          return false;
+        }
+        window.mnemoCitePopover(
+          id,
+          (ev && (ev.currentTarget || ev.target)) || document.body
+        );
+        if (ev && ev.preventDefault) ev.preventDefault();
+        return false;
+      } catch (e) {
+        return true; // FINAL fallback: let the <a href="/node/<id>"> navigate
+      }
+    };
   </script>
   <script defer>
     // Toast bus + localStorage-backed notification history.
@@ -1113,6 +1235,29 @@
     .mnem-bubble-x { background: none; border: 0; color: var(--fg-dim);
       cursor: pointer; font-weight: 700; font-size: 1rem; line-height: 1; }
     .mnem-bubble-x:hover { color: var(--fg); }
+
+    /* v3.2: shared inline cite popover (context-aware [mnemo:id]) --
+       a node preview in place instead of a blind redirect. */
+    .mnemo-cite-pop { position: fixed; z-index: 70; display: none;
+      max-height: min(60vh, 420px); overflow: auto;
+      background: var(--panel); color: var(--fg);
+      border: 1px solid var(--accent); border-radius: var(--radius-lg);
+      box-shadow: var(--shadow); font-size: .82rem; }
+    .mnemo-cite-pop .ccp-head { display: flex; align-items: center;
+      gap: .5rem; padding: .5rem .65rem; position: sticky; top: 0;
+      background: var(--panel);
+      border-bottom: 1px solid var(--border, #2a3140); }
+    .mnemo-cite-pop .ccp-id { font-weight: 600; flex: 1; min-width: 0;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      font-family: var(--mono, monospace); font-size: .78rem; }
+    .mnemo-cite-pop .ccp-open { color: var(--accent);
+      text-decoration: none; white-space: nowrap; }
+    .mnemo-cite-pop .ccp-open:hover { text-decoration: underline; }
+    .mnemo-cite-pop .ccp-x { background: none; border: 0; color: var(--fg-dim);
+      cursor: pointer; font-size: 1rem; line-height: 1; }
+    .mnemo-cite-pop .ccp-x:hover { color: var(--fg); }
+    .mnemo-cite-pop .ccp-body { padding: .65rem .8rem; line-height: 1.5; }
+    .mnemo-cite-pop .ccp-body pre { white-space: pre-wrap; word-break: break-word; }
   </style>
 
   <!-- Modal -->
