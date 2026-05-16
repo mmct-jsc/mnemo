@@ -123,3 +123,30 @@ def test_existing_retrieval_settings_still_renders(client: TestClient) -> None:
     r = client.get("/settings")
     assert r.status_code == 200
     assert "Retrieval settings" in r.text
+
+
+def test_settings_out_includes_key_tier(client: TestClient) -> None:
+    """C4 (v4.2): every per-provider object carries a read-only
+    key-resolution tier (or null) -- never the secret."""
+    r = client.get("/v1/settings")
+    assert r.status_code == 200
+    prov = r.json()["providers"]
+    assert prov  # non-empty
+    for _name, p in prov.items():
+        assert "key_tier" in p
+        assert p["key_tier"] in (None, "env", "dotenv", "keychain", "file")
+
+
+def test_delete_provider_key_endpoint(client: TestClient, monkeypatch) -> None:
+    """C4 (v4.2): DELETE removes the stored key and returns SettingsOut
+    (same shape as POST)."""
+    from mnemo import keys
+
+    called: dict = {}
+    monkeypatch.setattr(keys, "delete_api_key", lambda n: called.setdefault("n", n))
+    r = client.delete("/v1/settings/providers/openai/key")
+    assert r.status_code == 200
+    assert called["n"] == "openai"
+    body = r.json()
+    assert "providers" in body
+    assert "default_provider" in body
