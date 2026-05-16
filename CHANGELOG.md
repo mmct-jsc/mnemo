@@ -2,6 +2,72 @@
 
 All notable changes to mnemo are documented here.
 
+## [3.1.0] - 2026-05-16
+
+**Mnem becomes a real companion.** v3.1 closes every gap from the
+live review of v3.0 (`docs/plans/2026-05-15-mnemo-v3.1-companion-design.md`).
+
+- **One chat component, two surfaces.** The `/chat` page and the
+  companion dock now share a single `mnemoChat()` factory
+  (`static/chat.js`) -- no duplicated logic. The dock is a full,
+  draggable, edge-snapping mini-chat (compose + stream + tool chips +
+  inline permission), hidden on `/chat`, position persisted in
+  `localStorage`.
+- **Claude-grade streaming + rendering.** SSE text is word-smoothed
+  through `mnemoStreamText` with a real "working" animation; the
+  thread is a fixed bottom-pinned viewport that lazy-loads older turns
+  on scroll-up. Assistant messages and cited-node previews render
+  through the real marked + DOMPurify pipeline (headings / lists /
+  tables / fenced code), not a toy parser.
+- **Hybrid conversation compaction.** Anthropic compaction-capable
+  models use the `compact-2026-01-12` beta (full content preserved);
+  every other provider/model summarizes the oldest turns into a
+  pinned context message. Model context is bounded by compaction; UI
+  history is paginated separately.
+- **Token + bookmark surfaces.** Providers surface per-turn token
+  usage; a running budget bar (vs the per-provider cap) + per-turn
+  counts; server-persisted bookmarks with a star per turn and a
+  jump strip. New paginated `GET /v1/chat/<id>/messages` +
+  `/v1/chat/<id>/bookmarks` CRUD.
+- **Agent can use skills.** `mnemo_list_skills` / `mnemo_run_skill`
+  load a `skills/<name>/SKILL.md` guide into the run.
+- **Branding.** New simplified Mnem mark as the favicon + nav logo.
+- **Fixes from the live review:** invalid-XML SVG comment (blank
+  logo), native image drag-and-drop hijacking the dock drag, the
+  stalling cited-node preview, and asset cache-busting so every
+  static fix actually reaches browsers on the version change.
+
+## [3.0.0] - 2026-05-15
+
+**Mnem - the agentic companion.** v3 turns mnemo into an agent with
+tools over its own memory + code graph, not a pre-canned RAG box.
+
+- **Agent loop + 4 providers** behind one abstraction (Anthropic,
+  OpenAI, Google, Ollama) with a shared `(text_delta|tool_call|stop)`
+  event contract. BYO API keys: env var > repo `.env` > OS keychain >
+  plaintext 0600 fallback (never in `settings.json`).
+- **Tool surface, two consumers.** One `agent_tools.TOOLS` registry
+  feeds the internal loop and an MCP server (`mnemo mcp`, stdio) so
+  Cursor / Claude Desktop / Codex / Windsurf get mnemo for free. 6
+  safe read tools + 9 write/danger tools + 5 client-side UI
+  directives, each risk-tagged.
+- **Permission protocol.** `confirm`/`danger` tools emit a
+  `permission_request`; the loop pauses on `POST /v1/chat/<id>/permit`;
+  `allow_always` persists per-project to `chat_permissions`. `danger`
+  never offers always.
+- **Conversations are first-class** SQLite rows (`chat_conversations`
+  / `chat_messages` / `chat_permissions`); 9 `/v1/chat/*` REST
+  endpoints + an SSE event stream.
+- **/chat page** (3-column shell + streaming + citation panel),
+  **Mnem companion dock** on every page (5 CSS mood states, opt-in
+  proactive nudges), **doc-helper** (` ```mnemo-draft ` fences ->
+  one-click Save as memory) + the `mnemo:doc` skill, **companion
+  settings** at `/settings/chat` (the v1.2 retrieval-tuning
+  `/settings` page is untouched).
+
+12 phases, ~140 new unit tests, full suite green; live-smoked against
+a real Anthropic key.
+
 ## [2.6.0] - 2026-05-14
 
 **Workspaces + indexing safeguards.** Named workspaces replace the

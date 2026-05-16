@@ -70,6 +70,30 @@ class Config:
     # are too noisy. 30 is the design-doc default; users can lower it
     # for tighter feedback loops at the cost of overfit risk.
     retune_min_queries: int = 30
+    # v3 phase 7: chat companion settings (design S7). Secrets are NOT
+    # here -- API keys live in the OS keychain (mnemo.keys). Only
+    # non-secret provider prefs (default + per-provider model) +
+    # Mnem personality + history retention persist in settings.json.
+    default_provider: str = "anthropic"
+    providers: dict = field(
+        default_factory=lambda: {
+            "anthropic": {"model": "claude-sonnet-4-5-20250929"},
+            "openai": {"model": "gpt-4o-mini"},
+            "google": {"model": "gemini-2.5-flash"},
+            "ollama": {"model": "llama3.1:8b"},
+        }
+    )
+    companion: dict = field(
+        default_factory=lambda: {
+            "name": "Mnem",
+            "tone": "casual",
+            "dock_state": "closed",
+            "proactive": True,
+            "proactive_pages": ["nebula", "node"],
+            "proactive_frequency": "normal",
+        }
+    )
+    chat_history_retention_days: int | None = None
 
 
 # --- Load / save ----------------------------------------------------------
@@ -123,6 +147,10 @@ def save(cfg: Config) -> None:
         "mmr_lambda": cfg.mmr_lambda,
         "retune_min_queries": cfg.retune_min_queries,
         "project_isolation_mode": cfg.project_isolation_mode,
+        "default_provider": cfg.default_provider,
+        "providers": cfg.providers,
+        "companion": cfg.companion,
+        "chat_history_retention_days": cfg.chat_history_retention_days,
     }
     with _lock:
         p.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
@@ -179,3 +207,32 @@ def _apply(cfg: Config, raw: dict) -> None:
         cfg.mmr_lambda = max(0.0, min(1.0, float(raw["mmr_lambda"])))
     if isinstance(raw.get("retune_min_queries"), int):
         cfg.retune_min_queries = max(1, int(raw["retune_min_queries"]))
+    # v3 phase 7 sections.
+    if isinstance(raw.get("default_provider"), str):
+        cfg.default_provider = raw["default_provider"].strip().lower()
+    if isinstance(raw.get("providers"), dict):
+        for name, pcfg in raw["providers"].items():
+            if isinstance(pcfg, dict):
+                slot = cfg.providers.setdefault(name, {})
+                # Only the non-secret 'model' is persisted; a stray
+                # 'key' (from the providers POST body) is dropped here.
+                if isinstance(pcfg.get("model"), str):
+                    slot["model"] = pcfg["model"]
+    if isinstance(raw.get("companion"), dict):
+        comp = raw["companion"]
+        if isinstance(comp.get("name"), str):
+            cfg.companion["name"] = comp["name"]
+        if comp.get("tone") in ("formal", "casual", "quirky"):
+            cfg.companion["tone"] = comp["tone"]
+        if comp.get("dock_state") in ("closed", "docked-open", "pinned"):
+            cfg.companion["dock_state"] = comp["dock_state"]
+        if isinstance(comp.get("proactive"), bool):
+            cfg.companion["proactive"] = comp["proactive"]
+        if isinstance(comp.get("proactive_pages"), list):
+            cfg.companion["proactive_pages"] = [str(x) for x in comp["proactive_pages"]]
+        if comp.get("proactive_frequency") in ("minimal", "normal", "chatty"):
+            cfg.companion["proactive_frequency"] = comp["proactive_frequency"]
+    if "chat_history_retention_days" in raw:
+        rd = raw["chat_history_retention_days"]
+        if rd is None or isinstance(rd, int):
+            cfg.chat_history_retention_days = rd
