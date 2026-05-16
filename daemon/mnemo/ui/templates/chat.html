@@ -32,12 +32,7 @@
     </div>
 
     <!-- slim bookmark jump strip (left gutter / minimap) -->
-    <div class="bm-strip" x-show="bookmarks.length" x-cloak>
-      <template x-for="b in bookmarks" :key="b.id">
-        <button class="bm-tick" @click="jumpTo(b.message_seq)"
-                :title="b.label || ('message ' + b.message_seq)"></button>
-      </template>
-    </div>
+    {% with surface = 'page', bm = 'strip' %}{% include "_chat_bookmarks.html" %}{% endwith %}
 
     <div class="thread-scroll" x-ref="log" @scroll.passive="onScroll()">
       <div class="thread-col">
@@ -71,10 +66,7 @@
             <!-- per-turn meta: bookmark star + token usage -->
             <template x-if="m.seq !== undefined && (m.role === 'user' || m.role === 'assistant')">
               <div class="turn-meta">
-                <button class="bm-star" :class="{ on: isBookmarked(m.seq) }"
-                        @click="toggleBookmark(m.seq)"
-                        :aria-label="isBookmarked(m.seq) ? 'remove bookmark' : 'bookmark'"
-                        x-text="isBookmarked(m.seq) ? '★' : '☆'"></button>
+                {% with surface = 'page', bm = 'star' %}{% include "_chat_bookmarks.html" %}{% endwith %}
                 <span class="turn-tok" x-show="m.token_out" x-cloak
                       x-text="(m.token_in || 0) + '→' + (m.token_out || 0) + ' tok'"></span>
               </div>

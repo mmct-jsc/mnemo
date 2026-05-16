@@ -800,6 +800,8 @@
          only lacked the rendering). #}
       {% with surface = 'dock' %}{% include "_chat_rail.html" %}{% endwith %}
       <div class="mc-thread" x-ref="log" @scroll.passive="onScroll()">
+        {# C3 (v4.3): dock bookmark parity via the SHARED partial. #}
+        {% with surface = 'dock', bm = 'strip' %}{% include "_chat_bookmarks.html" %}{% endwith %}
         <div class="mc-col">
           <div class="load-older" x-ref="topSentinel" :class="{ on: hasMore }">
             <template x-if="hasMore"><span class="lo-pill">earlier messages</span></template>
@@ -826,6 +828,11 @@
               </template>
               <template x-if="m.role === 'tool_call'">
                 <div class="mc-tool" x-text="'⚙ ' + (m.content.name || 'tool')"></div>
+              </template>
+              <template x-if="m.seq !== undefined && (m.role === 'user' || m.role === 'assistant')">
+                <div class="mc-turn-meta">
+                  {% with surface = 'dock', bm = 'star' %}{% include "_chat_bookmarks.html" %}{% endwith %}
+                </div>
               </template>
             </div>
           </template>
