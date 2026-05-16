@@ -206,7 +206,7 @@
 <style>
   /* ---- mnemo v3 chat : "knowledge terminal", Claude-grade ---- */
   .mn { display: grid; grid-template-columns: 252px minmax(0,1fr) 280px;
-    height: calc(100vh - 116px); background:
+    height: calc(100dvh - 116px); min-height: 0; background:
       radial-gradient(80% 60% at 50% -10%, rgba(126,231,224,.05), transparent 60%),
       var(--bg); }
   .mn [x-cloak] { display: none !important; }
@@ -242,8 +242,19 @@
 
   /* thread */
   .chat-thread { display: flex; flex-direction: column; min-width: 0;
-    position: relative; }
-  .thread-scroll { flex: 1; overflow-y: auto; scroll-behavior: smooth; }
+    min-height: 0; position: relative; }
+  /* flex:1 1 0 + min-height:0 = the canonical bounded-scroller fix:
+     without it the scroller grows to its content and shoves the
+     composer off the bottom (and there is no internal scroll, so the
+     latest message is unreachable and scroll() no-ops). */
+  /* NO scroll-behavior:smooth here -- it animates EVERY programmatic
+     scrollTop, and the pin fires multiple times (nextTick + rAF +
+     timeout + reactive re-renders) so the smooth animations stomp
+     each other and never reach the bottom (the "doesn't go to the
+     last message" bug). The JS opts into smooth explicitly via
+     scrollTo({behavior:'smooth'}) only for live-follow; the
+     open/pin must be instant. */
+  .thread-scroll { flex: 1 1 0; min-height: 0; overflow-y: auto; }
   .thread-col { max-width: 46rem; margin: 0 auto; padding: 2rem 1.5rem 1rem;
     display: flex; flex-direction: column; gap: 1.5rem; }
   .turn { animation: turn-in .32s cubic-bezier(.2,.7,.3,1) both; }
