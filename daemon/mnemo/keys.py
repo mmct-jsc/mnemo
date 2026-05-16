@@ -24,12 +24,12 @@ import os
 from pathlib import Path
 
 from mnemo import paths
+from mnemo.providers import PROVIDERS
 
-ENV_VAR: dict[str, str] = {
-    "anthropic": "ANTHROPIC_API_KEY",
-    "openai": "OPENAI_API_KEY",
-    "google": "GOOGLE_API_KEY",
-}
+# C2 (v4.1): single-sourced from the provider registry (was a
+# hand-maintained literal). Providers with no env var (Ollama) are
+# absent, exactly as before.
+ENV_VAR: dict[str, str] = {n: d.env_var for n, d in PROVIDERS.items() if d.env_var}
 
 
 class KeyResolutionError(RuntimeError):

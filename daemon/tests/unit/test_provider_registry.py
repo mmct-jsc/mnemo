@@ -106,3 +106,44 @@ def test_get_provider_and_default_models_derive_from_registry() -> None:
     # message shape preserved for test_get_provider_unknown_raises:
     with pytest.raises(ValueError, match="unknown provider"):
         get_provider("nope-not-real")
+
+
+def test_keys_config_compaction_are_single_sourced_from_registry() -> None:
+    from mnemo import compaction, keys
+    from mnemo.config import Config
+
+    for n, d in PROVIDERS.items():
+        if d.env_var:
+            assert keys.ENV_VAR[n] == d.env_var
+    assert "ollama" not in keys.ENV_VAR  # no env var -> not in the map
+
+    cfg = Config()
+    assert set(cfg.providers) == set(PROVIDERS)
+    for n, d in PROVIDERS.items():
+        assert cfg.providers[n]["model"] == d.default_model
+
+    assert compaction.supports_native_compaction("anthropic", "claude-sonnet-4-6") is True
+    assert compaction.supports_native_compaction("anthropic", "claude-sonnet-4-5-20250929") is False
+    assert compaction.supports_native_compaction("openai", "gpt-4o-mini") is False
+    assert compaction.supports_native_compaction("nope", "x") is False
+
+
+def test_no_duplicate_capability_tables() -> None:
+    """The 4 scattered hand-maintained tables are gone; PROVIDERS is the
+    only source (this is the contract's teeth -- proves single-sourcing,
+    not value coincidence)."""
+    from pathlib import Path
+
+    src = Path(__file__).resolve().parents[2]  # daemon/
+    keys_txt = (src / "mnemo" / "keys.py").read_text(encoding="utf-8")
+    comp_txt = (src / "mnemo" / "compaction.py").read_text(encoding="utf-8")
+    cfg_txt = (src / "mnemo" / "config.py").read_text(encoding="utf-8")
+
+    assert "PROVIDERS" in keys_txt
+    assert '"OPENAI_API_KEY"' not in keys_txt, "keys.ENV_VAR must derive from PROVIDERS"
+    assert "PROVIDERS" in comp_txt
+    assert "claude-opus-4-7" not in comp_txt, (
+        "compaction must derive native_compaction_models from PROVIDERS"
+    )
+    assert "PROVIDERS" in cfg_txt
+    assert '"gpt-4o-mini"' not in cfg_txt, "Config.providers default must derive from PROVIDERS"
