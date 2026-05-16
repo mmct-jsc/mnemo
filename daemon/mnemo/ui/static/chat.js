@@ -674,9 +674,23 @@
           var d = JSON.parse(e.data);
           var a = d.args || {};
           if (d.action === 'navigate' && a.path) {
-            setTimeout(function () {
-              window.location.href = a.path;
-            }, 600);
+            var here = (location.pathname.replace(/\/+$/, '') || '/');
+            var dest =
+              (String(a.path).split('?')[0].split('#')[0].replace(/\/+$/, '') ||
+                '/');
+            if (dest === here) {
+              // ALREADY on the target -- do NOT reload. A full page
+              // load kills this dock's SSE + the in-flight agent loop,
+              // so the follow-up in-page tools (session_nodes /
+              // highlight) never ran ("stuck after navigate"). Staying
+              // put lets the run continue in-page.
+              if (window.toast) window.toast('Mnem: already on ' + here, 'info');
+            } else {
+              if (window.toast) window.toast('Mnem: opening ' + dest, 'info');
+              setTimeout(function () {
+                window.location.href = a.path;
+              }, 600);
+            }
           } else if (d.action === 'select_node') {
             document.dispatchEvent(
               new CustomEvent('mnemo-select-node', { detail: a })
