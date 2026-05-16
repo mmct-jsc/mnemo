@@ -683,6 +683,59 @@ def _mnemo_reindex_source(ctx: ToolContext, *, source_path: str | None = None) -
     }
 
 
+# --- 9. mnemo_apply_retune (v3.2) ---------------------------------------
+#
+# The Settings retune assistant's apply step. Scoped to ONLY the 6
+# scoring weights -> a bounded, recoverable CONFIRM surface (config can
+# be reset / re-applied), deliberately NOT the danger
+# mnemo_change_settings catch-all. Returns before/after so the page can
+# validate (design v3.2 S3.5).
+
+_RETUNE_KEYS = ("alpha", "beta", "gamma", "delta", "epsilon", "zeta")
+
+
+@_tool(
+    name="mnemo_apply_retune",
+    risk=RISK_CONFIRM,
+    description=(
+        "Apply retrieval scoring-weight deltas (alpha/beta/gamma/delta/"
+        "epsilon/zeta) to the live config -- the Settings retune "
+        "assistant's apply step. Bounded + recoverable. Returns the "
+        "before/after so the page can validate."
+    ),
+    parameters=_obj(
+        {
+            "weights": {
+                "type": "object",
+                "description": "subset of alpha/beta/gamma/delta/epsilon/zeta -> float",
+            }
+        },
+        ["weights"],
+    ),
+)
+def _mnemo_apply_retune(ctx: ToolContext, *, weights: dict) -> dict:
+    cur = config.load().scoring
+    before = {k: getattr(cur, k) for k in _RETUNE_KEYS}
+    valid: dict[str, float] = {}
+    ignored: list[str] = []
+    for k, v in (weights or {}).items():
+        if k in _RETUNE_KEYS and isinstance(v, int | float) and not isinstance(v, bool):
+            valid[k] = float(v)
+        else:
+            ignored.append(k)
+    if valid:
+        config.update({"scoring": valid})
+    after_sc = config.load().scoring
+    after = {k: getattr(after_sc, k) for k in _RETUNE_KEYS}
+    return {
+        "ok": True,
+        "before": before,
+        "after": after,
+        "applied": sorted(valid.keys()),
+        "ignored": ignored,
+    }
+
+
 # --- danger tools (always prompt, no allow-always) ----------------------
 
 
