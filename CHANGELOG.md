@@ -2,6 +2,50 @@
 
 All notable changes to mnemo are documented here.
 
+## [3.2.0] - 2026-05-16
+
+**Two critical fixes + the companion's page-aware tools.** v3.2 began
+as "the agentic page companion"; a long live review uncovered two
+serious pre-existing defects this release now fixes.
+
+- **FIX: the broken Nebula is restored.** `main` (and the published
+  v3.1.0) shipped the **v2.6.8 perfectionize renderer**, which froze
+  on init (no motion, wrong placement, pegged the CPU). The documented
+  v2.6.6 revert (`a341c89`) had **never merged to main** (PR #53 was an
+  empty no-op). v3.2.0 restores the kept-good v2.6.6 nebula verbatim
+  (`graph.html` @ `8caf257`) -- live-verified: 11k nodes in perpetual
+  organic motion, no freeze. A livelier/agentic nebula is deferred to a
+  future renderer swap (never via cosmos config/wiring -- a documented
+  ceiling, reference_cosmos_gl_nebula.md).
+- **FIX: the daemon can be stopped again.** The pid file was a single
+  shared path regardless of port, and `remove_pid_file()` unlinked
+  unconditionally -- a second daemon (e.g. a preview on :7399) exiting
+  orphaned the live one, so `mnemo daemon stop/status/restart` went
+  blind and a stale process kept serving old code. The pid file is now
+  **port-scoped** (`mnemo-<port>.pid`) and removal is **ownership-
+  guarded**; `status`/`stop`/`restart` gained `--port`.
+- **Live page-context.** New safe `mnemo_page_context` tool +
+  `window.mnemoPageContext()` (base default `{page,path}`; Settings /
+  node-detail overrides carry weights/k / selected node). `mnemoChat()`
+  PATCHes it onto the conversation before every run so the companion
+  grounds on the current screen. (The Nebula override was reverted with
+  the renderer -- it never touches cosmos.)
+- **Context-aware citations.** Inline `[mnemo:id]` is no longer a blind
+  redirect: `window.mnemoCite`/`mnemoCitePopover` (base.html) render a
+  shared inline node preview via the existing marked/Prism pipeline;
+  full-page `/node/<id>` is the last-resort fallback only.
+- **Session + retune tools.** Safe `mnemo_session_nodes` (the
+  conversation's cited/used nodes + 1-hop neighbours) and confirm
+  `mnemo_highlight_nodes` / `mnemo_apply_retune` (bounded, recoverable
+  scoring-weight apply with a Settings before/after validate). These
+  are server-side tools; none touch the cosmos renderer.
+- **Dock + navigate fixes.** The dock user bubble no longer renders as
+  a giant box wrapping the real one (the turn wrapper's role class
+  collided with `.mc-user`). `mnemo_navigate` no longer hard-reloads
+  when you're already on the target page (which killed the dock SSE +
+  the in-flight run); the model is guided to prefer in-page tools and
+  treat navigate as terminal.
+
 ## [3.1.0] - 2026-05-16
 
 **Mnem becomes a real companion.** v3.1 closes every gap from the
