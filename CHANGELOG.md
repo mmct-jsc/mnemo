@@ -57,6 +57,17 @@ serious pre-existing defects this release now fixes.
   pill, a proper circular icon **send** button (the dock's bare `→` is
   gone), and long-text hardening so a long message never smears
   horizontally.
+- **Chat UX refinement (Claude-grade).** The thread is now
+  **bottom-anchored** -- a short conversation sits just above the
+  composer instead of pinned at the top with a huge empty void.
+  **Delete a conversation** (rail) and **start a new one from the
+  dock** header. `mnemo_navigate` opens the target in a **new tab** so
+  "show me in nebula" no longer drops the connection mid-answer. Inline
+  `[mnemo:id]` on `/chat` uses the existing citation **side panel**
+  (no floating popover overlapping the thread). `scrollbar-gutter:
+  stable` stops the "Latest" pill/content jittering on scroll; the send
+  icon is truly centred; the thinking indicator fades in/out instead of
+  popping; the Nebula close button + citation-panel typography refined.
 
 ## [3.1.0] - 2026-05-16
 

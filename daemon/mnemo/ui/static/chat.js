@@ -181,6 +181,40 @@
           });
       },
 
+      // v3.2: delete (archive) a conversation. If it was the active
+      // one, fall back to the newest remaining (or a fresh chat).
+      deleteConversation: function (id, ev) {
+        var self = this;
+        if (ev && ev.stopPropagation) ev.stopPropagation();
+        if (!id) return Promise.resolve();
+        return fetch('/v1/chat/' + id, { method: 'DELETE' })
+          .then(function () {
+            return self.loadConversations();
+          })
+          .then(function () {
+            if (self.activeId !== id) return;
+            self.activeId = null;
+            self.messages = [];
+            if (self.conversations.length) {
+              self.openConversation(self.conversations[0].id);
+            } else {
+              self.error = null;
+              self.showJump = false;
+            }
+          })
+          .catch(function () {
+            if (window.toast) window.toast('Could not delete chat', 'error');
+          });
+      },
+
+      // v3.2: inline [mnemo:id] click on a surface that HAS the
+      // citation side-panel (the /chat page) -> use it (no floating
+      // popover overlapping the thread). window.mnemoCite (base.html)
+      // dispatches mnemo-cite only when .cite-preview exists.
+      onCiteEvent: function (id) {
+        if (id) this.previewNode(id);
+      },
+
       openConversation: function (id) {
         var self = this;
         // keep the error banner across the post-error reload (same
@@ -758,16 +792,16 @@
                 '/');
             if (dest === here) {
               // ALREADY on the target -- do NOT reload. A full page
-              // load kills this dock's SSE + the in-flight agent loop,
-              // so the follow-up in-page tools (session_nodes /
-              // highlight) never ran ("stuck after navigate"). Staying
-              // put lets the run continue in-page.
+              // load kills this dock's SSE + the in-flight agent loop.
               if (window.toast) window.toast('Mnem: already on ' + here, 'info');
             } else {
-              if (window.toast) window.toast('Mnem: opening ' + dest, 'info');
-              setTimeout(function () {
-                window.location.href = a.path;
-              }, 600);
+              // A DIFFERENT page: open in a NEW TAB. location.href would
+              // tear down this dock's SSE + abandon the running agent
+              // loop server-side ("The connection dropped" mid-answer,
+              // e.g. 'show me in nebula'). A new tab keeps the
+              // conversation alive AND takes the user where they asked.
+              if (window.toast) window.toast('Mnem opened ' + dest + ' in a new tab', 'info');
+              window.open(a.path, '_blank', 'noopener');
             }
           } else if (d.action === 'select_node') {
             document.dispatchEvent(
