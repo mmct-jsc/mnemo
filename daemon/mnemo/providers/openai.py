@@ -16,9 +16,11 @@ from mnemo.providers import (
     EV_TEXT,
     EV_TOOL_CALL,
     BaseProvider,
+    ProviderDescriptor,
     ProviderError,
     ProviderEvent,
     _usage_event,
+    register_provider,
 )
 
 _STOP_MAP = {"tool_calls": "tool_use", "stop": "end_turn", "length": "max_tokens"}
@@ -165,3 +167,19 @@ class OpenAIProvider(BaseProvider):
             if ev is not None:
                 yield ev
         yield (EV_STOP, stop)
+
+
+# C2 (v4.1): self-register (mirrors agent_tools tool registration).
+register_provider(
+    ProviderDescriptor(
+        name="openai",
+        display_name="OpenAI",
+        impl_class=OpenAIProvider,
+        env_var="OPENAI_API_KEY",
+        requires_key=True,
+        default_model="gpt-4o-mini",  # UNCHANGED (DEFAULT_MODELS)
+        known_models=("gpt-4o-mini", "gpt-4o", "gpt-4.1", "o3-mini"),
+        base_url=None,
+        native_compaction_models=frozenset(),
+    )
+)

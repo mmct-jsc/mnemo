@@ -165,3 +165,15 @@ def get_provider(
 
         return OllamaProvider(api_key=api_key, base_url=base_url)
     raise ValueError(f"unknown provider: {name!r}")
+
+
+# C2 (v4.1): import the concrete modules LAST so their
+# register_provider(...) calls run on `import mnemo.providers`.
+# Registry/registrar/descriptor/BaseProvider are all defined ABOVE, so
+# each module's `from mnemo.providers import ...` resolves against the
+# partially-initialized module (standard register-at-bottom pattern;
+# avoids a circular import).
+from mnemo.providers import anthropic as _anthropic  # noqa: E402,F401
+from mnemo.providers import google as _google  # noqa: E402,F401
+from mnemo.providers import ollama as _ollama  # noqa: E402,F401
+from mnemo.providers import openai as _openai  # noqa: E402,F401

@@ -42,3 +42,29 @@ def test_register_provider_stores_and_rejects_dupes() -> None:
     with pytest.raises(ValueError, match="duplicate provider registration"):
         register_provider(desc)
     del PROVIDERS["dupe-probe"]  # keep global registry clean for other tests
+
+
+def test_all_four_providers_registered_with_correct_fields() -> None:
+    import mnemo.providers  # noqa: F401  (triggers bottom-of-__init__ imports)
+
+    assert {"anthropic", "openai", "google", "ollama"} <= set(PROVIDERS)
+
+    a = PROVIDERS["anthropic"]
+    assert a.env_var == "ANTHROPIC_API_KEY"
+    assert a.requires_key is True
+    assert a.default_model == "claude-sonnet-4-5-20250929"  # UNCHANGED
+    assert {
+        "claude-opus-4-7",
+        "claude-opus-4-6",
+        "claude-sonnet-4-6",
+    } <= a.native_compaction_models
+
+    o = PROVIDERS["ollama"]
+    assert o.env_var is None  # ollama needs no key
+    assert o.requires_key is False
+    assert o.native_compaction_models == frozenset()
+
+    for name in ("openai", "google"):
+        assert PROVIDERS[name].requires_key is True
+        assert PROVIDERS[name].env_var is not None
+        assert PROVIDERS[name].default_model  # non-empty, preserves DEFAULT_MODELS

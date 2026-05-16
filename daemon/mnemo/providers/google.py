@@ -16,9 +16,11 @@ from mnemo.providers import (
     EV_TEXT,
     EV_TOOL_CALL,
     BaseProvider,
+    ProviderDescriptor,
     ProviderError,
     ProviderEvent,
     _usage_event,
+    register_provider,
 )
 
 
@@ -147,3 +149,19 @@ class GoogleProvider(BaseProvider):
             if ev is not None:
                 yield ev
         yield (EV_STOP, "tool_use" if saw_tool else "end_turn")
+
+
+# C2 (v4.1): self-register (mirrors agent_tools tool registration).
+register_provider(
+    ProviderDescriptor(
+        name="google",
+        display_name="Google (Gemini)",
+        impl_class=GoogleProvider,
+        env_var="GOOGLE_API_KEY",
+        requires_key=True,
+        default_model="gemini-2.5-flash",  # UNCHANGED (DEFAULT_MODELS)
+        known_models=("gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"),
+        base_url=None,
+        native_compaction_models=frozenset(),
+    )
+)
