@@ -821,12 +821,17 @@ function nebula() {
       // The old single faint teal default made edges "barely seen".
       const linkColors = new Float32Array(linkCount * 4);
       const linkColorsOff = new Float32Array(linkCount * 4);
+      // live-review: 0.78 was a bright hairball when zoomed into a
+      // 15k-link graph (lovely zoomed out, a mess zoomed in). A soft
+      // alpha keeps the web readable at every zoom; the selection
+      // greyout still makes the focused subgraph pop (focus/navigate).
+      const LINK_ALPHA = 0.30;
       for (let i = 0; i < linkCount; i++) {
         const rgba = this._hexToRGBA(REL_COLORS[linkRels[i]] || '#8aa6c8');
         linkColors[i * 4]     = rgba[0];
         linkColors[i * 4 + 1] = rgba[1];
         linkColors[i * 4 + 2] = rgba[2];
-        linkColors[i * 4 + 3] = 0.78;  // visible but not overpowering
+        linkColors[i * 4 + 3] = LINK_ALPHA;  // soft but visible
         // v2.6.4: the "edges off" state is the SAME buffer with
         // alpha 0. toggleEdges swaps between these via
         // setLinkColors -- a pure paint change, NO setConfig (which
@@ -947,9 +952,9 @@ function nebula() {
         // these globals are the floor. Brighter + wider so the web
         // is actually visible (the old 0.11-alpha hairline was
         // "barely seen").
-        linkColor: 'rgba(150, 180, 220, 0.45)',
-        linkOpacity: 0.9,
-        linkWidth: 1.6,
+        linkColor: 'rgba(150, 180, 220, 0.20)',
+        linkOpacity: 0.55,
+        linkWidth: 1.0,
         linkWidthScale: 1.0,
         linkArrows: false,
         curvedLinks: true,
@@ -963,7 +968,10 @@ function nebula() {
         // link width with zoom so they stay proportional to nodes.
         linkVisibilityDistanceRange: [1, 1000000],
         linkVisibilityMinTransparency: 0.9,
-        scaleLinksOnZoom: true,
+        // live-review: scaling links with zoom FATTENED them on
+        // zoom-in -> the dominant "mess when zoomed in". Keep links a
+        // constant thin width at every zoom (soft, never a smear).
+        scaleLinksOnZoom: false,
         renderHoveredPointRing: true,
         hoveredPointRingColor: '#7ee7e0',
         focusedPointRingColor: '#7ee7e0',
