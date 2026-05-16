@@ -190,8 +190,16 @@
         // thread + composer (live-review: "the node model does not
         // display properly"). The dock has no panel -> popover.
         if (document.querySelector('.cite-preview')) {
+          // bubbles:true so it reaches an Alpine @mnemo-cite listener
+          // wherever it's bound (a non-bubbling document event never
+          // reaches a window/ancestor listener -> the click did
+          // nothing; the prior live test falsely passed on a manual
+          // document listener).
           document.dispatchEvent(
-            new CustomEvent('mnemo-cite', { detail: { node_id: id } })
+            new CustomEvent('mnemo-cite', {
+              detail: { node_id: id },
+              bubbles: true,
+            })
           );
         } else {
           window.mnemoCitePopover(

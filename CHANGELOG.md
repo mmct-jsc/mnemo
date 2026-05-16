@@ -68,6 +68,22 @@ serious pre-existing defects this release now fixes.
   stable` stops the "Latest" pill/content jittering on scroll; the send
   icon is truly centred; the thinking indicator fades in/out instead of
   popping; the Nebula close button + citation-panel typography refined.
+- **Chat UX hardening (live-verified).** Fixed a regression where
+  clicking an inline `[mnemo:id]` did nothing: the `mnemo-cite`
+  CustomEvent is dispatched on `document` but was listened for on
+  `window` (a non-bubbling document event never reaches a window
+  listener) -- now `bubbles:true` + an `@mnemo-cite.document` listener.
+  This also restored code/other-type citation previews (the renderer
+  was fine; the click never reached it). `/chat` is now a true
+  **single window** (page-scoped `html,body` overflow lock + the
+  correct 64px topbar offset -- the old calc used a wrong 116px, which
+  was the void/scroll; not `position:fixed`, which a base.html
+  ancestor transform broke). The Mnem side now shares **one consistent
+  left gutter** -- assistant prose, tool calls, and tool results align
+  to the exact same x (was ~11px off). Verified end-to-end via the
+  preview with a real Anthropic turn: "show me in nebula" opens
+  `/graph` in a new tab with the conversation intact (no "connection
+  dropped").
 
 ## [3.1.0] - 2026-05-16
 
