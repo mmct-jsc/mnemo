@@ -2,6 +2,42 @@
 
 All notable changes to mnemo are documented here.
 
+## [4.1.0] - 2026-05-17
+
+**C2 Provider Contract (registry).** Second of the v4.x contract
+refactor. **Behaviour-preserving** -- every existing provider /
+compaction / keys / config test passes unchanged; no model default
+changed. Adding a provider is now **one `register_provider(...)` call
++ one `stream()` impl class** instead of editing 5 files.
+
+### Added
+- `ProviderDescriptor` dataclass + `PROVIDERS` registry +
+  `register_provider()` in `mnemo.providers`, mirroring
+  `agent_tools.ToolSpec`/`TOOLS`/`_register` exactly (validating
+  registrar, raises on duplicate).
+- The four providers (anthropic/openai/google/ollama) self-register
+  their descriptors at import (register-at-bottom pattern; no circular
+  import).
+- `GET /v1/providers` exposes the registry (name, display_name,
+  env_var, requires_key, default_model, known_models,
+  supports_compaction_models) -- no key material. Feeds the C4
+  settings UI (v4.2).
+
+### Changed
+- `get_provider` derives from `PROVIDERS` (was a hand-edited if/elif
+  chain) -- a runtime-registered provider is now constructible.
+- `DEFAULT_MODELS`, `keys.ENV_VAR`, `Config.providers` default, and
+  `compaction.supports_native_compaction` all DERIVE from the
+  registry; the 4 scattered hand-maintained capability tables
+  (including `compaction.NATIVE_COMPACTION`) are gone.
+
+### Tests
+- New `test_provider_registry.py` (6) + `test_api_providers.py` (1),
+  including a `test_no_duplicate_capability_tables` static guard (the
+  contract's teeth -- proves single-sourcing, not value coincidence).
+  Full suite 1171 pass / 2 skip, ruff clean. Every pre-existing
+  provider/compaction/keys/config test green UNMODIFIED.
+
 ## [4.0.0] - 2026-05-17
 
 **C1 Design-System / Page-Shell contract.** First of the v4.x
