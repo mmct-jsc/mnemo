@@ -2,6 +2,51 @@
 
 All notable changes to mnemo are documented here.
 
+## [4.3.0] - 2026-05-17
+
+**C3 Chat Surface contract + the feature backlog.** Final v4.x
+contract. The chat page and the companion dock now render from ONE
+declared capability matrix + four shared Jinja partials -- a
+capability is written once and a surface opts in, instead of being
+re-implemented or silently missing. Closes the v4.x contract-pattern
+refactor (C1 design-system, C2 provider registry, C4 settings, C3
+chat surface).
+
+### Added
+- `mnemo/ui/chat_surface.py` `CHAT_SURFACES` capability matrix
+  (registered as a Jinja global, mirrors `palette.py`) +
+  `test_chat_surface_contract.py` guard test -- a surface must DECLARE
+  a capability, never silently omit it.
+- Shared partials `_chat_rail.html` / `_chat_bookmarks.html` /
+  `_chat_examples.html` / `_chat_composer.html`, included by BOTH
+  surfaces, matrix-gated. The dock GAINED: conversation
+  switch/back/new, inline rename, bookmark strip + per-turn star,
+  welcome + suggested questions (it silently lacked all of these
+  though `mnemoChat()` already shared the logic).
+- `renameConversation()` in the factory + inline-edit affordance
+  (backend `PATCH /v1/chat/{id}` was already complete in v3.2).
+
+### Fixed
+- **1 message at a time**: an eager `sending` flag (set synchronously
+  before the async `newConversation()` await window) hides the
+  welcome/examples the instant a suggested question is clicked, so it
+  can't coexist with the outgoing message.
+- **Send arrow now optically centered**: the path was bottom-heavy
+  (tiny arrowhead + long stem); rebalanced to `M12 18V6M6 12l6-6 6 6`
+  (getBBox centroid exactly (12,12) = viewBox centre; live-verified
+  <=1px). A path-geometry fix, not CSS; single-sourced in the composer.
+- **Honest nebula-highlight wording**: `mnemo_highlight_nodes` no
+  longer claims it lit nodes "on the live Nebula graph" (a closed
+  cosmos ceiling, gotcha 31) -- it now says it surfaces them in the
+  chat side panel and tells the model never to claim a graph-view
+  highlight. WORDING ONLY; zero renderer change.
+
+### Tests
+- +13 C3 tests; full suite 1195 pass / 2 skip, ruff clean. v3.x tests
+  that asserted markup now in a shared partial were evolved to assert
+  the partial + inclusion (contract-evolution; capability preserved +
+  on both surfaces).
+
 ## [4.2.0] - 2026-05-17
 
 **C4 Settings / Config Contract.** Third of the v4.x contract refactor.
