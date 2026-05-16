@@ -75,14 +75,10 @@ def _usage_event(
 
 ProviderEvent = tuple[str, Any]
 
-# Default model per provider (design S4). User-overridable per
-# conversation + in Settings (phase 7).
-DEFAULT_MODELS: dict[str, str] = {
-    "anthropic": "claude-sonnet-4-5-20250929",
-    "openai": "gpt-4o-mini",
-    "google": "gemini-2.5-flash",
-    "ollama": "llama3.1:8b",
-}
+# Default model per provider (design S4). C2 (v4.1): DERIVED from
+# PROVIDERS, defined at the bottom of this module AFTER the concrete
+# providers self-register (no longer a hand-maintained literal).
+DEFAULT_MODELS: dict[str, str]
 
 
 class ProviderError(RuntimeError):
@@ -147,24 +143,15 @@ def register_provider(desc: ProviderDescriptor) -> ProviderDescriptor:
 def get_provider(
     name: str, *, api_key: str | None = None, base_url: str | None = None
 ) -> BaseProvider:
-    """Construct a provider by name. Phase 2: anthropic only."""
-    if name == "anthropic":
-        from mnemo.providers.anthropic import AnthropicProvider
-
-        return AnthropicProvider(api_key=api_key, base_url=base_url)
-    if name == "openai":
-        from mnemo.providers.openai import OpenAIProvider
-
-        return OpenAIProvider(api_key=api_key, base_url=base_url)
-    if name == "google":
-        from mnemo.providers.google import GoogleProvider
-
-        return GoogleProvider(api_key=api_key, base_url=base_url)
-    if name == "ollama":
-        from mnemo.providers.ollama import OllamaProvider
-
-        return OllamaProvider(api_key=api_key, base_url=base_url)
-    raise ValueError(f"unknown provider: {name!r}")
+    """Construct a provider by name. C2 (v4.1): DERIVES from the
+    PROVIDERS registry (was a hand-edited if/elif chain)."""
+    desc = PROVIDERS.get(name)
+    if desc is None:
+        raise ValueError(f"unknown provider: {name!r}")
+    return desc.impl_class(
+        api_key=api_key,
+        base_url=base_url if base_url is not None else desc.base_url,
+    )
 
 
 # C2 (v4.1): import the concrete modules LAST so their
@@ -177,3 +164,6 @@ from mnemo.providers import anthropic as _anthropic  # noqa: E402,F401
 from mnemo.providers import google as _google  # noqa: E402,F401
 from mnemo.providers import ollama as _ollama  # noqa: E402,F401
 from mnemo.providers import openai as _openai  # noqa: E402,F401
+
+# C2 (v4.1): single-sourced from the now-populated registry.
+DEFAULT_MODELS = {n: d.default_model for n, d in PROVIDERS.items()}

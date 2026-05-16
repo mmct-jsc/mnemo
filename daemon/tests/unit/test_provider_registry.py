@@ -3,8 +3,11 @@
 import pytest
 
 from mnemo.providers import (
+    DEFAULT_MODELS,
     PROVIDERS,
+    BaseProvider,
     ProviderDescriptor,
+    get_provider,
     register_provider,
 )
 
@@ -68,3 +71,38 @@ def test_all_four_providers_registered_with_correct_fields() -> None:
         assert PROVIDERS[name].requires_key is True
         assert PROVIDERS[name].env_var is not None
         assert PROVIDERS[name].default_model  # non-empty, preserves DEFAULT_MODELS
+
+
+def test_get_provider_and_default_models_derive_from_registry() -> None:
+    # DEFAULT_MODELS is now a registry-derived view (identical values):
+    assert set(DEFAULT_MODELS) == set(PROVIDERS)
+    for n, d in PROVIDERS.items():
+        assert DEFAULT_MODELS[n] == d.default_model
+
+    # get_provider DERIVES from PROVIDERS: a provider registered at
+    # runtime is constructible -- a hand-written if/elif chain could
+    # never resolve a name it was not edited to know about.
+    class _Dummy(BaseProvider):
+        name = "dummy-derive"
+
+    register_provider(
+        ProviderDescriptor(
+            name="dummy-derive",
+            display_name="D",
+            impl_class=_Dummy,
+            env_var=None,
+            requires_key=False,
+            default_model="d",
+            known_models=("d",),
+            base_url=None,
+            native_compaction_models=frozenset(),
+        )
+    )
+    try:
+        assert isinstance(get_provider("dummy-derive"), _Dummy)
+    finally:
+        del PROVIDERS["dummy-derive"]
+
+    # message shape preserved for test_get_provider_unknown_raises:
+    with pytest.raises(ValueError, match="unknown provider"):
+        get_provider("nope-not-real")
