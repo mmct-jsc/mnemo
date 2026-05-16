@@ -171,7 +171,15 @@ def test_chat_js_dispatches_highlight_nodes() -> None:
     assert "mnemo-highlight-nodes" in CHAT_JS
 
 
-def test_graph_listens_for_highlight_nodes() -> None:
-    assert "addEventListener('mnemo-highlight-nodes'" in GRAPH_HTML
-    # highlights the SET on the live nebula (greys others, never hides)
-    assert "selectPointsByIndices" in GRAPH_HTML
+def test_session_nodes_tool_works_without_touching_cosmos() -> None:
+    """CLOSED OUTCOME: the mnemo_session_nodes / mnemo_highlight_nodes
+    TOOLS stand (server-side, unaffected) + chat.js still dispatches
+    the highlight CustomEvent. But graph.html is reverted byte-pristine
+    -- it does NOT listen, because wiring the companion into cosmos
+    re-triggered the v2.6.8 hang. A visual session-highlight needs a
+    renderer swap (reference_cosmos_gl_nebula.md), not graph wiring."""
+    assert "mnemo_session_nodes" in TOOLS
+    assert "mnemo_highlight_nodes" in TOOLS
+    assert "mnemo-highlight-nodes" in CHAT_JS  # dispatch still emitted
+    assert "addEventListener('mnemo-highlight-nodes'" not in GRAPH_HTML
+    assert "_wireCompanionActions" not in GRAPH_HTML
