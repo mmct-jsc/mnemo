@@ -1,0 +1,24 @@
+{# C4 (v4.2): the ONE settings information-architecture. A single nav
+   entry (Settings) -> this shared cross-route tab strip. The v1.2
+   retrieval route/context is NOT merged (gotcha 9): these are plain
+   server-rendered links between the two SEPARATE routes; the active
+   tab is resolved client-side from pathname+hash (zero route/context
+   change). Styling is the shared .settings-tabs component in app.css
+   (C1 -- no per-page <style>). #}
+<nav class="settings-tabs" aria-label="Settings sections">
+  <a href="/settings" data-tab="retrieval">Retrieval tuning</a>
+  <a href="/settings/chat#providers" data-tab="providers">Providers &amp; keys</a>
+  <a href="/settings/chat#companion" data-tab="companion">Companion</a>
+  <a href="/settings/chat#permissions" data-tab="permissions">Permissions &amp; history</a>
+</nav>
+<script>
+  (function () {
+    var p = location.pathname, h = location.hash;
+    var sel = p === '/settings' ? 'retrieval'
+      : (h === '#companion' ? 'companion'
+        : h === '#permissions' ? 'permissions' : 'providers');
+    document.querySelectorAll('.settings-tabs a').forEach(function (a) {
+      if (a.getAttribute('data-tab') === sel) a.classList.add('active');
+    });
+  })();
+</script>

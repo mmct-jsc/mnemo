@@ -2,6 +2,41 @@
 
 All notable changes to mnemo are documented here.
 
+## [4.2.0] - 2026-05-17
+
+**C4 Settings / Config Contract.** Third of the v4.x contract refactor.
+The provider/key settings UI is now **registry-driven** (consumes the
+C2 `GET /v1/providers`): every registered provider appears
+automatically with a real model picker, a read-only key-resolution
+tier, and a delete-key action -- plus one unified settings IA. The
+v1.2 retrieval route/context is **NOT merged** (gotcha 9): its 3
+regression guards stay green unmodified.
+
+### Added
+- `keys.resolve_api_key_tier()` (read-only mirror of the
+  resolve_api_key ladder: env / dotenv / keychain / file) +
+  `keys.delete_api_key()` (keychain + plaintext, no-op if absent).
+- `DELETE /v1/settings/providers/{name}/key`; `key_tier` per provider
+  in `GET /v1/settings` (never the secret).
+- `_settings_tabs.html` -- one shared cross-route settings tab strip
+  (`.settings-tabs` single-sourced in app.css per C1), included by
+  both `/settings` and `/settings/chat`; #hash deep-links preselect
+  the chat page's inner tab.
+
+### Changed
+- The provider tab fetches `GET /v1/providers`: every registered
+  provider appears (not just configured); the model is a `<select>`
+  from the descriptor's `known_models` (was free text); the resolved
+  key tier is shown read-only with a Remove-key button.
+
+### Tests
+- New `test_keys_tier.py` (6) + 5 `test_settings.py` cases incl.
+  `test_gotcha9_regression_guards_unmodified`. Full suite 1182 pass /
+  2 skip, ruff clean. The 3 gotcha-9 retrieval-route guards
+  (`test_existing_retrieval_settings_still_renders`,
+  `test_chat_settings_page_renders_three_tabs`, `test_ui` /settings)
+  green UNMODIFIED. Live-verified: registry-driven tab + unified strip.
+
 ## [4.1.0] - 2026-05-17
 
 **C2 Provider Contract (registry).** Second of the v4.x contract
