@@ -188,6 +188,56 @@ def test_no_usage_event_when_provider_omits_it(store: Store) -> None:
     assert store.get_conversation(conv.id).tokens_total == 0
 
 
+def test_history_repairs_orphaned_tool_use(store: Store) -> None:
+    """v3.2 live bug (Anthropic 400 'tool_use ids ... without
+    tool_result blocks immediately after'). An interrupted run
+    (SSE/daemon killed mid-dispatch -- rampant this session) persists
+    the assistant tool_use but never its tool_result row, so the
+    replayed history is contract-invalid and the conversation 400s
+    FOREVER. _history_to_provider must self-heal: synthesize an error
+    tool_result for any orphaned tool_use."""
+    conv = store.create_conversation(name="c", provider="fake", model="m")
+    store.append_message(conv.id, role="user", content={"text": "hi"})
+    store.append_message(
+        conv.id,
+        role="assistant",
+        content={"text": "", "tool_calls": [{"id": "t1", "name": "mnemo_get_node", "args": {}}]},
+    )
+    # NO tool_result row -- the run was interrupted right here.
+    store.append_message(conv.id, role="user", content={"text": "are you there?"})
+
+    pmsgs = _loop(store, FakeProvider())._history_to_provider(conv.id)
+    ai = next(
+        i
+        for i, m in enumerate(pmsgs)
+        if m["role"] == "assistant"
+        and isinstance(m["content"], list)
+        and any(b.get("type") == "tool_use" for b in m["content"])
+    )
+    nxt = pmsgs[ai + 1]
+    assert nxt["role"] == "tool", "an orphaned tool_use must be answered by a tool message"
+    block = next(b for b in nxt["content"] if b["tool_use_id"] == "t1")
+    assert block["is_error"] is True
+
+
+def test_history_keeps_healthy_tool_pairs_single(store: Store) -> None:
+    """A complete run must NOT get a duplicate synthesized result."""
+    conv = store.create_conversation(name="c", provider="fake", model="m")
+    store.append_message(conv.id, role="user", content={"text": "hi"})
+    store.append_message(
+        conv.id,
+        role="assistant",
+        content={"text": "", "tool_calls": [{"id": "t1", "name": "mnemo_get_node", "args": {}}]},
+    )
+    store.append_message(conv.id, role="tool_call", content={"id": "t1", "name": "x", "args": {}})
+    store.append_message(conv.id, role="tool_result", content={"id": "t1", "result": {"ok": True}})
+
+    pmsgs = _loop(store, FakeProvider())._history_to_provider(conv.id)
+    t1 = [b for m in pmsgs if m["role"] == "tool" for b in m["content"] if b["tool_use_id"] == "t1"]
+    assert len(t1) == 1
+    assert t1[0]["is_error"] is False
+
+
 def test_base_provider_stream_is_abstract() -> None:
     bp = BaseProvider()
     try:
