@@ -45,6 +45,18 @@ serious pre-existing defects this release now fixes.
   when you're already on the target page (which killed the dock SSE +
   the in-flight run); the model is guided to prefer in-page tools and
   treat navigate as terminal.
+- **FIX: a brick-the-conversation 400 self-heals.** An interrupted run
+  (SSE/daemon killed mid tool-dispatch) left an assistant `tool_use`
+  with no persisted `tool_result`, so history replay 400'd on every
+  subsequent message forever (`tool_use ids ... without tool_result`).
+  History reconstruction now synthesizes an error `tool_result` for
+  any orphaned `tool_use` -- the conversation recovers and Retry works.
+- **Chat UX completion.** Both `/chat` and the dock gain a clean
+  in-thread error banner + one-click **Retry** (replacing the raw
+  provider-JSON dump), a **copy-message** button, a **scroll-to-latest**
+  pill, a proper circular icon **send** button (the dock's bare `→` is
+  gone), and long-text hardening so a long message never smears
+  horizontally.
 
 ## [3.1.0] - 2026-05-16
 
