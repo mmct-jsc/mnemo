@@ -1,6 +1,6 @@
 [project]
 name = "mnemo"
-version = "2.6.0"
+version = "3.1.0"
 description = "Local-first knowledge memory system for Claude Code"
 # README lives at repo root, not inside the daemon package; see
 # https://github.com/mmct-jsc/mnemo for the full docs.
@@ -34,6 +34,13 @@ dependencies = [
     "tree-sitter-json>=0.23",
     "tree-sitter-yaml>=0.7",
     "tree-sitter-markdown>=0.4",
+    # v3: agentic chat companion. Anthropic provider (phase 2);
+    # openai / google-genai / keyring / mcp land in phases 5-7.
+    "anthropic>=0.40",
+    "openai>=1.40",
+    "google-genai>=0.3",
+    "mcp>=1.2",
+    "keyring>=25.0",
 ]
 
 [tool.hatch.build.targets.wheel.sources]

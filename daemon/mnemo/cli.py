@@ -13,7 +13,7 @@ Subcommands group naturally:
 - ``mnemo status``                 quick health summary
 - ``mnemo source {add,list,remove}``
 - ``mnemo node {show}``
-- ``mnemo daemon {start,stop,status}``
+- ``mnemo daemon {start,stop,restart,status}``
 """
 
 from __future__ import annotations
@@ -571,6 +571,27 @@ def daemon_status() -> None:
         typer.echo("not running")
 
 
+@daemon_app.command("restart")
+def daemon_restart(
+    host: str = typer.Option(daemon.DEFAULT_HOST, "--host"),
+    port: int = typer.Option(daemon.DEFAULT_PORT, "--port"),
+) -> None:
+    """Stop the daemon (if running) then start it fresh.
+
+    One command instead of ``mnemo daemon stop && mnemo daemon start``
+    (chaining ``&& start`` runs the *Windows* ``start`` program -- a
+    blank console -- not the daemon). ``daemon.stop()`` blocks until
+    the old process has actually exited, so the start is race-safe.
+    """
+    typer.echo("daemon stopped" if daemon.stop() else "daemon was not running")
+    try:
+        pid = daemon.start(host=host, port=port)
+    except RuntimeError as exc:
+        typer.echo(f"restart failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"daemon started (pid {pid}) on http://{host}:{port}")
+
+
 def _run_foreground(*, host: str, port: int) -> None:
     """Foreground entry: write PID, run uvicorn, clean up PID on exit."""
     import uvicorn
@@ -582,6 +603,18 @@ def _run_foreground(*, host: str, port: int) -> None:
         uvicorn.run(create_app(), host=host, port=port, log_level="info")
     finally:
         daemon.remove_pid_file()
+
+
+@app.command()
+def mcp() -> None:
+    """Run the mnemo MCP server over stdio.
+
+    Point an external MCP client (Cursor / Claude Desktop / Codex /
+    Windsurf) at ``mnemo mcp`` to get mnemo's full tool surface --
+    retrieval + the write/danger tools, risk-tagged (v3 phase 6)."""
+    from mnemo import mcp_server
+
+    mcp_server.serve_stdio()
 
 
 def main() -> None:

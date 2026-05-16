@@ -9,6 +9,24 @@
         "setInterval(() => {}, 10000)"
       ],
       "port": 7373
+    },
+    {
+      "name": "mnemo-v3-preview",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": [
+        "run",
+        "--project",
+        "daemon",
+        "mnemo",
+        "daemon",
+        "start",
+        "--foreground",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "7399"
+      ],
+      "port": 7399
     }
   ]
 }

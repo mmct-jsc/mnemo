@@ -35,23 +35,46 @@ from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from mnemo import __version__, auto_router, config, ingest, paths, retrieve, workspaces
+from mnemo import (
+    __version__,
+    auto_router,
+    chat,
+    config,
+    ingest,
+    keys,
+    paths,
+    providers,
+    retrieve,
+    workspaces,
+)
 from mnemo.api_schemas import (
     ActivateWorkspaceOut,
     ActiveProjectOut,
     ActiveWorkspaceOut,
+    ChatBookmarkIn,
+    ChatBookmarkOut,
+    ChatCreateIn,
+    ChatPatchIn,
+    ChatPermitIn,
+    CompanionPatchIn,
+    ConversationDetailOut,
+    ConversationOut,
     FeedbackIn,
     FeedbackOut,
     FsSuggestOut,
     HealthOut,
     KnownProjectItem,
     KnownProjectsOut,
+    MessageAcceptedOut,
+    MessageCreateIn,
+    MessagesPageOut,
     NodeCreateIn,
     NodeOut,
     NodeUpdateIn,
     ProjectActivateIn,
     ProjectResolveIn,
     ProjectResolveOut,
+    ProvidersPatchIn,
     QueryAuditOut,
     QueryIn,
     QueryOut,
@@ -59,6 +82,7 @@ from mnemo.api_schemas import (
     ReindexReportSectionsOut,
     RetuneIn,
     RetuneReportOut,
+    SettingsOut,
     SourceIn,
     SourceOut,
     SourceOverrideBatchIn,
@@ -158,6 +182,25 @@ class AppState:
     # fan-outs to every queue. Slow consumers drop frames (Full).
     event_subscribers: list[queue.Queue] = field(default_factory=list)
     event_subscribers_lock: threading.Lock = field(default_factory=threading.Lock)
+    # v3 phase 3: agentic chat. One in-flight AgentLoop per conversation
+    # -- the per-conv lock is acquired by GET /v1/chat/<id>/events for
+    # the duration of the run; POST .../message 409s if it's held.
+    # ``chat_pending`` stashes the user's text between POST .../message
+    # and the SSE GET that actually runs the loop. ``chat_cancel`` is a
+    # per-conv Event the loop checks between iterations.
+    # ``chat_provider_factory`` defaults to providers.get_provider;
+    # tests inject a scripted provider here (same pattern as the
+    # injectable store/embedder).
+    chat_locks: dict[str, threading.Lock] = field(default_factory=dict)
+    chat_pending: dict[str, str] = field(default_factory=dict)
+    chat_cancel: dict[str, threading.Event] = field(default_factory=dict)
+    chat_provider_factory: object | None = None
+    # v3 phase 4: permission pause/resume. The /events permission_cb
+    # blocks on chat_permit_event[conv] after the loop yields a
+    # permission_request frame; POST .../permit records the decision
+    # here and signals the Event so the loop resumes the same iteration.
+    chat_permit: dict[str, dict] = field(default_factory=dict)
+    chat_permit_event: dict[str, threading.Event] = field(default_factory=dict)
 
 
 # v2.6 phase 5: workspace activation caps.
@@ -167,6 +210,11 @@ class AppState:
 # Settings.workspaces section.
 DEFAULT_SOFT_CAP_NODES = 75_000
 DEFAULT_HARD_CAP_NODES = 200_000
+
+# v3.1: chat history is paginated -- GET /chat/<id> returns the latest
+# window, /chat/<id>/messages pages older turns (the model context is
+# bounded separately by compaction).
+CHAT_PAGE_DEFAULT = 30
 
 
 def _broadcast_event(state: AppState, name: str, payload: dict) -> None:
@@ -230,6 +278,27 @@ def _workspace_node_count(store: Store, project_keys: list[str]) -> int:
         per = store.count_nodes(project_key=key, include_base=True)
         total += sum(per.values())
     return total
+
+
+def _chat_lock(state: AppState, conv_id: str) -> threading.Lock:
+    """Per-conversation lock so only one AgentLoop runs at a time for a
+    given conversation (design S5 concurrency). Lazily created; held by
+    GET /v1/chat/<id>/events for the run's duration."""
+    with state.event_subscribers_lock:  # reuse the existing mutex as the registry guard
+        lock = state.chat_locks.get(conv_id)
+        if lock is None:
+            lock = threading.Lock()
+            state.chat_locks[conv_id] = lock
+    return lock
+
+
+def _chat_provider(state: AppState, name: str):
+    """Construct a provider, honoring an injected test factory."""
+    factory = state.chat_provider_factory
+    if factory is not None:
+        return factory(name)
+    api_key = keys.resolve_api_key(name)
+    return providers.get_provider(name, api_key=api_key)
 
 
 def create_app(*, store: Store | None = None, embedder: Embedder | None = None) -> FastAPI:
@@ -1238,6 +1307,298 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
     def reset_config() -> dict:
         config.reset()
         return get_config()
+
+    # --- Chat (v3) --------------------------------------------------------
+
+    @v1.get("/chat", response_model=list[ConversationOut])
+    def list_chat(
+        project_key: str | None = None,
+        include_archived: bool = False,
+        s: Store = Depends(get_store),
+    ) -> list[ConversationOut]:
+        return [
+            ConversationOut.from_conversation(c)
+            for c in s.list_conversations(
+                project_key=project_key, include_archived=include_archived
+            )
+        ]
+
+    @v1.post("/chat", response_model=ConversationOut)
+    def create_chat(body: ChatCreateIn, s: Store = Depends(get_store)) -> ConversationOut:
+        provider = body.provider or "anthropic"
+        model = body.model or providers.DEFAULT_MODELS.get(
+            provider, providers.DEFAULT_MODELS["anthropic"]
+        )
+        conv = s.create_conversation(
+            name=body.name or "New chat",
+            provider=provider,
+            model=model,
+            project_key=body.project_key,
+            page_context=body.page_context,
+        )
+        return ConversationOut.from_conversation(conv)
+
+    @v1.get("/chat/{conv_id}", response_model=ConversationDetailOut)
+    def get_chat(conv_id: str, s: Store = Depends(get_store)) -> ConversationDetailOut:
+        conv = s.get_conversation(conv_id)
+        if conv is None:
+            raise HTTPException(status_code=404, detail="conversation not found")
+        # v3.1: only the LATEST window (the model context is bounded
+        # separately by compaction). Older turns load via /messages.
+        total = s.count_messages(conv_id)
+        window = s.list_messages(conv_id, limit=CHAT_PAGE_DEFAULT)
+        bm = {b.message_seq for b in s.list_bookmarks(conv_id)}
+        return ConversationDetailOut.from_conversation_and_messages(
+            conv,
+            window,
+            total=total,
+            has_more=total > len(window),
+            bookmarked_seqs=bm,
+        )
+
+    @v1.get("/chat/{conv_id}/messages", response_model=MessagesPageOut)
+    def get_chat_messages(
+        conv_id: str,
+        before: int | None = None,
+        limit: int = CHAT_PAGE_DEFAULT,
+        s: Store = Depends(get_store),
+    ) -> MessagesPageOut:
+        """One older page (oldest-first) for lazy scroll-up. ``before``
+        = the oldest seq currently shown; omit for the latest window.
+        Paginates in SQL per reference_mnemo_pagination.md."""
+        if s.get_conversation(conv_id) is None:
+            raise HTTPException(status_code=404, detail="conversation not found")
+        limit = max(1, min(limit, 200))
+        page = s.list_messages(conv_id, before_seq=before, limit=limit)
+        bm = {b.message_seq for b in s.list_bookmarks(conv_id)}
+        # seq is contiguous (0..total-1; purge drops the whole conv), so
+        # an older page exists iff the oldest returned seq is not 0.
+        has_more = bool(page) and page[0].seq > 0
+        return MessagesPageOut.build(
+            page,
+            total=s.count_messages(conv_id),
+            has_more=has_more,
+            bookmarked_seqs=bm,
+        )
+
+    @v1.get("/chat/{conv_id}/bookmarks", response_model=list[ChatBookmarkOut])
+    def list_chat_bookmarks(conv_id: str, s: Store = Depends(get_store)) -> list[ChatBookmarkOut]:
+        if s.get_conversation(conv_id) is None:
+            raise HTTPException(status_code=404, detail="conversation not found")
+        return [ChatBookmarkOut.from_bookmark(b) for b in s.list_bookmarks(conv_id)]
+
+    @v1.post("/chat/{conv_id}/bookmarks", response_model=ChatBookmarkOut)
+    def add_chat_bookmark(
+        conv_id: str, body: ChatBookmarkIn, s: Store = Depends(get_store)
+    ) -> ChatBookmarkOut:
+        if s.get_conversation(conv_id) is None:
+            raise HTTPException(status_code=404, detail="conversation not found")
+        bm = s.add_bookmark(conv_id, message_seq=body.message_seq, label=body.label)
+        return ChatBookmarkOut.from_bookmark(bm)
+
+    @v1.delete("/chat/{conv_id}/bookmarks/{bookmark_id}")
+    def delete_chat_bookmark(conv_id: str, bookmark_id: str, s: Store = Depends(get_store)) -> dict:
+        if s.get_conversation(conv_id) is None:
+            raise HTTPException(status_code=404, detail="conversation not found")
+        s.delete_bookmark(bookmark_id)
+        return {"ok": True, "deleted": bookmark_id}
+
+    @v1.patch("/chat/{conv_id}", response_model=ConversationOut)
+    def patch_chat(
+        conv_id: str, body: ChatPatchIn, s: Store = Depends(get_store)
+    ) -> ConversationOut:
+        conv = s.rename_conversation(
+            conv_id,
+            name=body.name,
+            provider=body.provider,
+            model=body.model,
+            page_context=body.page_context,
+        )
+        if conv is None:
+            raise HTTPException(status_code=404, detail="conversation not found")
+        return ConversationOut.from_conversation(conv)
+
+    @v1.delete("/chat/{conv_id}")
+    def delete_chat(conv_id: str, s: Store = Depends(get_store)) -> dict:
+        if s.get_conversation(conv_id) is None:
+            raise HTTPException(status_code=404, detail="conversation not found")
+        s.archive_conversation(conv_id)
+        return {"ok": True, "archived": conv_id}
+
+    @v1.post("/chat/{conv_id}/message", response_model=MessageAcceptedOut)
+    def post_message(
+        conv_id: str, body: MessageCreateIn, s: Store = Depends(get_store)
+    ) -> MessageAcceptedOut:
+        if s.get_conversation(conv_id) is None:
+            raise HTTPException(status_code=404, detail="conversation not found")
+        stream_url = f"/v1/chat/{conv_id}/events"
+        lock = _chat_lock(state, conv_id)
+        if lock.locked():
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "a run is already in flight for this conversation",
+                    "stream_url": stream_url,
+                },
+            )
+        # Stash the user's text; the SSE GET runs the loop (which
+        # persists the user message + streams the run).
+        state.chat_pending[conv_id] = body.text
+        return MessageAcceptedOut(stream_url=stream_url, conversation_id=conv_id)
+
+    @v1.get("/chat/{conv_id}/events")
+    def chat_events(conv_id: str, s: Store = Depends(get_store)) -> StreamingResponse:
+        """SSE of the in-flight agent run. Frame format mirrors the
+        reindex stream: ``event: <type>\\ndata: <json>\\n\\n``. One run
+        per conversation -- a second connection while one is live gets a
+        single ``busy`` frame; no pending message gets ``idle``."""
+        conv = s.get_conversation(conv_id)
+        if conv is None:
+            raise HTTPException(status_code=404, detail="conversation not found")
+
+        def encode(name: str, payload: dict) -> bytes:
+            return f"event: {name}\ndata: {json.dumps(payload)}\n\n".encode()
+
+        def gen() -> Iterator[bytes]:
+            lock = _chat_lock(state, conv_id)
+            if not lock.acquire(blocking=False):
+                yield encode("busy", {"conversation_id": conv_id})
+                return
+            cancel = state.chat_cancel.setdefault(conv_id, threading.Event())
+            cancel.clear()
+            try:
+                pending = state.chat_pending.pop(conv_id, None)
+                if pending is None:
+                    yield encode("idle", {"conversation_id": conv_id})
+                    return
+                try:
+                    provider = _chat_provider(state, conv.provider)
+                except Exception as exc:  # key/construction failure
+                    yield encode("error", {"type": "error", "message": str(exc)})
+                    return
+
+                def permission_cb(req: dict) -> str:
+                    # The loop already yielded the permission_request
+                    # frame; block here until POST .../permit records a
+                    # decision (or cancel denies it). 5 min ceiling.
+                    evt = state.chat_permit_event.setdefault(conv_id, threading.Event())
+                    evt.clear()
+                    if not evt.wait(timeout=300):
+                        return "deny"
+                    return (state.chat_permit.get(conv_id) or {}).get("decision", "deny")
+
+                loop = chat.AgentLoop(
+                    s,
+                    provider,
+                    embedder=state.embedder,
+                    model=conv.model,
+                    project_key=conv.project_key,
+                    permission_cb=permission_cb,
+                )
+                for ev in loop.run(conv_id, pending):
+                    yield encode(ev["type"], ev)
+                    if cancel.is_set():
+                        yield encode("cancelled", {"type": "cancelled"})
+                        break
+            finally:
+                lock.release()
+
+        return StreamingResponse(
+            gen(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+        )
+
+    @v1.post("/chat/{conv_id}/permit")
+    def permit_chat(conv_id: str, body: ChatPermitIn, s: Store = Depends(get_store)) -> dict:
+        """Grant or deny a pending permission request. The decision is
+        delivered to the blocked agent loop; ``allow_always`` is
+        persisted to ``chat_permissions`` by the loop itself (design
+        S4)."""
+        if s.get_conversation(conv_id) is None:
+            raise HTTPException(status_code=404, detail="conversation not found")
+        state.chat_permit[conv_id] = {
+            "permission_id": body.permission_id,
+            "decision": body.decision,
+        }
+        state.chat_permit_event.setdefault(conv_id, threading.Event()).set()
+        return {"ok": True, "decision": body.decision}
+
+    @v1.post("/chat/{conv_id}/cancel")
+    def cancel_chat(conv_id: str, s: Store = Depends(get_store)) -> dict:
+        if s.get_conversation(conv_id) is None:
+            raise HTTPException(status_code=404, detail="conversation not found")
+        state.chat_cancel.setdefault(conv_id, threading.Event()).set()
+        # also release a blocked permission wait with an implicit deny
+        state.chat_permit[conv_id] = {"permission_id": "", "decision": "deny"}
+        state.chat_permit_event.setdefault(conv_id, threading.Event()).set()
+        return {"ok": True, "cancelled": conv_id}
+
+    # --- Settings (v3 phase 7) -------------------------------------------
+
+    def _settings_out() -> SettingsOut:
+        cfg = config.load()
+        providers = {
+            name: {
+                "has_key": keys.has_key(name),
+                "model": (cfg.providers.get(name) or {}).get("model"),
+            }
+            for name in cfg.providers
+        }
+        return SettingsOut(
+            default_provider=cfg.default_provider,
+            providers=providers,
+            companion=cfg.companion,
+            chat_history_retention_days=cfg.chat_history_retention_days,
+        )
+
+    @v1.get("/settings", response_model=SettingsOut)
+    def get_settings() -> SettingsOut:
+        """Never returns key material -- per-provider ``has_key`` only."""
+        return _settings_out()
+
+    @v1.post("/settings/providers", response_model=SettingsOut)
+    def post_settings_providers(body: ProvidersPatchIn) -> SettingsOut:
+        patch: dict = {}
+        if body.default_provider:
+            patch["default_provider"] = body.default_provider
+        clean_providers: dict = {}
+        for name, pcfg in (body.providers or {}).items():
+            if not isinstance(pcfg, dict):
+                continue
+            key = pcfg.get("key")
+            if key:
+                keys.set_api_key(name, key)  # -> keychain (never persisted)
+            if "model" in pcfg:
+                clean_providers[name] = {"model": pcfg["model"]}
+        if clean_providers:
+            patch["providers"] = clean_providers
+        if patch:
+            config.update(patch)
+        return _settings_out()
+
+    @v1.post("/settings/companion", response_model=SettingsOut)
+    def post_settings_companion(body: CompanionPatchIn) -> SettingsOut:
+        comp = {
+            k: v
+            for k, v in {
+                "name": body.name,
+                "tone": body.tone,
+                "dock_state": body.dock_state,
+                "proactive": body.proactive,
+                "proactive_pages": body.proactive_pages,
+                "proactive_frequency": body.proactive_frequency,
+            }.items()
+            if v is not None
+        }
+        patch: dict = {}
+        if comp:
+            patch["companion"] = comp
+        if body.chat_history_retention_days is not None:
+            patch["chat_history_retention_days"] = body.chat_history_retention_days
+        if patch:
+            config.update(patch)
+        return _settings_out()
 
     app.include_router(v1)
 
