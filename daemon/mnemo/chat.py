@@ -143,7 +143,64 @@ class AgentLoop:
                 )
             # 'tool_call' rows are folded into the assistant block above;
             # 'system' rows (unused in phase 2) are skipped.
-        return pmsgs
+        return self._repair_tool_pairs(pmsgs)
+
+    @staticmethod
+    def _repair_tool_pairs(pmsgs: list[dict]) -> list[dict]:
+        """Every assistant ``tool_use`` MUST be answered by a
+        ``tool_result`` in the immediately-following message (Anthropic
+        400s otherwise: 'tool_use ids ... without tool_result blocks
+        immediately after', and every other provider translator has the
+        same contract). An interrupted run (SSE/daemon killed
+        mid-dispatch) persists the assistant tool_use but never its
+        tool_result row -> the replayed history is invalid and the
+        conversation is bricked FOREVER. Self-heal: synthesize an
+        error tool_result for any orphaned tool_use so the model can
+        still continue. Healthy pairs pass through untouched."""
+        out: list[dict] = []
+        i, n = 0, len(pmsgs)
+        while i < n:
+            m = pmsgs[i]
+            out.append(m)
+            content = m.get("content")
+            if m.get("role") == "assistant" and isinstance(content, list):
+                ids = [
+                    b["id"]
+                    for b in content
+                    if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("id")
+                ]
+                if ids:
+                    covered: set[str] = set()
+                    j = i + 1
+                    while j < n and pmsgs[j].get("role") == "tool":
+                        for blk in pmsgs[j].get("content", []) or []:
+                            covered.add(blk.get("tool_use_id"))
+                        out.append(pmsgs[j])
+                        j += 1
+                    missing = [tid for tid in ids if tid not in covered]
+                    if missing:
+                        out.append(
+                            {
+                                "role": "tool",
+                                "content": [
+                                    {
+                                        "tool_use_id": tid,
+                                        "content": json.dumps(
+                                            {
+                                                "error": "tool result missing: "
+                                                "the previous run was interrupted"
+                                            }
+                                        ),
+                                        "is_error": True,
+                                    }
+                                    for tid in missing
+                                ],
+                            }
+                        )
+                    i = j
+                    continue
+            i += 1
+        return out
 
     # --- the loop --------------------------------------------------------
 
