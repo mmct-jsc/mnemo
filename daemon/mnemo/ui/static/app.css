@@ -377,6 +377,19 @@ a:hover { color: var(--accent-hover); }
   justify-content: center; border-radius: var(--radius-pill);
   cursor: pointer; transition: var(--transition); }
 
+/* C4 (v4.2): the shared settings cross-route tab strip. One source
+   here (not a per-page <style>) -- both /settings and /settings/chat
+   include _settings_tabs.html. */
+.settings-tabs { display: flex; gap: .4rem; flex-wrap: wrap;
+  border-bottom: 1px solid var(--border-soft);
+  margin: 1rem 0 1.25rem; }
+.settings-tabs a { padding: .55rem 1rem; color: var(--fg-muted);
+  text-decoration: none; border-bottom: 2px solid transparent;
+  transition: color var(--transition); }
+.settings-tabs a:hover { color: var(--fg); }
+.settings-tabs a.active { color: var(--fg);
+  border-bottom-color: var(--accent); }
+
 code, pre { font-family: var(--mono); font-size: 0.85em; }
 pre {
   background: var(--panel);

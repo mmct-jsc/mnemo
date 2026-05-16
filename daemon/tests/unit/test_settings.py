@@ -165,3 +165,31 @@ def test_provider_tab_is_registry_driven(client: TestClient) -> None:
     assert "key_tier" in html, "read-only key tier surfaced"
     assert "/v1/settings/providers/" in html
     assert "/key" in html  # DELETE-key wire
+
+
+def test_settings_is_reachable_and_unified_but_routes_stay_separate(
+    client: TestClient,
+) -> None:
+    """C4 (v4.2): one settings IA via a shared tab strip -- but the
+    v1.2 retrieval route/context is NOT merged (gotcha 9)."""
+    main = client.get("/settings").text
+    assert "/settings/chat" in main, "retrieval page must link to provider/companion"
+    chat = client.get("/settings/chat").text
+    assert "/settings" in chat, "provider page must link back to retrieval tuning"
+    # gotcha 9: the retrieval page keeps its own identity (route/context
+    # NOT merged) -- the regression anchors are intact:
+    assert "Retrieval settings" in main
+    assert "Auto-tune" in main
+    assert "runRetune" in main
+    # both render the SAME shared tab strip partial:
+    assert "settings-tabs" in main
+    assert "settings-tabs" in chat
+
+
+def test_gotcha9_regression_guards_unmodified(client: TestClient) -> None:
+    assert client.get("/settings").status_code == 200
+    r = client.get("/settings/chat").text
+    assert "Providers" in r
+    assert "Companion" in r
+    assert "Permissions" in r
+    assert 'x-data="settingsPage()"' in r
