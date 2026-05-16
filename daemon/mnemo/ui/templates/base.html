@@ -795,6 +795,10 @@
         </button>
         <button class="mc-x" @click="$dispatch('mnem-close')" aria-label="close">×</button>
       </div>
+      {# C3 (v4.3): dock gains conversation switch/back via the SHARED
+         rail (the mnemoChat factory already had the logic; the dock
+         only lacked the rendering). #}
+      {% with surface = 'dock' %}{% include "_chat_rail.html" %}{% endwith %}
       <div class="mc-thread" x-ref="log" @scroll.passive="onScroll()">
         <div class="mc-col">
           <div class="load-older" x-ref="topSentinel" :class="{ on: hasMore }">

@@ -37,6 +37,9 @@ _UI = Path(__file__).resolve().parents[2] / "mnemo" / "ui"
 BASE_HTML = (_UI / "templates" / "base.html").read_text(encoding="utf-8")
 CHAT_JS = (_UI / "static" / "chat.js").read_text(encoding="utf-8")
 CHAT_HTML = (_UI / "templates" / "chat.html").read_text(encoding="utf-8")
+# v4.3 (C3): the rail (delete affordance) moved into a SHARED partial
+# that both chat.html and the dock include -- single-source, no drift.
+CHAT_RAIL = (_UI / "templates" / "_chat_rail.html").read_text(encoding="utf-8")
 GRAPH_HTML = (_UI / "templates" / "graph.html").read_text(encoding="utf-8")
 
 
@@ -176,8 +179,13 @@ def test_navigate_opens_a_new_tab_not_a_self_destroying_reload() -> None:
 
 def test_chat_has_delete_and_dock_has_new_session() -> None:
     assert "deleteConversation:" in CHAT_JS
-    assert "deleteConversation(c.id" in CHAT_HTML  # rail delete button
-    assert 'class="cv-del"' in CHAT_HTML
+    # v4.3 (C3): the rail delete affordance is now single-sourced in
+    # the shared _chat_rail.html partial (chat.html + the dock both
+    # include it -- the dock GAINED delete as a bonus). Same
+    # contract-evolution as v4.0 moved tokenized literals.
+    assert "deleteConversation(c.id" in CHAT_RAIL  # rail delete button
+    assert 'class="cv-del"' in CHAT_RAIL
+    assert "_chat_rail.html" in CHAT_HTML  # page includes the shared rail
     assert 'class="mc-new"' in BASE_HTML  # new-chat in the dock header
     assert '@click="newConversation()"' in BASE_HTML
 
