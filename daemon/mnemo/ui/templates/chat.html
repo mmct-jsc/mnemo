@@ -4,7 +4,7 @@
 {% block content %}
 <script src="/static/chat.js?v={{ mnemo_version }}" defer></script>
 <section class="mn" x-data="mnemoChat({ surface: 'page' })" x-init="init()"
-         @mnemo-cite.window="onCiteEvent($event.detail.node_id)">
+         @mnemo-cite.document="onCiteEvent($event.detail.node_id)">
 
   <!-- left rail: conversations -->
   <aside class="chat-rail">
@@ -253,8 +253,22 @@
 
 <style>
   /* ---- mnemo v3 chat : "knowledge terminal", Claude-grade ---- */
+  /* /chat is a SINGLE WINDOW: the document never scrolls (this <style>
+     only ships on /chat, so the lock is page-scoped). .mn fills
+     exactly the space under the topbar -- the topbar is 64px
+     (measured live; the old code's 116px was wrong by 52px, which
+     was the void/scroll). NOT position:fixed -- a base.html ancestor
+     has a transform/filter, which makes fixed resolve against IT,
+     not the viewport (it rendered collapsed at y:134/h:0). With the
+     overflow lock a slightly-off calc can only clip, never scroll.
+     Only .thread-scroll / .rail-scroll scroll, internally. */
+  html, body { height: 100%; overflow: hidden; margin: 0; }
+  /* <main> ships ~38px of top padding site-wide; on the 1-window chat
+     that pushed .mn below the 64px topbar (y:102) and clipped the
+     bottom. Zero it page-scoped so .mn sits flush under the topbar. */
+  body > main { margin: 0; padding: 0; }
   .mn { display: grid; grid-template-columns: 252px minmax(0,1fr) 280px;
-    height: calc(100dvh - 116px); min-height: 0; background:
+    height: calc(100dvh - 64px); min-height: 0; background:
       radial-gradient(80% 60% at 50% -10%, rgba(126,231,224,.05), transparent 60%),
       var(--bg); }
   .mn [x-cloak] { display: none !important; }
@@ -427,7 +441,11 @@
   .lo-dot:nth-child(3) { animation-delay: .3s; }
 
   /* tool chips */
-  .tool-chip { margin-left: 3.4rem; }
+  /* one Mnem-side gutter: tool calls/results start at the EXACT same
+     x as the assistant prose (avatar 30px + the .turn-assistant
+     .85rem gap), so the whole Mnem side reads as one consistent
+     column instead of the old ~11px-off 3.4rem guess. */
+  .tool-chip { margin-left: calc(30px + .85rem); }
   .tool-chip summary { display: inline-flex; align-items: center; gap: .5rem;
     list-style: none; cursor: pointer; padding: .35rem .7rem;
     background: var(--panel); border: 1px solid var(--border-soft);
@@ -443,7 +461,7 @@
     border: 1px solid var(--border-soft); border-radius: var(--radius);
     padding: .6rem .8rem; font-size: .76rem; color: var(--fg-muted);
     overflow-x: auto; }
-  .tool-done { margin-left: 3.4rem; font-family: var(--mono);
+  .tool-done { margin-left: calc(30px + .85rem); font-family: var(--mono);
     font-size: .74rem; color: var(--ok); opacity: .75; }
 
   /* draft card */

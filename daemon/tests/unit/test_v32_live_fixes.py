@@ -187,7 +187,34 @@ def test_cite_on_chat_page_uses_side_panel_not_overlapping_popover() -> None:
     assert "querySelector('.cite-preview')" in BASE_HTML
     assert "new CustomEvent('mnemo-cite'" in BASE_HTML
     assert "onCiteEvent:" in CHAT_JS
-    assert "@mnemo-cite.window=" in CHAT_HTML
+    # REGRESSION FIX: the event is dispatched on `document` so the
+    # listener must be `.document` (a non-bubbling document event never
+    # reaches a `.window` listener -> the click "did nothing"); and the
+    # CustomEvent is bubbles:true as belt-and-suspenders.
+    assert "@mnemo-cite.document=" in CHAT_HTML
+    assert "@mnemo-cite.window=" not in CHAT_HTML
+    assert "bubbles: true" in BASE_HTML
+
+
+def test_chat_is_a_single_window_no_document_scroll() -> None:
+    # /chat is one viewport: page-scoped html/body overflow lock + the
+    # CORRECT 64px topbar offset (the old calc used a wrong 116px =>
+    # the void/scroll). NOT position:fixed (a base.html ancestor
+    # transform makes fixed resolve against it -> collapsed y:134/h:0).
+    assert "html, body { height: 100%; overflow: hidden; margin: 0; }" in CHAT_HTML
+    assert "body > main { margin: 0; padding: 0; }" in CHAT_HTML
+    assert "height: calc(100dvh - 64px)" in CHAT_HTML
+    assert "calc(100dvh - 116px)" not in CHAT_HTML
+    assert ".mn { position: fixed" not in CHAT_HTML
+
+
+def test_mnem_side_gutter_is_consistent() -> None:
+    # assistant prose + tool calls + tool results share ONE left
+    # gutter (avatar 30px + the .85rem turn gap) -- the old 3.4rem
+    # guess left them ~11px misaligned ("not consistent").
+    assert ".tool-chip { margin-left: calc(30px + .85rem); }" in CHAT_HTML
+    assert ".tool-done { margin-left: calc(30px + .85rem)" in CHAT_HTML
+    assert "margin-left: 3.4rem" not in CHAT_HTML
 
 
 def test_jitter_send_thinking_polish() -> None:
