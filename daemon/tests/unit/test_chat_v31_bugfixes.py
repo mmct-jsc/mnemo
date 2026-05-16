@@ -161,6 +161,29 @@ def test_dock_panel_is_decoupled_and_viewport_bounded() -> None:
     assert "min-height: 0" in css
 
 
+def test_dock_panel_is_anchored_to_the_companion_side_aware() -> None:
+    """The panel must STICK to the companion launcher (move with it,
+    flip side based on the launcher's position) -- not sit detached in
+    a fixed corner. JS computes it from the launcher rect + clamps."""
+    js = BASE_HTML
+    assert "_positionPanel" in js
+    assert "_repositionSoon" in js
+    # anchors off the launcher's rect + flips horizontally/vertically
+    assert "querySelector('.mnem-dock')" in js
+    assert "lr.right - pw" in js  # flip: open leftward on the right side
+    assert "lr.bottom + gap" in js or "lr.top - ph" in js  # vertical flip
+    # follows while dragging + re-anchors on snap/clamp/open
+    assert "cmp._positionPanel()" in js
+    assert "this._positionPanel()" in js
+    # the always-bottom-right hardcoding is gone (only a pre-JS
+    # fallback remains)
+    import re
+
+    m = re.search(r"\.mnem-chat \{[^}]*\}", BASE_HTML, re.S)
+    assert m
+    assert "right: 18px; bottom: 18px" not in m.group(0)
+
+
 def test_dock_clamps_persisted_position_into_the_viewport() -> None:
     """A stale/oversized mnem.pos (smaller window, other device, or
     bad save) stranded the dock off-screen because init() applied it
