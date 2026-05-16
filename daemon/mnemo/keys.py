@@ -121,6 +121,24 @@ def resolve_api_key(provider: str, *, dotenv_path: Path | None = None) -> str | 
     return _plaintext_key(provider)
 
 
+def resolve_api_key_tier(provider: str, *, dotenv_path: Path | None = None) -> str | None:
+    """C4 (v4.2): WHERE resolve_api_key(provider) would get its value
+    -- a read-only mirror of the same ladder. Returns the tier name
+    ('env' | 'dotenv' | 'keychain' | 'file') or None. NEVER the secret;
+    reuses the same helpers so the two cannot drift."""
+    var = ENV_VAR.get(provider)
+    if var and os.environ.get(var):
+        return "env"
+    p = dotenv_path or _discover_dotenv()
+    if var and p and p.is_file() and parse_env_file(p).get(var):
+        return "dotenv"
+    if _keyring_key(provider):
+        return "keychain"
+    if _plaintext_key(provider):
+        return "file"
+    return None
+
+
 def _set_keyring_key(provider: str, key: str) -> bool:
     """Store into the OS keychain. Returns False if keyring is missing
     or the platform has no Secret Service (Linux fallback path)."""
@@ -158,6 +176,36 @@ def set_api_key(provider: str, key: str) -> dict:
             f"{p} (mode 0600). Prefer a keychain-backed environment."
         ),
     }
+
+
+def _delete_keyring_key(provider: str) -> None:
+    """Best-effort keychain removal (mirror of _set_keyring_key).
+    Silent if keyring is missing or the entry does not exist."""
+    try:
+        import keyring
+    except Exception:
+        return
+    with contextlib.suppress(Exception):
+        keyring.delete_password("mnemo", f"provider:{provider}")
+
+
+def delete_api_key(provider: str) -> None:
+    """C4 (v4.2): remove a stored key (keychain + plaintext keys.json).
+    No-op if absent. The env / .env tiers are not ours to delete --
+    callers surface those read-only via resolve_api_key_tier."""
+    _delete_keyring_key(provider)
+    p = _keys_json_path()
+    if not p.is_file():
+        return
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    if isinstance(data, dict) and provider in data:
+        data.pop(provider)
+        p.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        with contextlib.suppress(OSError):
+            p.chmod(0o600)
 
 
 def has_key(provider: str) -> bool:

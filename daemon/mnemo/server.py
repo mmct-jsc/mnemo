@@ -1543,6 +1543,8 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
             name: {
                 "has_key": keys.has_key(name),
                 "model": (cfg.providers.get(name) or {}).get("model"),
+                # C4 (v4.2): read-only tier indicator, never the secret.
+                "key_tier": keys.resolve_api_key_tier(name),
             }
             for name in cfg.providers
         }
@@ -1596,6 +1598,13 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
             patch["providers"] = clean_providers
         if patch:
             config.update(patch)
+        return _settings_out()
+
+    @v1.delete("/settings/providers/{name}/key", response_model=SettingsOut)
+    def delete_provider_key(name: str) -> SettingsOut:
+        """C4 (v4.2): remove a stored key (keychain + plaintext). Env /
+        .env tiers are surfaced read-only and are not deleted here."""
+        keys.delete_api_key(name)
         return _settings_out()
 
     @v1.post("/settings/companion", response_model=SettingsOut)
