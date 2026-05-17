@@ -1,232 +1,211 @@
-"""Server-side Nebula graph layout (v4.5 architecture pivot).
+"""Server-side Nebula layout (v4.6 custom engine).
 
-Why this exists
----------------
-v4.5 swapped the Nebula renderer cosmos.gl -> sigma.js. The layout was
-first computed in the browser (graphology forceatlas2, sync then Web
-Worker). Across three measured attempts that proved **non-deterministic
-and quality-fragile** on the real 11k-node / 2298-component scope: a
-synchronous run converged, the Web Worker exploded the giant component,
-and circlepack alone was structureless confetti. Per the systematic-
-debugging "3 failed fixes => question the architecture" rule (and with
-the user's explicit approval) the layout moved here: computed ONCE in
-the daemon -- deterministic, fully converged, tuned -- cached, and the
-browser became a pure sigma renderer.
+ForceAtlas2 with the LinLog energy model + outbound-attraction-
+distribution + global particle-mesh repulsion (``_repel`` -- every node
+is repelled by every region; the kNN-16 of v4.5.x was the blob cause)
++ weak NON-strong gravity + full-extent normalize. Small components and
+singletons are laid out then DENSELY bin-packed into a band hugging the
+giant (never one-dot-per-component confetti).
 
-Algorithm
----------
-1. ``scipy.sparse.csgraph.connected_components`` -- find the giant
-   component and the (typically thousands of) tiny ones.
-2. Giant component: a deterministic Fruchterman-Reingold / ForceAtlas2
-   force layout. Repulsion is the k-nearest-neighbour approximation via
-   ``scipy.spatial.cKDTree`` (O(n log n) -- the part that made a pure
-   O(n^2) pass too slow), attraction is linear along edges, plus a mild
-   centroid gravity for cohesion, with a cooling schedule so it
-   *converges* (edges end up much shorter than random pairs -- the
-   readable-structure metric the client could never reliably hit).
-3. Everything else (small components + singletons) is scattered into a
-   compact ORGANIC dust halo *outside* the giant's radius -- a golden-
-   angle skeleton broken by a deterministic, independent-seed radial +
-   angular jitter (an irregular cloud, not a geometric "mandala" ring),
-   still bounded + never flung (the bbox-blow-out failure cannot recur).
-
-Determinism: every random draw uses a fixed-seed ``numpy`` generator,
-so the same graph yields a byte-identical layout (cacheable, stable).
-
-Output: a flat ``[x0, y0, x1, y1, ...]`` list of floats in the SAME
-node order the caller passed (the /ui/graph-data element order), so
-the client applies it index-aligned with zero coordination.
+Deterministic (fixed seed; no other RNG) so the same graph yields a
+byte-identical layout -- cacheable + stable. Signature unchanged from
+v4.5: ``compute_graph_layout(n, edges) -> [x0, y0, x1, y1, ...]`` in
+the caller's node order (the /ui/graph-data element order), so the
+client applies it index-aligned with zero coordination.
 """
 
 from __future__ import annotations
 
 import math
+import random
 
 import numpy as np
 
-# Fixed seeds + tuned constants. These produced, on the real scope, a
-# converged organic core (edge/random-pair ratio ~0.4) with a tidy
-# bounded halo -- verified live.
+from mnemo.ui._repel import repulsion
+
 _SEED = 42
-_R_CORE = 1000.0  # giant component normalised to ~this radius
-_GIANT_ITERS = 320  # FR iterations for the giant (with cooling)
-_KNN = 16  # k-nearest neighbours used for the repulsion approx
+_ITERS = 260  # FA2 converges faster than FR; offline + cached
+_GRAVITY = 0.05  # weak, NON-strong
+_SCALE = 14.0  # ForceAtlas2 repulsion scaling ratio
+_WORLD = 2000.0  # post-normalize target half-extent
+_SMALL_ITERS = 70  # iters for a tiny component
 
 
-def _largest_component(n: int, edges: list[tuple[int, int]]) -> tuple[np.ndarray, int]:
-    """Return (component-label per node, giant label)."""
+def _components(n: int, edges: list[tuple[int, int]]):
     from scipy.sparse import coo_matrix
     from scipy.sparse.csgraph import connected_components
 
     if not edges:
-        return np.zeros(n, dtype=np.int64), -1  # all singletons
-    r = np.fromiter((e[0] for e in edges), dtype=np.int64, count=len(edges))
-    c = np.fromiter((e[1] for e in edges), dtype=np.int64, count=len(edges))
-    data = np.ones(len(edges) * 2, dtype=np.int8)
-    rr = np.concatenate([r, c])
-    cc = np.concatenate([c, r])
-    adj = coo_matrix((data, (rr, cc)), shape=(n, n)).tocsr()
-    ncomp, labels = connected_components(adj, directed=False)
+        return np.zeros(n, dtype=np.int64), -1
+    r = np.fromiter((e[0] for e in edges), np.int64, len(edges))
+    c = np.fromiter((e[1] for e in edges), np.int64, len(edges))
+    d = np.ones(len(edges) * 2, np.int8)
+    adj = coo_matrix(
+        (d, (np.concatenate([r, c]), np.concatenate([c, r]))), shape=(n, n)
+    ).tocsr()
+    ncomp, lab = connected_components(adj, directed=False)
     if ncomp <= 1:
-        return labels, int(labels[0]) if n else -1
-    counts = np.bincount(labels, minlength=ncomp)
-    return labels, int(counts.argmax())
+        return lab, int(lab[0]) if n else -1
+    return lab, int(np.bincount(lab, minlength=ncomp).argmax())
 
 
-def _layout_giant(
-    gpos: np.ndarray, gedges: list[tuple[int, int]], rng: np.random.Generator
+def _layout_component(
+    pos: np.ndarray, edges_arr: np.ndarray, deg: np.ndarray, iters: int
 ) -> np.ndarray:
-    """Deterministic FR/FA2 on the giant component. ``gpos`` is the
-    seeded (g, 2) array (mutated + returned)."""
-    from scipy.spatial import cKDTree
-
-    g = gpos.shape[0]
-    if g <= 1:
-        return gpos
-    ea = np.fromiter((e[0] for e in gedges), dtype=np.int64, count=len(gedges))
-    eb = np.fromiter((e[1] for e in gedges), dtype=np.int64, count=len(gedges))
-
-    # Scale-free tuning: the ideal edge length k grows with area/node.
-    # k*4 (was *2) => longer springs => the giant SPREADS into a
-    # readable nebula instead of collapsing into a hot central blob
-    # (the "too bright" core: ~944 node-centers were landing in a
-    # 60px box; FR was over-contracted -- ratio 0.15 is tighter than
-    # readable, ~0.35-0.5 is the sweet spot).
-    area = _R_CORE * _R_CORE
-    k = math.sqrt(area / g) * 4.0
-    k2 = k * k
-    kk = min(_KNN, g - 1)
-
-    for it in range(_GIANT_ITERS):
-        disp = np.zeros((g, 2), dtype=np.float64)
-
-        # --- repulsion: k-nearest-neighbour approximation ---
-        tree = cKDTree(gpos)
-        # +1 because the first neighbour is the point itself.
-        _, idx = tree.query(gpos, k=kk + 1)
-        for j in range(1, kk + 1):
-            delta = gpos - gpos[idx[:, j]]
-            d2 = np.einsum("ij,ij->i", delta, delta) + 1e-9
-            f = (k2 / d2)[:, None]
-            disp += delta * f
-
-        # --- attraction: linear springs along edges ---
-        d_e = gpos[ea] - gpos[eb]
-        dist = np.sqrt(np.einsum("ij,ij->i", d_e, d_e)) + 1e-9
-        fa = (dist / k)[:, None] * (d_e / dist[:, None])
-        np.add.at(disp, ea, -fa)
-        np.add.at(disp, eb, fa)
-
-        # --- very weak gravity toward the centroid (cohesion only) ---
-        # 0.004 (was 0.012): just enough to keep disconnected-within-
-        # giant stragglers from drifting, NOT enough to collapse the
-        # whole component onto its centroid (the over-bright knot).
-        centroid = gpos.mean(axis=0)
-        disp += (centroid - gpos) * 0.004 * (np.linalg.norm(gpos - centroid, axis=1) / k)[:, None]
-
-        # --- cooling: bounded step, decaying over the run ---
-        temp = _R_CORE * 0.10 * (1.0 - it / _GIANT_ITERS) + 1.0
+    """ForceAtlas2 + LinLog on one component. ``pos`` (m,2) is mutated
+    and returned. ``edges_arr`` is (E,2) of LOCAL indices."""
+    m = pos.shape[0]
+    if m <= 1:
+        return pos
+    mass = deg + 1.0
+    if edges_arr.size:
+        ea = edges_arr[:, 0]
+        eb = edges_arr[:, 1]
+        src_mass = mass[ea]  # outbound-attraction distribution
+    for it in range(iters):
+        disp = repulsion(pos, mass, _SCALE)
+        # LinLog attraction F = log(1 + d), divided by source mass so
+        # hubs are pushed to the periphery, not piled in the centre.
+        if edges_arr.size:
+            d = pos[ea] - pos[eb]
+            dist = np.sqrt(np.einsum("ij,ij->i", d, d)) + 1e-9
+            fa = (np.log1p(dist) / dist / src_mass)[:, None] * d
+            np.add.at(disp, ea, -fa)
+            np.add.at(disp, eb, fa)
+        # weak gravity toward the centroid (NOT strong gravity -- that
+        # is what crushed the v4.5.x core into a blob).
+        ctr = pos.mean(axis=0)
+        g = ctr - pos
+        gd = np.sqrt(np.einsum("ij,ij->i", g, g)) + 1e-9
+        disp += g / gd[:, None] * (_GRAVITY * mass)[:, None]
+        # adaptive cooling: bounded step that decays over the run.
         dlen = np.sqrt(np.einsum("ij,ij->i", disp, disp)) + 1e-9
-        step = np.minimum(dlen, temp)
-        gpos += disp / dlen[:, None] * step[:, None]
+        cap = _WORLD * 0.10 * (1.0 - it / iters) + 1.0
+        pos += disp / dlen[:, None] * np.minimum(dlen, cap)[:, None]
+    return pos
 
-    # Normalise: centre at origin, then scale so the 95th-percentile
-    # radius == _R_CORE. Scaling by the MAX let a few outliers define
-    # the scale while the dense bulk stayed tiny (the blob); the p95
-    # makes the BULK of the giant fill the core disc -> nodes are
-    # individually resolvable, the structure reads.
-    gpos -= gpos.mean(axis=0)
-    radii = np.linalg.norm(gpos, axis=1)
-    r95 = float(np.percentile(radii, 95)) or 1.0
-    gpos *= _R_CORE / r95
-    return gpos
+
+def _normalize_full_extent(pos: np.ndarray) -> np.ndarray:
+    """Centre at origin, scale by the FULL extent (NOT p95 -- the
+    p95-normalize crushed the bulk into a few hundred px = a blob
+    cause) so the whole drawing fits ``_WORLD``."""
+    pos -= (pos.max(axis=0) + pos.min(axis=0)) / 2.0
+    ext = float(np.abs(pos).max()) or 1.0
+    return pos * (_WORLD / ext)
+
+
+def _grid_pack(
+    boxes: list[tuple[float, float]], anchor_r: float, rng: random.Random
+) -> list[tuple[float, float]]:
+    """Deterministic shelf bin-pack of (w,h) component boxes into a
+    DENSE band of concentric shelves starting at radius ``anchor_r``.
+    Returns a centre (cx,cy) per box. Dense + textured -- never the
+    one-dot-per-component confetti / sparse ring of v4.5.x."""
+    placed: list[tuple[float, float]] = []
+    r = max(anchor_r, 1.0)
+    circ = 2.0 * math.pi * r
+    x = 0.0
+    shelf_h = 0.0
+    for w, h in boxes:
+        if x + w > circ and x > 0.0:  # next outer shelf
+            r += shelf_h * 1.1 + 6.0
+            circ = 2.0 * math.pi * r
+            x = 0.0
+            shelf_h = 0.0
+        a = (x + w / 2.0) / r  # arc length -> angle
+        jit = (rng.random() - 0.5) * 5.0
+        rr = r + jit
+        placed.append((math.cos(a) * rr, math.sin(a) * rr))
+        x += w + 5.0
+        shelf_h = max(shelf_h, h)
+    return placed
+
+
+def _clean_edges(n: int, edges: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    out: list[tuple[int, int]] = []
+    seen: set[tuple[int, int]] = set()
+    for a, b in edges:
+        if a == b or not (0 <= a < n) or not (0 <= b < n):
+            continue
+        k = (a, b) if a < b else (b, a)
+        if k in seen:
+            continue
+        seen.add(k)
+        out.append((a, b))
+    return out
 
 
 def compute_graph_layout(n: int, edges: list[tuple[int, int]]) -> list[float]:
-    """Compute a deterministic, fully-converged layout for ``n`` nodes
-    (indices ``0..n-1``) with undirected ``edges``. Returns a flat
-    ``[x0, y0, x1, y1, ...]`` list of length ``2 * n`` in node order.
-    """
     if n <= 0:
         return []
     if n == 1:
         return [0.0, 0.0]
 
     rng = np.random.default_rng(_SEED)
-    pos = np.zeros((n, 2), dtype=np.float64)
+    pos = np.zeros((n, 2), np.float64)
+    clean = _clean_edges(n, edges)
 
-    # de-dupe + drop self-loops once (csgraph + FR both want clean input)
-    clean: list[tuple[int, int]] = []
-    seen: set[tuple[int, int]] = set()
-    for a, b in edges:
-        if a == b or not (0 <= a < n) or not (0 <= b < n):
-            continue
-        key = (a, b) if a < b else (b, a)
-        if key in seen:
-            continue
-        seen.add(key)
-        clean.append((a, b))
+    deg = np.zeros(n, np.float64)
+    for a, b in clean:
+        deg[a] += 1.0
+        deg[b] += 1.0
 
-    labels, giant = _largest_component(n, clean)
-    giant_mask = labels == giant if giant >= 0 else np.zeros(n, dtype=bool)
-    gidx = np.nonzero(giant_mask)[0]
+    lab, giant = _components(n, clean)
+    gmask = lab == giant if giant >= 0 else np.zeros(n, bool)
+    gidx = np.nonzero(gmask)[0]
 
-    # --- giant component: seeded disc -> deterministic FR ---
+    giant_r = _WORLD * 0.5
     if gidx.size:
+        remap = {int(o): k for k, o in enumerate(gidx)}
+        ge = np.array(
+            [(remap[a], remap[b]) for a, b in clean if gmask[a] and gmask[b]],
+            np.int64,
+        ).reshape(-1, 2)
         ang = rng.uniform(0, 2 * math.pi, gidx.size)
-        rad = np.sqrt(rng.uniform(0, 1, gidx.size)) * (_R_CORE * 0.6)
-        gpos = np.column_stack([np.cos(ang) * rad, np.sin(ang) * rad])
-        remap = {int(orig): k for k, orig in enumerate(gidx)}
-        gedges = [(remap[a], remap[b]) for a, b in clean if giant_mask[a] and giant_mask[b]]
-        gpos = _layout_giant(gpos, gedges, rng)
-        pos[gidx] = gpos
+        rad = np.sqrt(rng.uniform(0, 1, gidx.size)) * (_WORLD * 0.5)
+        gp = np.column_stack([np.cos(ang) * rad, np.sin(ang) * rad])
+        gp = _layout_component(gp, ge, deg[gidx], _ITERS)
+        gp = _normalize_full_extent(gp)
+        pos[gidx] = gp
+        giant_r = float(np.abs(gp).max()) or giant_r
 
-    # --- everything else: a compact phyllotaxis halo outside R_CORE ---
-    # Group the non-giant nodes by component so a small component's
-    # members cluster together rather than scatter.
+    # other components: lay each out tiny, collect its bounding box,
+    # then DENSE grid-pack the boxes into a band hugging the giant.
+    prng = random.Random(_SEED + 1)
     others: dict[int, list[int]] = {}
     for i in range(n):
-        if giant_mask[i]:
-            continue
-        others.setdefault(int(labels[i]), []).append(i)
+        if not gmask[i]:
+            others.setdefault(int(lab[i]), []).append(i)
     groups = sorted(others.values(), key=len, reverse=True)
 
-    # The halo stays CLOSE to the core so the giant component DOMINATES
-    # the frame (a bright dense galaxy with a dust halo) -- not a tiny
-    # core lost in a vast sparse ring (which sigma's fit-to-bbox would
-    # shrink to mud, the failure that started this). A phyllotaxis angle
-    # gives uniform density, but a PERFECT sunflower lattice rendered as
-    # a too-regular geometric "mandala" ring -- the user rejected the
-    # placement as "not good and lively / weird layout". v4.5.4: keep
-    # the uniform-density sqrt radius + golden angle as the SKELETON,
-    # then break the lattice with a deterministic per-group radial +
-    # angular jitter so it reads as an irregular organic dust field
-    # (still bounded ~2.6*_R_CORE; the giant is still ~40% of frame).
-    # The jitter draws from an INDEPENDENT fixed-seed stream so it is
-    # byte-identical regardless of the giant's size (whose own rng draws
-    # vary with g) -- determinism + cacheability preserved.
-    golden = math.pi * (3.0 - math.sqrt(5.0))  # sunflower angle
-    ng = max(1, len(groups))
-    hrng = np.random.default_rng(_SEED + 1)
-    rj = hrng.uniform(-0.16, 0.16, ng)  # per-group radial jitter (frac)
-    aj = hrng.uniform(-0.55, 0.55, ng)  # per-group angular jitter (rad)
-    for s, members in enumerate(groups):
-        frac = (s + 1) / ng
-        rr = _R_CORE * (1.32 + 0.92 * math.sqrt(frac)) * (1.0 + rj[s])
-        th = (s + 1) * golden + aj[s]
-        gx, gy = math.cos(th) * rr, math.sin(th) * rr
-        if len(members) == 1:
-            pos[members[0]] = (gx, gy)
-        else:
-            # an irregular CLOUD for the small component's members (not
-            # a perfect ring): jittered polar offsets around the anchor.
-            base = _R_CORE * 0.05 + len(members) * 1.3
-            ma = hrng.uniform(0.0, 2.0 * math.pi, len(members))
-            mr = base * np.sqrt(hrng.uniform(0.15, 1.0, len(members)))
-            for j, node in enumerate(members):
-                pos[node] = (gx + math.cos(ma[j]) * mr[j], gy + math.sin(ma[j]) * mr[j])
+    boxes: list[tuple[float, float]] = []
+    blobs: list[np.ndarray] = []
+    for members in groups:
+        m = len(members)
+        if m == 1:
+            boxes.append((9.0, 9.0))
+            blobs.append(np.zeros((1, 2), np.float64))
+            continue
+        rmap = {o: k for k, o in enumerate(members)}
+        ce = np.array(
+            [(rmap[a], rmap[b]) for a, b in clean if a in rmap and b in rmap],
+            np.int64,
+        ).reshape(-1, 2)
+        a0 = rng.uniform(0, 2 * math.pi, m)
+        sp = np.column_stack([np.cos(a0), np.sin(a0)]) * (7.0 + m)
+        sp = _layout_component(sp, ce, deg[members], _SMALL_ITERS)
+        sp -= (sp.max(axis=0) + sp.min(axis=0)) / 2.0
+        blobs.append(sp)
+        wh = sp.max(axis=0) - sp.min(axis=0) + 10.0
+        boxes.append((float(wh[0]), float(wh[1])))
 
-    out: list[float] = [0.0] * (2 * n)
+    if groups:
+        centres = _grid_pack(boxes, giant_r * 1.12, prng)
+        for members, blob, (cx, cy) in zip(groups, blobs, centres, strict=True):
+            for k, node in enumerate(members):
+                pos[node] = (cx + blob[k, 0], cy + blob[k, 1])
+
+    out = [0.0] * (2 * n)
     for i in range(n):
         out[2 * i] = float(pos[i, 0])
         out[2 * i + 1] = float(pos[i, 1])
