@@ -597,6 +597,51 @@ a:hover { color: var(--accent-hover); }
 .rail--dock .rail-empty { color: var(--fg-dim); font-size: .76rem;
   padding: .4rem; margin: 0; }
 
+/* C1.R (v4.4): shared rail-collapse toggle (page + dock, one
+   component). The dock starts collapsed so a growing session list is
+   bounded and never eats the bubble; the page starts expanded
+   (behaviour unchanged). Themed 100% from C1 tokens. */
+.rail-collapse {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  width: 100%;
+  padding: 0.4rem 0.55rem;
+  background: none;
+  border: 0;
+  border-radius: var(--radius);
+  color: var(--fg-muted);
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: var(--transition);
+}
+.rail-collapse:hover {
+  color: var(--fg);
+  background: var(--panel-2);
+}
+.rail-collapse-caret {
+  display: inline-block;
+  font-size: 0.7rem;
+  color: var(--fg-dim);
+  transition: transform var(--transition);
+}
+.rail-collapse-caret.open {
+  transform: rotate(90deg);
+}
+.rail-collapse-label {
+  flex: 1;
+  text-align: left;
+}
+.rail-collapse-count {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  color: var(--fg-dim);
+  background: var(--panel-2);
+  border-radius: var(--radius-pill);
+  padding: 0.05rem 0.45rem;
+}
+
 code, pre { font-family: var(--mono); font-size: 0.85em; }
 pre {
   background: var(--panel);

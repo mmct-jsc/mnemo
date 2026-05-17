@@ -23,9 +23,22 @@
     var surface = opts.surface || 'page';
     var pageContext = opts.pageContext || null;
 
+    // v4.4 (C1.R): single-source rail-collapse. Surface-aware default
+    // (page expanded, dock COLLAPSED so a growing session list never
+    // eats the dock bubble), persisted under a namespaced localStorage
+    // key (feedback_mnemo_alpine_gotchas).
+    var railKey = 'mnemo.chat.rail.' + surface;
+    var railOpen = surface === 'page';
+    try {
+      var _rv = localStorage.getItem(railKey);
+      if (_rv === '0') railOpen = false;
+      else if (_rv === '1') railOpen = true;
+    } catch (e) {}
+
     return {
       surface: surface,
       pageContext: pageContext,
+      railOpen: railOpen,
       conversations: [],
       activeId: null,
       messages: [],
@@ -140,6 +153,15 @@
       },
 
       // --- lifecycle ----------------------------------------------------
+      // v4.4 (C1.R): toggle + persist the rail-collapse state. Shared
+      // by both surfaces via the _chat_rail partial (no duplication).
+      toggleRail: function () {
+        this.railOpen = !this.railOpen;
+        try {
+          localStorage.setItem(railKey, this.railOpen ? '1' : '0');
+        } catch (e) {}
+      },
+
       init: function () {
         var self = this;
         return Promise.resolve(this.loadConversations()).then(function () {

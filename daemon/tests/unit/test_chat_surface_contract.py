@@ -10,7 +10,7 @@ from pathlib import Path
 
 TPL = Path(__file__).resolve().parents[2] / "mnemo" / "ui" / "templates"
 
-CAPS = ("rail", "bookmarks", "examples", "composer", "rename", "switch")
+CAPS = ("rail", "bookmarks", "examples", "composer", "rename", "switch", "collapse")
 PARTIALS = (
     "_chat_rail.html",
     "_chat_bookmarks.html",
@@ -106,3 +106,61 @@ def test_send_icon_is_single_sourced_and_optically_rebalanced() -> None:
     assert "send-ic" in comp  # the icon markup lives in the composer
     assert "_chat_composer.html" in page
     assert "_chat_composer.html" in base
+
+
+def test_rail_collapse_capability_and_surface_defaults() -> None:
+    """C1.R (v4.4): the session rail gains a single-sourced collapse
+    mechanic. CHAT_SURFACES declares `collapse` for BOTH surfaces (page
+    + dock) and a `rail_collapsed_default` (page expanded, dock
+    collapsed -- a growing dock history must never eat the bubble)."""
+    from mnemo.ui.chat_surface import CHAT_SURFACES
+
+    for surface in ("page", "dock"):
+        assert CHAT_SURFACES[surface]["collapse"] is True, (
+            f"{surface} must declare the collapse capability "
+            f"(single-source mechanic; default differs, not the mechanic)."
+        )
+        assert "rail_collapsed_default" in CHAT_SURFACES[surface], (
+            f"{surface} must declare rail_collapsed_default."
+        )
+    assert CHAT_SURFACES["page"]["rail_collapsed_default"] is False, (
+        "the page rail is expanded by default (page behaviour unchanged)."
+    )
+    assert CHAT_SURFACES["dock"]["rail_collapsed_default"] is True, (
+        "the dock rail is COLLAPSED by default -- a growing session "
+        "list must not eat the dock bubble (the bug this fixes)."
+    )
+
+
+def test_rail_collapse_toggle_is_shared_and_matrix_gated() -> None:
+    """One collapse toggle in the shared _chat_rail (C3 single-source,
+    no per-surface duplication), gated by the matrix, a11y-wired, and
+    backed by chat.js railOpen state with a namespaced persisted key
+    and a surface-aware default."""
+    rail = (TPL / "_chat_rail.html").read_text(encoding="utf-8")
+    assert "chat_surfaces[surface].collapse" in rail, (
+        "the collapse toggle must be matrix-gated, not unconditional."
+    )
+    assert "toggleRail()" in rail, "the toggle must call toggleRail()."
+    assert ':aria-expanded="railOpen"' in rail, (
+        "the toggle must bind :aria-expanded to railOpen (a11y)."
+    )
+    assert 'x-show="railOpen"' in rail, (
+        "the scrollable list must be gated by railOpen (collapse hides "
+        "it so a growing list stays bounded)."
+    )
+    assert "conversations.length" in rail, (
+        'the collapsed header must show the count ("Conversations (N)").'
+    )
+
+    chat_js = (
+        Path(__file__).resolve().parents[2] / "mnemo" / "ui" / "static" / "chat.js"
+    ).read_text(encoding="utf-8")
+    assert "railOpen" in chat_js, "mnemoChat() must own railOpen state."
+    assert "toggleRail" in chat_js, "mnemoChat() must expose toggleRail()."
+    assert "mnemo.chat.rail" in chat_js, (
+        "railOpen must persist under a namespaced localStorage key (feedback_mnemo_alpine_gotchas)."
+    )
+    assert "surface === 'page'" in chat_js, (
+        "the railOpen default must be surface-aware (page expanded, dock collapsed)."
+    )
