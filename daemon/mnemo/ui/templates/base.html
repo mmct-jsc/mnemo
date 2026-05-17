@@ -544,12 +544,25 @@
   {% block head_extra %}{% endblock %}
 </head>
 <body>
-  <header class="topbar">
+  <header class="topbar" x-data="navDrawer()" @keydown.escape.window="if (open) close()">
     <a href="/" class="brand" aria-label="mnemo home">
       <img src="/static/mnem/mark.svg?v={{ mnemo_version }}" width="22" height="22" alt="" class="brand-mark">
       <span>mnemo</span>
     </a>
 
+    <button type="button" class="nav-toggle" x-ref="navToggle"
+            @click="toggle()" :aria-expanded="open"
+            aria-controls="nav-drawer" aria-label="Menu">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none"
+           stroke="currentColor" stroke-width="2" stroke-linecap="round"
+           aria-hidden="true">
+        <line x1="3" y1="6" x2="21" y2="6"/>
+        <line x1="3" y1="12" x2="21" y2="12"/>
+        <line x1="3" y1="18" x2="21" y2="18"/>
+      </svg>
+    </button>
+
+    <div class="nav-drawer" id="nav-drawer" :class="{ open }">
     <nav>
       <a href="/"             class="{% if page == 'dashboard' %}active{% endif %}">Dashboard</a>
       <a href="/nodes-page"        class="{% if page == 'nodes' %}active{% endif %}">Nodes</a>
@@ -745,6 +758,9 @@
     <span class="help">
       <a href="https://github.com/mmct-jsc/mnemo" target="_blank" rel="noopener">docs</a>
     </span>
+    </div><!-- /.nav-drawer -->
+
+    <div class="nav-scrim" x-show="open" x-cloak @click="close()" aria-hidden="true"></div>
   </header>
 
   {% block layout %}
@@ -1686,6 +1702,34 @@
           if (diff < 3600) return Math.floor(diff / 60) + ' min ago';
           if (diff < 86400) return Math.floor(diff / 3600) + ' hr ago';
           return Math.floor(diff / 86400) + ' days ago';
+        }
+      };
+    }
+
+    // v4.4 C1.R: adaptive mobile nav drawer. Named factory (no
+    // x-init="init()" dup -- feedback_alpine_double_init). CSS owns the
+    // layout (display:contents >= --bp-md, fixed panel < it); Alpine
+    // owns ONLY the open boolean + a11y (Escape close + focus return).
+    // Open state persists under a namespaced localStorage key
+    // (feedback_mnemo_alpine_gotchas).
+    function navDrawer() {
+      const KEY = 'mnemo.nav.open';
+      return {
+        open: false,
+        init() {
+          try { this.open = localStorage.getItem(KEY) === '1'; }
+          catch (_) { this.open = false; }
+        },
+        toggle() { this.open = !this.open; this._persist(); },
+        close() {
+          this.open = false;
+          this._persist();
+          const t = this.$refs && this.$refs.navToggle;
+          if (t) t.focus();
+        },
+        _persist() {
+          try { localStorage.setItem(KEY, this.open ? '1' : '0'); }
+          catch (_) {}
         }
       };
     }

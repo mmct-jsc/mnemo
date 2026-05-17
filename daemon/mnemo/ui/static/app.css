@@ -170,6 +170,105 @@ body {
   color: var(--fg-dim);
 }
 
+/* --- C1.R adaptive nav drawer (v4.4) -------------------------------
+   >= --bp-md: .nav-drawer is display:contents, so nav + workspace-
+   switcher + bell + help stay direct .topbar flex items -- pixel-
+   identical to pre-v4.4 (the Task-1 desktop-parity discipline). The
+   hamburger is display:none. < --bp-md: the toggle appears and the
+   drawer becomes a fixed off-canvas panel with a scrim (a11y:
+   aria-expanded on the toggle, Escape + scrim close, focus return --
+   navDrawer()). Themed 100% from C1 tokens. */
+.nav-drawer {
+  display: contents;
+}
+.nav-toggle {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--fg);
+  cursor: pointer;
+  transition: var(--transition);
+}
+.nav-toggle:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.nav-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.nav-scrim {
+  position: fixed;
+  inset: var(--topbar-h) 0 0 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 55;
+  border: 0;
+}
+@media (min-width: 60rem) {
+  /* --bp-md: the scrim must never paint on desktop, even if the
+     persisted open state is stale from a narrow session. */
+  .nav-scrim {
+    display: none !important;
+  }
+}
+@media (max-width: 60rem) {
+  /* --bp-md: collapse the topbar into the off-canvas drawer. */
+  .nav-toggle {
+    display: inline-flex;
+    margin-left: auto;
+  }
+  /* Closed = display:none so the panel occupies zero space and can
+     NEVER extend the page (a position:fixed translateX(100%) panel
+     still adds to document scrollWidth regardless of clip/containing-
+     block -- proven; the topbar's backdrop-filter is a CB trap). Open
+     = a fixed panel pinned right:0, so its box is always WITHIN the
+     viewport [vw-w, vw]. Slide/transition is Task-6 polish (discrete
+     display animation), correctness first. */
+  .nav-drawer {
+    display: none;
+    position: fixed;
+    inset: var(--topbar-h) 0 0 auto;
+    width: min(82vw, 320px);
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.4rem;
+    padding: 1rem;
+    background: var(--panel);
+    border-left: 1px solid var(--border);
+    box-shadow: var(--shadow);
+    overflow-y: auto;
+    z-index: 60;
+  }
+  .nav-drawer.open {
+    display: flex;
+  }
+  .nav-drawer nav {
+    flex-direction: column;
+    flex: none;
+    gap: 0.15rem;
+  }
+  .nav-drawer nav a {
+    padding: 0.6rem 0.75rem;
+    border-radius: var(--radius);
+  }
+  .nav-drawer nav a.active::after {
+    display: none;
+  }
+  .nav-drawer .workspace-switcher,
+  .nav-drawer .bell-wrap {
+    width: 100%;
+  }
+  .nav-drawer .help {
+    padding: 0.5rem 0.25rem;
+  }
+}
+
 /* --- Main layout --------------------------------------------------- */
 
 main {
