@@ -46,8 +46,16 @@ def test_nebula_gl_surface() -> None:
         "fwidth/derivatives must NOT be used (WebGL1 needs an "
         "extension; its absence = invalid program = black render)"
     )
-    assert "dFdx" not in src and "dFdy" not in src, (
-        "no screen-space derivatives -- extension-free SDF only"
+    assert "dFdx" not in src, "no screen-space derivatives (dFdx)"
+    assert "dFdy" not in src, "no screen-space derivatives (dFdy)"
+    # the Milky-Way bulge is a RENDERED luminous core glow (a
+    # locality-preserving graph layout cannot pile a density bulge
+    # without scrambling edges) -- it must exist as an additive quad.
+    assert "drawCore" in src, (
+        "the galactic core-glow draw must exist (the rendered bulge)"
+    )
+    assert "triangle strip" in src, (
+        "core glow must be a quad (gl.POINTS size is driver-capped)"
     )
     # the instanced-edge GL_INVALID_OPERATION trap must not return:
     # edges are a non-instanced LINES draw (no divisor on a buffer).

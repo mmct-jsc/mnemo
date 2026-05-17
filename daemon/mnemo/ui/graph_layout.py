@@ -159,38 +159,89 @@ def _normalize_full_extent(pos: np.ndarray) -> np.ndarray:
     return pos * (_WORLD / ext)
 
 
+_ARMS = 2
+_BULGE_GAMMA = 1.5  # smooth radial power r=R*(r/R)^g, g>1 -> a mild
+#  locality-PRESERVING core concentration (the strong visual bulge is
+#  the renderer's core-glow + brightness; over-compressing here both
+#  scrambles graph meaning AND flattens the spiral winding).
+_WIND = 4.6  # logarithmic-spiral winding -> ~1.5-2 turn arms (a
+#  pronounced 2-arm galaxy, not a faint twist)
+_ARM_SPREAD = 0.40  # in-arm angular half-width (rad)
+_DISC_ELL = 0.84  # y-scale -> slightly elliptical face-on disc
+
+
+def _galaxy_transform(gp: np.ndarray) -> np.ndarray:
+    """Shear a centred 2D embedding into a face-on logarithmic SPIRAL
+    galaxy: a radius-compressed dense BULGE + ``_ARMS`` sweeping
+    log-spiral arms. The arm + along-arm position come from the
+    embedding's own polar angle, so connected nodes (which the
+    spectral embedding already placed near each other) keep adjacency
+    -> the arms are COHERENT, not scrambled. A deterministic
+    cross-arm scatter makes the arms soft bands (real galaxies), not
+    razor lines. Deterministic (fixed-seed numpy generator)."""
+    m = gp.shape[0]
+    if m <= 2:
+        return gp
+    g = np.random.default_rng(_SEED + 7)
+    d = gp - gp.mean(axis=0)
+    r = np.sqrt(np.einsum("ij,ij->i", d, d)) + 1e-9
+    th = np.arctan2(d[:, 1], d[:, 0])
+    big_r = float(r.max()) or 1.0
+    # SMOOTH monotone radial compression (locality-preserving): nodes
+    # at similar embedding radius stay together so communities/edges
+    # stay coherent (a rank CDF bulges harder but scrambles locality
+    # into a meaningless hairball-galaxy). The pronounced *visual*
+    # bulge is the renderer's job (radial brightness + core bloom);
+    # the layout just gives a mild structural concentration + the
+    # locality-preserving spiral-arm shear below.
+    r2 = ((r / big_r) ** _BULGE_GAMMA) * big_r
+    # arm assignment from the embedding angle (community-coherent:
+    # neighbours share theta -> share an arm); within-arm offset keeps
+    # the community's internal spread along the arm.
+    seg = (th + math.pi) / (2.0 * math.pi)  # 0..1
+    arm_f = np.floor(seg * _ARMS)
+    arm_base = (arm_f % _ARMS) * (2.0 * math.pi / _ARMS)
+    within = seg * _ARMS - arm_f - 0.5  # -0.5..0.5
+    jit = g.random(m) - 0.5
+    ang = (
+        arm_base
+        + within * _ARM_SPREAD
+        + _WIND * np.log1p(r2 / (big_r * 0.16))  # log-spiral winding
+        + jit * _ARM_SPREAD * 0.85  # soft-band cross-arm scatter
+    )
+    rr = r2 * (1.0 + (g.random(m) - 0.5) * 0.06)
+    out = np.column_stack([np.cos(ang) * rr, np.sin(ang) * rr])
+    out[:, 1] *= _DISC_ELL
+    return out
+
+
 def _grid_pack(
     boxes: list[tuple[float, float]], anchor_r: float, rng: random.Random
 ) -> list[tuple[float, float]]:
-    """Place N component centres in a BOUNDED uniform-density annulus
-    hugging the giant (a phyllotaxis disc, NOT an unbounded expanding
-    shelf-pack). The shelf-pack grew the outer radius without limit --
-    on the real ~2298-component scope it reached ~8x the giant radius
-    so the giant became a tiny core lost in a vast halo (the exact
-    failure this whole arc started from; caught by the real-scope
-    numeric verify). Here radius = inner + (outer-inner)*sqrt(k/N):
-    the sqrt gives UNIFORM density (dense, no sparse ring) and the
-    outer bound is fixed at ~2.6x the giant radius BY CONSTRUCTION,
-    regardless of component count. The golden angle + per-site jitter +
-    the per-component blob shapes keep it an organic textured field,
-    never a single-dot mandala. Deterministic (seeded ``rng``)."""
+    """Scatter the singleton / small-component centres as the galaxy's
+    faint EXTENDED OUTER FIELD -- field + halo stars continuing the
+    disc beyond the bright spiral, THINNING outward (not a tight ring,
+    not confetti, not a uniform band). Radius density ~ frac**0.85 so
+    it's denser just outside the arms and fades out; the golden angle
+    + a gentle co-rotating spiral twist + per-site jitter + the same
+    disc ellipticity make it read as the SAME galactic plane. Bounded
+    (~2.05x giant radius). Deterministic (seeded ``rng``)."""
     n = len(boxes)
     if n == 0:
         return []
     inner = max(anchor_r, 1.0)
-    # TIGHT band hugging the giant (was *2.35 -> a wide scattered
-    # field of ~2000 dots that visually dominated the whole frame and
-    # read as "bad layout"). *1.55 -> a dense tidy dust halo; the
-    # giant component now dominates the view as intended.
-    outer = max(inner * 1.55, inner + 1.0)
+    outer = max(inner * 2.05, inner + 1.0)
     golden = math.pi * (3.0 - math.sqrt(5.0))
     placed: list[tuple[float, float]] = []
     for k in range(n):
         frac = (k + 0.5) / n
-        rr = inner + (outer - inner) * math.sqrt(frac)
-        rr += (rng.random() - 0.5) * 7.0  # radial jitter (anti-lattice)
-        th = (k + 1) * golden + (rng.random() - 0.5) * 0.5
-        placed.append((math.cos(th) * rr, math.sin(th) * rr))
+        rr = inner + (outer - inner) * (frac**0.85)  # thins outward
+        rr += (rng.random() - 0.5) * 9.0  # radial jitter
+        # golden-angle scatter + a gentle outward spiral twist so the
+        # field co-rotates with the disc instead of forming a ring.
+        th = (k + 1) * golden + 1.6 * math.log1p(rr / (inner + 1.0))
+        th += (rng.random() - 0.5) * 0.6
+        placed.append((math.cos(th) * rr, math.sin(th) * rr * _DISC_ELL))
     return placed
 
 
@@ -233,9 +284,13 @@ def compute_graph_layout(n: int, edges: list[tuple[int, int]]) -> list[float]:
             [(remap[a], remap[b]) for a, b in clean if gmask[a] and gmask[b]],
             np.int64,
         ).reshape(-1, 2)
-        # community-separating spectral embedding -> FA2 declutter.
+        # community-separating spectral embedding -> FA2 declutter ->
+        # shear into a face-on SPIRAL GALAXY (dense bulge + 2 log-
+        # spiral arms; adjacency preserved so arms stay coherent).
         gp = _spectral(gidx.size, ge)
         gp = _layout_component(gp, ge, deg[gidx], _ITERS)
+        gp = _normalize_full_extent(gp)
+        gp = _galaxy_transform(gp)
         gp = _normalize_full_extent(gp)
         pos[gidx] = gp
         giant_r = float(np.abs(gp).max()) or giant_r

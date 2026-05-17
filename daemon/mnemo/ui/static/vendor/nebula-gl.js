@@ -218,6 +218,14 @@
     var sizArr = new Float32Array(nodes.map(function (d) {
       return d.size || 4;
     }));
+    // galaxy radius (max node distance from world origin; the layout
+    // centres the disc at 0). Drives the galactic radial palette +
+    // the radius-falloff brightness/bloom -> the bulge.
+    var worldR = 1.0;
+    for (var _w = 0; _w < nodes.length; _w++) {
+      var _d = Math.hypot(nodes[_w].x || 0, nodes[_w].y || 0);
+      if (_d > worldR) worldR = _d;
+    }
     var posBuf = regl.buffer({ usage: 'dynamic', data: posArr });
     var colBuf = regl.buffer(colArr);
     var sizBuf = regl.buffer(sizArr);
@@ -312,14 +320,25 @@
       vert:
         'precision highp float; attribute vec2 pos; attribute vec3 col;' +
         'attribute float siz; attribute float hl;' +
-        'uniform vec2 cam,res; uniform float zoom;' +
+        'uniform vec2 cam,res; uniform float zoom; uniform float wr;' +
         'varying vec3 vC; varying float vH; varying float vB;' +
+        'varying float vR;' +
         'void main(){' +
-        // MILKY-WAY palette: whiten each type colour toward a blue-
-        // white starlight; hubs (bigger) read a touch brighter/warmer.
-        ' vec3 star=mix(col, vec3(0.86,0.92,1.0), 0.42);' +
-        ' vB=0.72+0.28*clamp(siz/8.0,0.0,1.0);' +
-        ' vC=star; vH=hl;' +
+        // GALACTIC radial palette: warm white-gold luminous BULGE ->
+        // blue-white along the spiral arms -> faint cool steel in the
+        // outskirts. Node type is only a subtle hue tint (.18) so the
+        // galaxy reads as one body, not a type confetti.
+        ' float rN=clamp(length(pos)/wr,0.0,1.0); vR=rN;' +
+        ' vec3 gold=vec3(1.0,0.90,0.70);' +
+        ' vec3 blu=vec3(0.78,0.88,1.0);' +
+        ' vec3 steel=vec3(0.50,0.62,0.86);' +
+        ' vec3 gal = rN<0.5 ? mix(gold,blu,rN/0.5)' +
+        '                   : mix(blu,steel,(rN-0.5)/0.5);' +
+        ' vC = mix(gal, col, 0.18); vH=hl;' +
+        // brightness falls hard with radius (bright bulge -> faint
+        // halo) with a mild hub boost; the dense bright core + bloom
+        // IS the galactic bulge (no separate pass).
+        ' vB=(1.30 - 0.92*rN) * (0.86+0.26*clamp(siz/8.0,0.0,1.0));' +
         ' vec2 p=(pos-cam)*zoom;' +
         ' gl_Position=vec4(p.x/(res.x*0.5),p.y/(res.y*0.5),0.0,1.0);' +
         // Point size is mostly SCREEN-space with a mild zoom response
@@ -338,12 +357,15 @@
       // 0.07 of the point radius is a crisp ~1-4 px edge at 3..64 px.
       frag:
         'precision highp float; varying vec3 vC; varying float vH;' +
-        'varying float vB; uniform float glow;' +
+        'varying float vB; varying float vR; uniform float glow;' +
         'void main(){ vec2 q=gl_PointCoord-0.5; float d=length(q);' +
         ' float aa=0.09;' +
         // clean soft-edged star disc (no glossy 3D rim).
         ' float core=1.0-smoothstep(0.5-aa,0.5,d);' +
-        ' float bloom=glow*(1.0-smoothstep(0.06,0.5,d))*0.32;' +
+        // bloom is STRONG in the bulge, fades to almost nothing in the
+        // outskirts -> the luminous galactic core emerges from the
+        // dense bright centre (no separate fullscreen pass).
+        ' float bloom=glow*(1.0-smoothstep(0.06,0.5,d))*0.42*(1.15-0.95*vR);' +
         // FOCUS: vH=1 lit, vH=0 dimmed to faint dust (the spotlight/
         // blur-others behaviour). Lit nodes also get the hub-brightness
         // vB; dimmed nodes fade to ~10% alpha + darker so the selected
@@ -358,6 +380,7 @@
         zoom: function () { return cam.zoom; },
         res: function (c) { return res(c); },
         glow: function () { return glow; },
+        wr: function () { return worldR; },
       },
       count: nodes.length,
       primitive: 'points',
@@ -365,6 +388,44 @@
         enable: true,
         func: { src: 'src alpha', dst: 'one minus src alpha' },
       },
+      depth: { enable: false },
+    });
+
+    // --- galactic CORE GLOW: a soft warm-gold luminous bulge at the
+    // galaxy centre (world origin -- the layout centres the disc
+    // there). A locality-preserving graph layout cannot pile a real
+    // density bulge without scrambling edges, so the bright bulge is
+    // rendered: an additive radial quad (NOT a gl.POINTS sprite --
+    // point size is driver-capped; and extension-free GLSL only --
+    // no derivatives). Scales with zoom so it stays the galaxy core.
+    var coreR = Math.max(worldR * 0.42, 1.0);
+    var coreQuad = regl.buffer(
+      new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]));
+    var drawCore = regl({
+      vert:
+        'precision highp float; attribute vec2 uv;' +
+        'uniform vec2 cam,res; uniform float zoom; uniform float cr;' +
+        'varying vec2 vUv;' +
+        'void main(){ vUv=uv; vec2 w=uv*cr - cam; vec2 p=w*zoom;' +
+        ' gl_Position=vec4(p.x/(res.x*0.5),p.y/(res.y*0.5),0.0,1.0);}',
+      frag:
+        'precision highp float; varying vec2 vUv; uniform float inten;' +
+        'void main(){ float d=length(vUv);' +
+        // soft gaussian-ish falloff; warm white-gold core fading out.
+        ' float g=exp(-d*d*3.1)*inten;' +
+        ' vec3 col=mix(vec3(1.0,0.93,0.74), vec3(0.96,0.82,0.95), d);' +
+        ' gl_FragColor=vec4(col*g, g); }',
+      attributes: { uv: coreQuad },
+      uniforms: {
+        cam: function () { return [cam.x, cam.y]; },
+        zoom: function () { return cam.zoom; },
+        res: function (c) { return res(c); },
+        cr: function () { return coreR; },
+        inten: function () { return 0.55; },
+      },
+      count: 4,
+      primitive: 'triangle strip',
+      blend: { enable: true, func: { src: 'one', dst: 'one' } },
       depth: { enable: false },
     });
 
@@ -457,6 +518,7 @@
       // wrap the draws so a regl/GL throw is REPORTED on the HUD
       // instead of silently rendering nothing (the exact mystery).
       try {
+        drawCore();                       // galactic bulge underglow
         if (edges.length) drawEdges();
         drawNodes();
         if (hiVerts) hiEdges();
