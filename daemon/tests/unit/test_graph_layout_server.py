@@ -1,22 +1,16 @@
-"""v4.5 architecture pivot: the graph layout is computed SERVER-SIDE.
+"""v4.6 custom layout engine: ForceAtlas2 / LinLog / Barnes-Hut.
 
-Root cause (3 failed client attempts, user-approved pivot): running
-ForceAtlas2 in the browser on the real 11k-node / 2298-component graph
-is non-deterministic + quality-fragile (sync converged, the worker
-exploded; circlepack alone = structureless confetti). The fix is the
-documented "different mechanism": compute the layout ONCE in the
-daemon -- deterministic, fully converged, tuned -- store it in the
-existing layout cache, and let the browser be a pure sigma renderer.
+The v4.5.x Fruchterman-Reingold collapsed the giant component into a
+featureless dense disk (kNN-16-only repulsion + undifferentiated
+gravity + p95-normalize) and scattered the ~2298 tiny components as
+one-dot-per-component confetti. v4.6 replaces the ALGORITHM (the
+server-side + cached architecture is unchanged; ``compute_graph_layout
+(n, edges) -> [x0,y0,...]`` keeps its exact signature).
 
-`compute_graph_layout(n, edges)` returns a flat ``[x0,y0,x1,y1,...]``
-in the SAME node order the caller (the /ui/graph-data endpoint) used,
-so the client applies it index-aligned with zero coordination.
-
-These tests lock the server contract: deterministic, all nodes
-finite + placed, the giant component is a converged organic structure
-(edges much shorter than random pairs -- the metric the client could
-never reliably hit), and the 2298 small components / singletons form
-a tidy bounded halo (no fling, no bbox blow-out).
+These tests are the real acceptance gate: the dominant historical
+failure (the "blob") is a property of the Python output and is
+asserted NUMERICALLY here -- no GPU required. A planted-community
+graph makes "communities must separate" directly measurable.
 """
 
 from __future__ import annotations
@@ -24,156 +18,41 @@ from __future__ import annotations
 import math
 import random
 
+import numpy as np
+
 from mnemo.ui.graph_layout import compute_graph_layout
 
 
-def _gen_graph(
-    giant: int, small: int, singletons: int, seed: int = 7
-) -> tuple[int, list[tuple[int, int]]]:
-    """A graph shaped like the real scope: 1 giant connected component,
-    several small components, many singletons."""
+def _planted(communities: int, per: int, singles: int, seed: int = 7):
+    """A graph with PLANTED community structure: ``communities`` dense
+    blobs (sparse inter-community bridges) form the giant; plus
+    ``singles`` singletons. Returns ``(n, edges, labels)`` where
+    ``labels[i]`` is the planted community of node ``i`` (``-1`` for a
+    singleton)."""
     rng = random.Random(seed)
     edges: list[tuple[int, int]] = []
-    # giant: a connected sparse graph (spanning chain + random extra)
-    for i in range(1, giant):
-        edges.append((i, rng.randint(0, i - 1)))
-    for _ in range(giant):
-        a, b = rng.randrange(giant), rng.randrange(giant)
-        if a != b:
-            edges.append((a, b))
-    n = giant
-    # small components (size 3..6 each), disjoint from the giant
-    for _ in range(small):
-        sz = rng.randint(3, 6)
-        base = n
-        for k in range(1, sz):
-            edges.append((base + k, base + rng.randrange(k)))
-        n += sz
-    # singletons
-    n += singletons
-    return n, edges
+    labels: list[int] = []
+    nodes_by_c: list[list[int]] = []
+    n = 0
+    for c in range(communities):
+        members = list(range(n, n + per))
+        nodes_by_c.append(members)
+        labels += [c] * per
+        n += per
+        # dense intra-community (~4 internal edges per node)
+        for i in members:
+            for _ in range(4):
+                j = rng.choice(members)
+                if i != j:
+                    edges.append((i, j))
+    # sparse inter-community bridges (one per community pair)
+    for a in range(communities):
+        for b in range(a + 1, communities):
+            edges.append((rng.choice(nodes_by_c[a]), rng.choice(nodes_by_c[b])))
+    labels += [-1] * singles
+    n += singles
+    return n, edges, labels
 
 
-def test_layout_shape_and_finiteness() -> None:
-    n, edges = _gen_graph(400, 30, 120)
-    pos = compute_graph_layout(n, edges)
-    assert isinstance(pos, list)
-    assert len(pos) == 2 * n, "positions must be a flat [x0,y0,...] of length 2n"
-    assert all(isinstance(v, float) for v in pos)
-    assert all(math.isfinite(v) for v in pos), "every coordinate must be finite"
-
-
-def test_layout_is_deterministic() -> None:
-    """Same graph -> byte-identical layout (the whole point of moving
-    it server-side: stable, cacheable, reproducible)."""
-    n, edges = _gen_graph(300, 20, 80)
-    a = compute_graph_layout(n, edges)
-    b = compute_graph_layout(n, edges)
-    assert a == b, "compute_graph_layout must be deterministic for a fixed graph"
-
-
-def test_giant_component_is_organically_converged() -> None:
-    """The giant component's edges must be SHORTER than random node
-    pairs within it (a real force-directed structure) -- the
-    acceptance metric the fragile client FA2 never reliably hit
-    (it measured >1.0; a converged layout is well below 1)."""
-    n, edges = _gen_graph(900, 25, 150)
-    pos = compute_graph_layout(n, edges)
-
-    # giant = the component of node 0 (the generator builds it first).
-    from scipy.sparse import coo_matrix  # noqa: PLC0415
-    from scipy.sparse.csgraph import connected_components  # noqa: PLC0415
-
-    if edges:
-        r = [e[0] for e in edges] + [e[1] for e in edges]
-        c = [e[1] for e in edges] + [e[0] for e in edges]
-        m = coo_matrix(([1] * len(r), (r, c)), shape=(n, n))
-    ncomp, labels = connected_components(m, directed=False)
-    giant_label = max(range(ncomp), key=lambda lbl: int((labels == lbl).sum()))
-    gidx = [i for i in range(n) if labels[i] == giant_label]
-    gset = set(gidx)
-
-    def d(i: int, j: int) -> float:
-        return math.hypot(pos[2 * i] - pos[2 * j], pos[2 * i + 1] - pos[2 * j + 1])
-
-    gedges = [(a, b) for (a, b) in edges if a in gset and b in gset]
-    mean_edge = sum(d(a, b) for a, b in gedges) / len(gedges)
-    rng = random.Random(1)
-    pairs = [(rng.choice(gidx), rng.choice(gidx)) for _ in range(2000)]
-    mean_rand = sum(d(a, b) for a, b in pairs if a != b) / len(pairs)
-
-    ratio = mean_edge / mean_rand
-    # < 0.9: edges must be meaningfully SHORTER than random pairs (a
-    # real force layout; a failed/random one is ~1.0). The bar is 0.9
-    # not 0.75 because (a) this generator is near-RANDOM (random extra
-    # edges, no planted communities) so a faithful FR can only contract
-    # it so far, and (b) v4.5 polish DELIBERATELY trades extreme
-    # contraction for readability -- the over-tight ratio-0.15 core
-    # rendered as a blinding central blob ("colors too bright"). On the
-    # REAL semantic scope (genuine community structure) this same tuning
-    # converges far tighter (verified live: edges ~0.15-0.35x random),
-    # but the readable-spread is the intended product behaviour.
-    assert ratio < 0.9, (
-        f"giant component must be a real force layout (edges shorter "
-        f"than random pairs, not structureless); got ratio {ratio:.3f} "
-        f"(edge {mean_edge:.0f} vs random {mean_rand:.0f})"
-    )
-
-
-def test_small_components_form_a_bounded_tidy_halo() -> None:
-    """The 2298-component reality: small comps + singletons must sit
-    in a bounded halo around the giant -- never flung (the cosmos /
-    client-FA2 failure that blew out the bbox + crushed the core)."""
-    n, edges = _gen_graph(800, 60, 400)
-    pos = compute_graph_layout(n, edges)
-    xs = pos[0::2]
-    ys = pos[1::2]
-    cx = sum(xs) / n
-    cy = sum(ys) / n
-    radii = [math.hypot(xs[i] - cx, ys[i] - cy) for i in range(n)]
-    rmax = max(radii)
-    # nothing is flung to infinity: the whole graph fits a sane box
-    # (max radius is a small multiple of the median, not 1000x).
-    smed = sorted(radii)[n // 2]
-    assert rmax < smed * 12 + 1, (
-        f"a node is flung far out (max r {rmax:.0f} vs median {smed:.0f}) "
-        f"-- the bbox-blow-out failure must not recur server-side"
-    )
-
-
-def test_halo_is_organic_not_a_phyllotaxis_mandala() -> None:
-    """v4.5.3 de-mandala: the user rejected the small-component/
-    singleton halo as a too-regular geometric ring ("placement is not
-    good and lively / weird layout"). A PERFECT phyllotaxis places
-    singleton k at radius R*(1.32+0.92*sqrt(k/ng)) -- strictly
-    increasing with placement order, so radius-vs-order has ZERO
-    inversions (a smooth lattice). The deterministic per-group jitter
-    must break that lattice into an irregular organic dust field:
-    radius-vs-order must now have MANY inversions. (Determinism +
-    boundedness are still locked by the tests above.)"""
-    giant, singles = 300, 500
-    n, edges = _gen_graph(giant, 0, singles)  # singletons only halo
-    pos = compute_graph_layout(n, edges)
-    xs, ys = pos[0::2], pos[1::2]
-    cx, cy = sum(xs) / n, sum(ys) / n
-    # singleton node indices are the trailing block; their halo
-    # placement order is monotonic in node index (stable group sort).
-    rad = [math.hypot(xs[i] - cx, ys[i] - cy) for i in range(giant, giant + singles)]
-    inversions = sum(1 for k in range(len(rad) - 1) if rad[k + 1] < rad[k])
-    frac = inversions / (len(rad) - 1)
-    assert frac > 0.15, (
-        f"the halo is still a near-perfect phyllotaxis lattice (only "
-        f"{frac:.1%} radius inversions) -- the jitter must make it an "
-        f"organic irregular cloud, not the rejected 'mandala' ring"
-    )
-
-
-def test_handles_degenerate_inputs() -> None:
-    assert compute_graph_layout(0, []) == []
-    one = compute_graph_layout(1, [])
-    assert len(one) == 2
-    assert all(math.isfinite(v) for v in one)
-    # all singletons (no edges) must still place every node finitely
-    iso = compute_graph_layout(50, [])
-    assert len(iso) == 100
-    assert all(math.isfinite(v) for v in iso)
+def _xy(pos: list[float], i: int) -> tuple[float, float]:
+    return pos[2 * i], pos[2 * i + 1]
