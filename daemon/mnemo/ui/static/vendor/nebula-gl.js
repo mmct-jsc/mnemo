@@ -221,6 +221,42 @@
     var posBuf = regl.buffer({ usage: 'dynamic', data: posArr });
     var colBuf = regl.buffer(colArr);
     var sizBuf = regl.buffer(sizArr);
+    // per-node focus weight: 1 = lit, 0 = dimmed to dust. Drives the
+    // "spotlight the selection + neighbours, blur everything else"
+    // behaviour (the reported broken node-focus).
+    var hlArr = new Float32Array(nodes.length);
+    for (var _h = 0; _h < hlArr.length; _h++) hlArr[_h] = 1.0;
+    var hlBuf = regl.buffer({ usage: 'dynamic', data: hlArr });
+    var hlActive = false;  // is a focus/filter set in effect?
+    // adjacency (node -> Set of neighbour indices) so a click can
+    // spotlight the node + its neighbours with zero graph.html help.
+    var adj = (function () {
+      var a = [];
+      for (var i = 0; i < nodes.length; i++) a.push(null);
+      for (var e = 0; e < edges.length; e++) {
+        var s = edges[e].s, t = edges[e].t;
+        (a[s] || (a[s] = {}))[t] = 1;
+        (a[t] || (a[t] = {}))[s] = 1;
+      }
+      return a;
+    })();
+    function applyHL(setObj) {
+      // setObj: a JS Set/obj of lit indices, or null = all lit.
+      hlActive = !!setObj;
+      for (var i = 0; i < hlArr.length; i++) {
+        hlArr[i] = (!setObj || (setObj.has ? setObj.has(i) : setObj[i]))
+          ? 1.0 : 0.0;
+      }
+      hlBuf({ data: hlArr });
+    }
+    function focusSet(i) {
+      // selected node + its direct neighbours = the lit set.
+      var s = new Set();
+      s.add(i);
+      var nb = adj[i];
+      if (nb) for (var k in nb) s.add(+k);
+      return s;
+    }
 
     // --- edges: ONE non-instanced LINES draw, 2 vertices per edge.
     // The prior per-instance setup had no per-vertex attribute stream
@@ -256,7 +292,12 @@
         cam: function () { return [cam.x, cam.y]; },
         zoom: function () { return cam.zoom; },
         res: function (c) { return res(c); },
-        ec: function () { return edgeColor; },
+        ec: function () {
+          // when a node is focused, fade the base web hard so the
+          // accent incident filaments (hiEdges) read clearly.
+          var a = edgeColor[3] * (hlActive ? 0.22 : 1.0);
+          return [edgeColor[0], edgeColor[1], edgeColor[2], a];
+        },
       },
       count: edges.length * 2,
       primitive: 'lines',
@@ -270,9 +311,16 @@
     var drawNodes = regl({
       vert:
         'precision highp float; attribute vec2 pos; attribute vec3 col;' +
-        'attribute float siz; uniform vec2 cam,res; uniform float zoom;' +
-        'varying vec3 vC;' +
-        'void main(){ vC=col; vec2 p=(pos-cam)*zoom;' +
+        'attribute float siz; attribute float hl;' +
+        'uniform vec2 cam,res; uniform float zoom;' +
+        'varying vec3 vC; varying float vH; varying float vB;' +
+        'void main(){' +
+        // MILKY-WAY palette: whiten each type colour toward a blue-
+        // white starlight; hubs (bigger) read a touch brighter/warmer.
+        ' vec3 star=mix(col, vec3(0.86,0.92,1.0), 0.42);' +
+        ' vB=0.72+0.28*clamp(siz/8.0,0.0,1.0);' +
+        ' vC=star; vH=hl;' +
+        ' vec2 p=(pos-cam)*zoom;' +
         ' gl_Position=vec4(p.x/(res.x*0.5),p.y/(res.y*0.5),0.0,1.0);' +
         // Point size is mostly SCREEN-space with a mild zoom response
         // -- NOT siz*zoom (the world is ~+/-5000 vs siz 3..12, so
@@ -289,17 +337,22 @@
       // fixed-width SDF feather is extension-free, works everywhere;
       // 0.07 of the point radius is a crisp ~1-4 px edge at 3..64 px.
       frag:
-        'precision highp float; varying vec3 vC; uniform float glow;' +
+        'precision highp float; varying vec3 vC; varying float vH;' +
+        'varying float vB; uniform float glow;' +
         'void main(){ vec2 q=gl_PointCoord-0.5; float d=length(q);' +
         ' float aa=0.09;' +
-        // clean soft-edged disc -- NO dark inner rim (that read as a
-        // glossy 3D marble; the design wants crisp flat star points).
+        // clean soft-edged star disc (no glossy 3D rim).
         ' float core=1.0-smoothstep(0.5-aa,0.5,d);' +
-        // a restrained outer bloom only (the single tasteful flourish).
-        ' float bloom=glow*(1.0-smoothstep(0.06,0.5,d))*0.30;' +
-        ' gl_FragColor=vec4(vC, core)+vec4(vC*bloom, 0.0);' +
-        ' if(gl_FragColor.a<0.01 && bloom<0.01) discard;}',
-      attributes: { pos: posBuf, col: colBuf, siz: sizBuf },
+        ' float bloom=glow*(1.0-smoothstep(0.06,0.5,d))*0.32;' +
+        // FOCUS: vH=1 lit, vH=0 dimmed to faint dust (the spotlight/
+        // blur-others behaviour). Lit nodes also get the hub-brightness
+        // vB; dimmed nodes fade to ~10% alpha + darker so the selected
+        // constellation pops and the rest recedes.
+        ' float lit=0.16+0.84*vH;' +
+        ' vec3 c=vC*vB*(0.45+0.55*vH);' +
+        ' gl_FragColor=vec4(c, core*lit)+vec4(c*bloom*vH, 0.0);' +
+        ' if(gl_FragColor.a<0.008) discard;}',
+      attributes: { pos: posBuf, col: colBuf, siz: sizBuf, hl: hlBuf },
       uniforms: {
         cam: function () { return [cam.x, cam.y]; },
         zoom: function () { return cam.zoom; },
@@ -536,10 +589,17 @@
     var handle = {
       camera: cam,
       on: function (ev, cb) { (cbs[ev] || (cbs[ev] = [])).push(cb); },
-      setHighlight: function (set) { hl = set; invalidate(); },
+      setHighlight: function (set) {
+        hl = set;
+        applyHL(set || null);  // dim everything outside the set
+        invalidate();
+      },
       select: function (i) {
         selId = (i == null) ? -1 : i;
         rebuildHi();
+        // spotlight the node + its neighbours; blur all the rest
+        // (the reported broken focus -- now the renderer does it).
+        applyHL(selId >= 0 ? focusSet(selId) : (hl || null));
         if (selId >= 0) {
           // Pan to the node and gently zoom IN -- but stay anchored
           // to the whole-graph scale (fitZoom). Clamp to
