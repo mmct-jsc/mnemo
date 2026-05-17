@@ -141,6 +141,33 @@ def test_small_components_form_a_bounded_tidy_halo() -> None:
     )
 
 
+def test_halo_is_organic_not_a_phyllotaxis_mandala() -> None:
+    """v4.5.3 de-mandala: the user rejected the small-component/
+    singleton halo as a too-regular geometric ring ("placement is not
+    good and lively / weird layout"). A PERFECT phyllotaxis places
+    singleton k at radius R*(1.32+0.92*sqrt(k/ng)) -- strictly
+    increasing with placement order, so radius-vs-order has ZERO
+    inversions (a smooth lattice). The deterministic per-group jitter
+    must break that lattice into an irregular organic dust field:
+    radius-vs-order must now have MANY inversions. (Determinism +
+    boundedness are still locked by the tests above.)"""
+    giant, singles = 300, 500
+    n, edges = _gen_graph(giant, 0, singles)  # singletons only halo
+    pos = compute_graph_layout(n, edges)
+    xs, ys = pos[0::2], pos[1::2]
+    cx, cy = sum(xs) / n, sum(ys) / n
+    # singleton node indices are the trailing block; their halo
+    # placement order is monotonic in node index (stable group sort).
+    rad = [math.hypot(xs[i] - cx, ys[i] - cy) for i in range(giant, giant + singles)]
+    inversions = sum(1 for k in range(len(rad) - 1) if rad[k + 1] < rad[k])
+    frac = inversions / (len(rad) - 1)
+    assert frac > 0.15, (
+        f"the halo is still a near-perfect phyllotaxis lattice (only "
+        f"{frac:.1%} radius inversions) -- the jitter must make it an "
+        f"organic irregular cloud, not the rejected 'mandala' ring"
+    )
+
+
 def test_handles_degenerate_inputs() -> None:
     assert compute_graph_layout(0, []) == []
     one = compute_graph_layout(1, [])
