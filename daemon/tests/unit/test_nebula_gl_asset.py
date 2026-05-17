@@ -45,4 +45,5 @@ def test_nebula_gl_has_no_stub_placeholders() -> None:
     fully implemented, never shipped as placeholders."""
     src = (V / "nebula-gl.js").read_text(encoding="utf-8")
     assert "/* ... */" not in src, "no elided helper stubs may ship"
-    assert "TODO" not in src and "FIXME" not in src
+    assert "TODO" not in src, "no TODO placeholder may ship"
+    assert "FIXME" not in src, "no FIXME placeholder may ship"

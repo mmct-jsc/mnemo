@@ -87,15 +87,16 @@ def test_nebula_renderer_swap_superseded_the_cosmos_ceiling() -> None:
     The v3.2 closed outcome was: pin graph.html to the kept-good
     v2.6.6 cosmos renderer because "a livelier/agentic nebula needs a
     renderer SWAP, never cosmos config/wiring (the closed ceiling)".
-    v4.5 IS that swap: cosmos.gl is replaced outright by sigma.js v3
-    + graphology (reference_cosmos_gl_nebula TOMBSTONE -- the only
-    sanctioned path past the ceiling). The full surface contract now
+    v4.5 was that swap (cosmos.gl -> a third-party 2D renderer);
+    v4.6 supersedes it with a purpose-built WebGL engine
+    (nebula-gl.js) -- the same reference_cosmos_gl_nebula TOMBSTONE
+    arc, its documented next step. The full surface contract now
     lives in test_nebula_renderer.py; this guard keeps the two things
     that must STILL hold post-swap:
 
       1. the cosmos never-cool perpetual sim is GONE (the swap, not a
          re-tune) -- and so is every v2.6.8 perfectionize artefact;
-      2. the renderer is sigma (the documented replacement).
+      2. the renderer is the documented replacement (v4.6: NebulaGL).
 
     The v3.2 'do NOT wire the companion into the renderer' clause is
     INTENTIONALLY no longer asserted here: closing the C3-honesty loop
@@ -106,9 +107,11 @@ def test_nebula_renderer_swap_superseded_the_cosmos_ceiling() -> None:
     assert "NEVER-COOL SIM" not in GRAPH_HTML
     assert "this.cg." not in GRAPH_HTML
     assert "simulationDecay" not in GRAPH_HTML
-    # the documented replacement renderer is in place
-    assert "new Sigma(" in GRAPH_HTML, (
-        "v4.5 must render on sigma.js v3 (the sanctioned renderer swap)."
+    # the documented replacement renderer is in place (v4.6: the
+    # custom WebGL engine supersedes the v4.5 third-party renderer).
+    assert "NebulaGL.create(" in GRAPH_HTML, (
+        "v4.6 must render on the custom NebulaGL engine (the next "
+        "sanctioned step of the renderer-swap TOMBSTONE arc)."
     )
     # ZERO v2.6.8 perfectionize artefacts may ever return
     for m in ("_pinAll", "setPinnedPoints", "SUPERSEDES", "v2.6.8", "_fitToView"):
