@@ -73,3 +73,60 @@ def test_degenerate_inputs() -> None:
     iso = compute_graph_layout(40, [])
     assert len(iso) == 80
     assert all(math.isfinite(v) for v in iso)
+
+
+def _community_separation(pos, labels):
+    """Mean intra-community pairwise distance / mean inter-community
+    pairwise distance over the planted (non-singleton) nodes. << 1.0
+    means communities are SEPARATED (not collapsed into one blob)."""
+    import itertools
+
+    pts: dict[int, list[tuple[float, float]]] = {}
+    for i, c in enumerate(labels):
+        if c >= 0:
+            pts.setdefault(c, []).append(_xy(pos, i))
+    rng = random.Random(3)
+    intra: list[float] = []
+    inter: list[float] = []
+    cs = list(pts)
+    for c in cs:
+        P = pts[c]
+        for _ in range(400):
+            a, b = rng.choice(P), rng.choice(P)
+            intra.append(math.dist(a, b))
+    for a, b in itertools.combinations(cs, 2):
+        for _ in range(200):
+            p, q = rng.choice(pts[a]), rng.choice(pts[b])
+            inter.append(math.dist(p, q))
+    return (sum(intra) / len(intra)) / (sum(inter) / len(inter))
+
+
+def test_communities_are_separated_not_a_blob() -> None:
+    """THE de-blob gate. Plain FR (v4.5.x) collapsed planted
+    communities into one disk -> ratio ~1.0. FA2 + LinLog must pull
+    them apart -> intra distance MUCH smaller than inter distance."""
+    n, edges, labels = _planted(6, 70, 120)
+    pos = compute_graph_layout(n, edges)
+    ratio = _community_separation(pos, labels)
+    assert ratio < 0.55, (
+        f"communities not separated (intra/inter={ratio:.3f}); the "
+        f"giant is still a featureless blob -- FA2+LinLog must cluster"
+    )
+
+
+def test_edges_much_shorter_than_random_pairs() -> None:
+    n, edges, labels = _planted(5, 80, 100)
+    pos = compute_graph_layout(n, edges)
+    gi = [i for i, c in enumerate(labels) if c >= 0]
+    gs = set(gi)
+    ge = [(a, b) for a, b in edges if a in gs and b in gs]
+    me = sum(math.dist(_xy(pos, a), _xy(pos, b)) for a, b in ge) / len(ge)
+    rng = random.Random(1)
+    mr = (
+        sum(
+            math.dist(_xy(pos, rng.choice(gi)), _xy(pos, rng.choice(gi)))
+            for _ in range(3000)
+        )
+        / 3000
+    )
+    assert me / mr < 0.5, f"edges not contracted (ratio {me / mr:.3f})"
