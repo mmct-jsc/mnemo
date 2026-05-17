@@ -130,3 +130,32 @@ def test_edges_much_shorter_than_random_pairs() -> None:
         / 3000
     )
     assert me / mr < 0.5, f"edges not contracted (ratio {me / mr:.3f})"
+
+
+def test_singletons_pack_densely_not_confetti() -> None:
+    """The 2298-component reality: singletons must form a DENSE band,
+    not one sparse dot per component on a thin ring. Measure local
+    occupancy -- the median nearest-neighbour distance in the
+    singleton band must be SMALL vs the overall extent."""
+    from scipy.spatial import cKDTree
+
+    n, edges, labels = _planted(4, 80, 800)
+    pos = compute_graph_layout(n, edges)
+    sing = [i for i, c in enumerate(labels) if c < 0]
+    P = np.array([_xy(pos, i) for i in sing])
+    d, _ = cKDTree(P).query(P, k=2)
+    nn = float(np.median(d[:, 1]))
+    allp = np.array([_xy(pos, i) for i in range(n)])
+    extent = float(np.abs(allp).max())
+    assert nn < extent * 0.06, (
+        f"singletons are confetti (median NN {nn:.0f} vs extent "
+        f"{extent:.0f}); they must pack densely"
+    )
+
+
+def test_bounded_no_fling() -> None:
+    n, edges, _ = _planted(5, 60, 300)
+    pos = compute_graph_layout(n, edges)
+    P = np.array([_xy(pos, i) for i in range(n)])
+    r = np.hypot(P[:, 0] - P[:, 0].mean(), P[:, 1] - P[:, 1].mean())
+    assert r.max() < float(np.median(r)) * 14 + 1, "a node was flung far out"
