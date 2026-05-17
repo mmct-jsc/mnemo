@@ -59,18 +59,25 @@ def test_base_defines_context_aware_cite_handler_and_popover() -> None:
 # --- in-page ui_action listeners ---------------------------------------
 
 
-def test_graph_page_does_not_wire_the_companion_into_cosmos() -> None:
-    """CLOSED OUTCOME (revert-over-perfectionize): injecting companion
-    listeners into nebula() re-triggered the v2.6.8 cosmos hang.
-    graph.html is reverted byte-identical to the pre-v3.2 known-good --
-    the companion does NOT touch the cosmos renderer. The in-page
-    citation/popover (base.html) + the session/highlight TOOLS still
-    exist; only the renderer wiring is gone (reference_cosmos_gl_nebula:
-    a live nebula needs a renderer swap, not wiring)."""
+def test_graph_page_wires_the_companion_into_the_sigma_renderer() -> None:
+    """CONTRACT EVOLUTION (v4.5): the v3.2 closed outcome was 'do NOT
+    wire the companion into the renderer -- cosmos froze, a live
+    nebula needs a renderer SWAP, not wiring'. v4.5 IS that swap
+    (sigma.js v3 + graphology). The companion's highlight/select _ui
+    sentinels are now wired DIRECTLY into nebula() and drive a real
+    sigma highlight -- closing the gotcha-31 / C3-honesty loop."""
+    assert "addEventListener('mnemo-highlight-nodes'" in GRAPH_HTML, (
+        "graph.html must listen for the companion's highlight event "
+        "(v4.5 closed loop -- the graph itself lights up now)."
+    )
+    assert "addEventListener('mnemo-select-node'" in GRAPH_HTML, (
+        "graph.html must listen for the companion's select-node event."
+    )
+    # but still NO bespoke wiring shim + NO page-context override on
+    # the renderer (YAGNI -- direct document listeners only).
     assert "_wireCompanionActions" not in GRAPH_HTML
-    assert "mnemo-select-node" not in GRAPH_HTML
-    assert "mnemo-set-filter" not in GRAPH_HTML
-    # the context-aware cite handler still lives in base.html (no graph)
+    assert "window.mnemoPageContext" not in GRAPH_HTML
+    # the context-aware cite handler still lives in base.html.
     assert "window.mnemoCite" in BASE_HTML
 
 

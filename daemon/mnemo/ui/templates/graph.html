@@ -535,6 +535,25 @@ function nebula() {
         }
       });
 
+      // v4.5: close the C3-honesty loop. The companion's
+      // mnemo_highlight_nodes / mnemo_select_node _ui sentinels become
+      // SSE `ui_action` events that chat.js redispatches as these
+      // document CustomEvents. sigma's nodeReducer makes the highlight
+      // a real, pure-data graph change (the capability cosmos
+      // structurally lacked) -- the graph ITSELF now lights up, so the
+      // tool wording is truthful. Plain direct document listeners --
+      // deliberately no bespoke wiring-shim abstraction and no
+      // page-context override on the renderer (YAGNI).
+      this._onHighlight = (e) => {
+        this.highlight((e.detail && e.detail.node_ids) || []);
+      };
+      this._onSelectNode = (e) => {
+        const id = e.detail && e.detail.node_id;
+        if (id) this.focusNode(id);
+      };
+      document.addEventListener('mnemo-highlight-nodes', this._onHighlight);
+      document.addEventListener('mnemo-select-node', this._onSelectNode);
+
       if (!this.contextProject) {
         this._subscribeWorkspaceEvents();
       }
@@ -583,6 +602,14 @@ function nebula() {
       // cancel any in-flight forceatlas2 worker (token + worker + timer).
       this._layoutToken = {};
       this._killForceLayout();
+      if (this._onHighlight) {
+        document.removeEventListener('mnemo-highlight-nodes', this._onHighlight);
+        this._onHighlight = null;
+      }
+      if (this._onSelectNode) {
+        document.removeEventListener('mnemo-select-node', this._onSelectNode);
+        this._onSelectNode = null;
+      }
       if (this._eventSource) {
         try { this._eventSource.close(); } catch (_) {}
         this._eventSource = null;
@@ -941,6 +968,12 @@ function nebula() {
         res.label = '';
         res.zIndex = 0;
       } else if (bright) {
+        // in the spotlighted set: keep its vivid TYPE color (so the
+        // set's identity reads, not flattened to one accent), but
+        // force the label + a gentle size bump + draw on top so the
+        // highlighted set is clearly readable against the greyed field.
+        res.size = (data.size || 4) * 1.3;
+        res.forceLabel = true;
         res.zIndex = 1;
       }
       if (!this.labelsVisible && !isSel && !isHover) res.label = '';
