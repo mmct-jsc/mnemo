@@ -160,6 +160,8 @@ GRID_LIST_SELECTORS = (
     "\n.query-mini {",
     "\n.query details ul.hits {",
     "\ndl.meta {",
+    "\n.node-detail-grid {",
+    "\n.edge-list {",
 )
 
 
