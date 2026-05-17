@@ -139,7 +139,7 @@
                   {% set dst = neighbors[e.dst_id] %}
                   <a href="/node/{{ dst.id }}" class="edge-target">
                     <span class="badge type-{{ dst.type }}" style="--type-color: {{ type_colors.get(dst.type, type_color_fallback) }};">{{ dst.type | replace('memory_','') | replace('_',' ') }}</span>
-                    <span class="name">{{ dst.name }}</span>
+                    <span class="name u-truncate">{{ dst.name }}</span>
                   </a>
                 {% else %}
                   <a href="/node/{{ e.dst_id }}">{{ e.dst_id[:12] }}</a>
@@ -167,7 +167,7 @@
                   {% set src = neighbors[e.src_id] %}
                   <a href="/node/{{ src.id }}" class="edge-target">
                     <span class="badge type-{{ src.type }}" style="--type-color: {{ type_colors.get(src.type, type_color_fallback) }};">{{ src.type | replace('memory_','') | replace('_',' ') }}</span>
-                    <span class="name">{{ src.name }}</span>
+                    <span class="name u-truncate">{{ src.name }}</span>
                   </a>
                 {% else %}
                   <a href="/node/{{ e.src_id }}">{{ e.src_id[:12] }}</a>
