@@ -42,6 +42,18 @@
   --measure-prose:  30rem;    /* welcome copy width */
   --measure-narrow: 28rem;    /* examples column width */
 
+  /* C1.R breakpoint scale (responsive contract, v4.4) -- a breakpoint
+     lives here once. CSS @media can't take var(); the rem literal in
+     every width media query IS the single-source contract, enforced by
+     tests/unit/test_responsive_contract.py. The 15 ad-hoc literals
+     (1100/980/1080/800/900/1000px) consolidated to --bp-md (the natural
+     800-1100px cluster point); desktop pixel-parity at 1280/1440 holds
+     (every max-width stays inactive, every min-width stays active there
+     exactly as before). rem so the scale tracks the user's font. */
+  --bp-sm: 40rem;   /* ~640px @ 16px root -- tight / mobile            */
+  --bp-md: 60rem;   /* ~960px @ 16px root -- primary collapse point    */
+  --bp-lg: 80rem;   /* ~1280px @ 16px root -- wide desktop             */
+
   --mono: ui-monospace, "JetBrains Mono", SFMono-Regular, Menlo, Consolas, monospace;
   --sans: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
 }
@@ -158,6 +170,105 @@ body {
   color: var(--fg-dim);
 }
 
+/* --- C1.R adaptive nav drawer (v4.4) -------------------------------
+   >= --bp-md: .nav-drawer is display:contents, so nav + workspace-
+   switcher + bell + help stay direct .topbar flex items -- pixel-
+   identical to pre-v4.4 (the Task-1 desktop-parity discipline). The
+   hamburger is display:none. < --bp-md: the toggle appears and the
+   drawer becomes a fixed off-canvas panel with a scrim (a11y:
+   aria-expanded on the toggle, Escape + scrim close, focus return --
+   navDrawer()). Themed 100% from C1 tokens. */
+.nav-drawer {
+  display: contents;
+}
+.nav-toggle {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 44px; /* C1.R polish: >= 44px touch target */
+  height: 44px;
+  padding: 0;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--fg);
+  cursor: pointer;
+  transition: var(--transition);
+}
+.nav-toggle:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.nav-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.nav-scrim {
+  position: fixed;
+  inset: var(--topbar-h) 0 0 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 55;
+  border: 0;
+}
+@media (min-width: 60rem) {
+  /* --bp-md: the scrim must never paint on desktop, even if the
+     persisted open state is stale from a narrow session. */
+  .nav-scrim {
+    display: none !important;
+  }
+}
+@media (max-width: 60rem) {
+  /* --bp-md: collapse the topbar into the off-canvas drawer. */
+  .nav-toggle {
+    display: inline-flex;
+    margin-left: auto;
+  }
+  /* Closed = display:none so the panel occupies zero space and can
+     NEVER extend the page (a position:fixed translateX(100%) panel
+     still adds to document scrollWidth regardless of clip/containing-
+     block -- proven; the topbar's backdrop-filter is a CB trap). Open
+     = a fixed panel pinned right:0, so its box is always WITHIN the
+     viewport [vw-w, vw]. Slide/transition is Task-6 polish (discrete
+     display animation), correctness first. */
+  .nav-drawer {
+    display: none;
+    position: fixed;
+    inset: var(--topbar-h) 0 0 auto;
+    width: min(82vw, 320px);
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.4rem;
+    padding: 1rem;
+    background: var(--panel);
+    border-left: 1px solid var(--border);
+    box-shadow: var(--shadow);
+    overflow-y: auto;
+    z-index: 60;
+  }
+  .nav-drawer.open {
+    display: flex;
+  }
+  .nav-drawer nav {
+    flex-direction: column;
+    flex: none;
+    gap: 0.15rem;
+  }
+  .nav-drawer nav a {
+    padding: 0.6rem 0.75rem;
+    border-radius: var(--radius);
+  }
+  .nav-drawer nav a.active::after {
+    display: none;
+  }
+  .nav-drawer .workspace-switcher,
+  .nav-drawer .bell-wrap {
+    width: 100%;
+  }
+  .nav-drawer .help {
+    padding: 0.5rem 0.25rem;
+  }
+}
+
 /* --- Main layout --------------------------------------------------- */
 
 main {
@@ -166,7 +277,7 @@ main {
   padding: 0 var(--page-pad) 4rem;  /* bottom breathing room */
   animation: page-in 240ms cubic-bezier(0.2, 0.8, 0.2, 1.0);
 }
-@media (max-width: 1100px) {
+@media (max-width: 60rem) { /* --bp-md (was 1100px) */
   main { padding: 0 1.25rem 3rem; }
 }
 
@@ -333,6 +444,38 @@ button.primary:hover {
 a { color: var(--accent); text-decoration: none; }
 a:hover { color: var(--accent-hover); }
 
+/* --- C1.R no-overflow primitives (v4.4) ---------------------------
+   The v4.3.1 audit-overflow lesson, generalized + single-sourced. A
+   long string must fit its box: .u-truncate clips to one line with an
+   ellipsis; .u-clamp clips to var(--u-clamp) lines (default 3) for
+   descriptions / previews. Both set min-width:0 -- an un-shrinkable
+   box makes the clip inert (the v4.3.1 root cause; the ancestor
+   grid/flex track must also allow shrink via minmax(0,...)/min-width:0).
+   The line count is a token so a surface tunes it without redefining
+   the primitive. Forbidden to redefine in any page template
+   (test_responsive_contract is the teeth). */
+.u-truncate {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.u-clamp {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: var(--u-clamp, 3);
+  line-clamp: var(--u-clamp, 3);
+  min-width: 0;
+  overflow: hidden;
+}
+/* Wide non-responsive content (a data <table>) scrolls WITHIN its own
+   box instead of forcing a document scrollbar. Wrap any table that
+   can exceed the viewport in <div class="table-scroll">. */
+.table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
 /* --- C1 shared chat primitives (v4.0) ------------------------------
    Single canonical home. Pre-v4.0 these were duplicated + divergent
    in chat.html (page) and base.html (dock); the dock copies were 5px
@@ -460,6 +603,56 @@ a:hover { color: var(--accent-hover); }
   color: var(--fg); }
 .rail--dock .rail-empty { color: var(--fg-dim); font-size: .76rem;
   padding: .4rem; margin: 0; }
+
+/* C1.R (v4.4): shared rail-collapse toggle (page + dock, one
+   component). The dock starts collapsed so a growing session list is
+   bounded and never eats the bubble; the page starts expanded
+   (behaviour unchanged). Themed 100% from C1 tokens. */
+.rail-collapse {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  width: 100%;
+  min-height: 44px; /* C1.R polish: >= 44px touch target */
+  padding: 0.4rem 0.55rem;
+  background: none;
+  border: 0;
+  border-radius: var(--radius);
+  color: var(--fg-muted);
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: var(--transition);
+}
+.rail-collapse:hover {
+  color: var(--fg);
+  background: var(--panel-2);
+}
+.rail-collapse:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.rail-collapse-caret {
+  display: inline-block;
+  font-size: 0.7rem;
+  color: var(--fg-dim);
+  transition: transform var(--transition);
+}
+.rail-collapse-caret.open {
+  transform: rotate(90deg);
+}
+.rail-collapse-label {
+  flex: 1;
+  text-align: left;
+}
+.rail-collapse-count {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  color: var(--fg-dim);
+  background: var(--panel-2);
+  border-radius: var(--radius-pill);
+  padding: 0.05rem 0.45rem;
+}
 
 code, pre { font-family: var(--mono); font-size: 0.85em; }
 pre {
@@ -860,17 +1053,23 @@ tr:hover td { background: var(--panel); }
 }
 .section-head h2 { margin: 0; }
 
-.node-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 0.5rem; }
+.node-list { list-style: none; padding: 0; margin: 0; display: grid;
+  /* explicit minmax(0,1fr): an implicit `auto` grid track sizes to
+     max-content, so a long nowrap node .name blows the list (and the
+     page) width and the .u-truncate ellipsis never engages -- the
+     exact v4.3.1 .query-log bug class, systematized (C1.R). */
+  grid-template-columns: minmax(0, 1fr); gap: 0.5rem; }
 .node-list li {
   background: var(--panel);
   border: 1px solid var(--border-soft);
   border-radius: var(--radius);
   padding: 0.75rem 1rem;
   transition: var(--transition);
+  min-width: 0; /* grid item shrinks into the minmax(0,1fr) cell (v4.3.1) */
 }
 .node-list li:hover { border-color: var(--border); background: var(--panel-2); }
-.node-list a { display: flex; align-items: center; gap: 0.75rem; color: var(--fg); }
-.node-list .name { font-weight: 500; }
+.node-list a { display: flex; align-items: center; gap: 0.75rem; color: var(--fg); min-width: 0; }
+.node-list .name { font-weight: 500; min-width: 0; }
 .node-list .proj { color: var(--fg-dim); font-size: 0.78rem; margin-left: auto; }
 .node-list .desc { font-size: 0.85rem; color: var(--fg-muted); margin: 0.25rem 0 0; }
 
@@ -969,13 +1168,16 @@ tr:hover td { background: var(--panel); }
 }
 
 dl.meta {
-  display: grid; grid-template-columns: 110px 1fr; gap: 0.4rem 1rem;
+  /* minmax(0,1fr): a long nowrap <code> id/path in <dd> otherwise
+     forces the value column to max-content and blows the page width
+     (v4.3.1 bug class, systematized C1.R). */
+  display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 0.4rem 1rem;
   background: var(--panel); border: 1px solid var(--border-soft);
   border-radius: var(--radius); padding: 1rem; margin: 1rem 0;
   font-size: 0.85rem;
 }
 dl.meta dt { color: var(--fg-dim); font-weight: 500; }
-dl.meta dd { margin: 0; color: var(--fg); }
+dl.meta dd { margin: 0; color: var(--fg); min-width: 0; overflow-wrap: anywhere; }
 
 .node-edit form label {
   display: block; margin: 1.25rem 0 0.45rem;
@@ -1160,13 +1362,15 @@ dl.meta dd { margin: 0; color: var(--fg); }
   white-space: nowrap;
 }
 .hit-row .hit-desc {
+  /* 1-line clip is delegated to the .u-truncate primitive on the span
+     (C1.R single-source); this rule only carries the audit-row-
+     specific colour/size + the 12rem flex floor. The v4.3.1 fix is
+     intact: .hit-row has min-width:0 and .query-log uses minmax(0,1fr)
+     so the row shrinks and .u-truncate's ellipsis engages. */
   color: var(--fg-muted);
   font-size: 0.78rem;
   flex: 1 1 0;
   min-width: 12rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .hit-row .hit-id {
   font-family: var(--mono);
@@ -1250,17 +1454,21 @@ dl.meta dd { margin: 0; color: var(--fg); }
 
 .dash-row {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  /* minmax(0,...) so a long nowrap child (node .name) can't force the
+     track to max-content and blow the page width (v4.3.1 rule,
+     systematized -- C1.R). */
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 1rem;
   margin: 1rem 0;
 }
-@media (max-width: 800px) { .dash-row { grid-template-columns: 1fr; } }
+@media (max-width: 60rem) { /* --bp-md (was 800px) */ .dash-row { grid-template-columns: minmax(0, 1fr); } }
 .dash-card {
   background: var(--panel);
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-lg);
   padding: 1.25rem;
   margin: 1rem 0;
+  min-width: 0; /* grid item must shrink below max-content (v4.3.1) */
 }
 .dash-card-head {
   display: flex; justify-content: space-between; align-items: baseline;
@@ -1304,8 +1512,13 @@ dl.meta dd { margin: 0; color: var(--fg); }
 .node-list.compact li { padding: 0.5rem 0.75rem; }
 .node-list.compact .name { font-size: 0.88rem; }
 
-.query-mini { list-style: none; padding: 0; margin: 0; display: grid; gap: 0.5rem; }
+.query-mini { list-style: none; padding: 0; margin: 0; display: grid;
+  /* minmax(0,1fr): implicit `auto` track = max-content; the .prompt's
+     own nowrap+ellipsis never engages and the page overflows -- the
+     v4.3.1 .query-log bug class, 3rd instance, systematized (C1.R). */
+  grid-template-columns: minmax(0, 1fr); gap: 0.5rem; }
 .query-mini li {
+  min-width: 0; /* grid item shrinks into the minmax(0,1fr) cell */
   background: var(--bg);
   border: 1px solid var(--border-soft);
   border-radius: var(--radius);
@@ -2408,16 +2621,16 @@ dl.meta dd { margin: 0; color: var(--fg); }
 
 /* --- Wider 2-column dash layout for big content pages ------------- */
 .dash-row.split-2 {
-  grid-template-columns: 2fr 1fr;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
 }
-@media (max-width: 980px) {
-  .dash-row.split-2 { grid-template-columns: 1fr; }
+@media (max-width: 60rem) { /* --bp-md (was 980px) */
+  .dash-row.split-2 { grid-template-columns: minmax(0, 1fr); }
 }
 .dash-row.split-3 {
-  grid-template-columns: 1.5fr 1fr 1fr;
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr) minmax(0, 1fr);
 }
-@media (max-width: 1080px) {
-  .dash-row.split-3 { grid-template-columns: 1fr; }
+@media (max-width: 60rem) { /* --bp-md (was 1080px) */
+  .dash-row.split-3 { grid-template-columns: minmax(0, 1fr); }
 }
 
 /* Stat-card variant when used as compact pill (no link, no hover lift). */
@@ -2481,7 +2694,7 @@ dl.meta dd { margin: 0; color: var(--fg); }
   gap: 1.5rem;
   align-items: start;
 }
-@media (max-width: 980px) {
+@media (max-width: 60rem) { /* --bp-md (was 980px) */
   .node-detail-grid { grid-template-columns: 1fr; }
 }
 .node-detail-side {
@@ -2700,8 +2913,12 @@ dl.meta dd { margin: 0; color: var(--fg); }
   display: grid;
   /* auto-fit so a single project card expands to fill the row.
      auto-fill leaves phantom tracks at 360px and pins the card to
-     that width; auto-fit collapses empty tracks. */
-  grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+     that width; auto-fit collapses empty tracks. min(420px,100%) so
+     the 420px floor can't exceed a narrow viewport (< --bp-md the
+     card would otherwise force a horizontal scrollbar) -- the
+     canonical responsive-grid clamp, single-source, no media query
+     (C1.R). */
+  grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr));
   gap: 1rem;
   margin-bottom: 2rem;
 }
@@ -2907,6 +3124,7 @@ dl.meta dd { margin: 0; color: var(--fg); }
   align-items: baseline;
   gap: 0.75rem;
   margin-bottom: 0.4rem;
+  flex-wrap: wrap; /* C1.R: filter wraps to its own line < --bp-md */
 }
 
 .endpoint-section-head h3 {
@@ -3025,7 +3243,14 @@ dl.meta dd { margin: 0; color: var(--fg); }
   color: var(--fg);
   font-size: 0.8rem;
   font-family: var(--mono);
-  min-width: 220px;
+  /* C1.R: a hard min-width:220 made this input force a horizontal
+     scrollbar < --bp-md (margin-left:auto in a non-wrapping flex
+     header). width gives the desktop size; min-width:0 + max-width
+     lets it shrink, and .endpoint-section-head now wraps it to its
+     own full-width line on narrow. */
+  width: 14rem;
+  min-width: 0;
+  max-width: 100%;
   transition: border-color 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
@@ -3327,7 +3552,7 @@ dl.meta dd { margin: 0; color: var(--fg); }
   gap: 0.85rem;
 }
 
-@media (min-width: 900px) {
+@media (min-width: 60rem) { /* --bp-md (was 900px) */
   .code-columns {
     grid-template-columns: 1.4fr 1fr;
   }
@@ -3365,7 +3590,7 @@ dl.meta dd { margin: 0; color: var(--fg); }
   gap: 0.85rem;
 }
 
-@media (min-width: 900px) {
+@media (min-width: 60rem) { /* --bp-md (was 900px) */
   .ego-network {
     grid-template-columns: 1fr 1fr;
   }
@@ -3594,7 +3819,7 @@ dl.meta dd { margin: 0; color: var(--fg); }
   gap: 1rem;
 }
 
-@media (min-width: 1000px) {
+@media (min-width: 60rem) { /* --bp-md (was 1000px) */
   .project-columns {
     grid-template-columns: 1fr 300px;
   }
@@ -3968,6 +4193,118 @@ dl.meta dd { margin: 0; color: var(--fg); }
   border-radius: 3px;
 }
 .nebula-detail::-webkit-scrollbar-thumb:hover { background: rgba(126, 231, 224, 0.4); }
+
+/* C1.R (v4.4): adaptive full-window shell. < --bp-md the 5-col
+   .nebula-shell collapses to a single full-width canvas (no 277px-
+   sliver pathology) and the tree/detail panels become reachable
+   off-canvas drawers via display:none<->block (NOT translateX -- the
+   Task-3 lesson: a translated fixed panel extends scrollWidth). The
+   shell carries mp-tree / mp-detail (nebula().mPanel); a scrim closes
+   it. Desktop (>= --bp-md) 3-panel layout is untouched. */
+@media (max-width: 60rem) {
+  /* display:flex (NOT grid). With grid + 1 explicit column the in-grid
+     children (canvas grid-column:3/4, filterbar 1/6, the two resize
+     gutters at cols 2 & 4) keep auto-generating IMPLICIT columns -- the
+     graph stayed a 247px sliver through 4 grid tweaks. flex makes every
+     grid-column / grid-row inert: no tracks, no slivers, deterministic
+     (feedback_three_failed_fixes_architecture). The canvas flexes to
+     full width/height; the filterbar stacks under it; the gutters are
+     useless on a single-pane mobile view. */
+  .nebula-shell {
+    display: flex;
+    flex-direction: column;
+  }
+  .nebula-canvas {
+    flex: 1 1 auto;
+    min-height: 0;
+    width: 100%;
+  }
+  .nebula-filterbar {
+    flex: 0 0 auto;
+    width: 100%;
+  }
+  .nebula-gutter {
+    display: none;
+  }
+  .nebula-tree,
+  .nebula-detail {
+    display: none;
+    position: fixed;
+    top: var(--topbar-h);
+    bottom: 0;
+    width: min(86vw, 320px);
+    z-index: 60;
+    box-shadow: var(--shadow);
+  }
+  .nebula-tree {
+    left: 0;
+  }
+  .nebula-detail {
+    right: 0;
+  }
+  .nebula-shell.mp-tree .nebula-tree {
+    display: block;
+  }
+  .nebula-shell.mp-detail .nebula-detail {
+    display: block;
+  }
+}
+
+/* C1.R shared mobile-panel affordances (both full-window shells,
+   single-source). The toggle bar + scrim only exist < --bp-md; the
+   desktop 3-panel layouts never see them. */
+.mpanel-bar {
+  display: none;
+}
+.mpanel-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  min-height: 44px; /* C1.R polish: >= 44px touch target */
+  padding: 0.35rem 0.9rem;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  color: var(--fg);
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: var(--transition);
+}
+.mpanel-toggle:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.mpanel-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.mpanel-toggle.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.mpanel-scrim {
+  position: fixed;
+  inset: var(--topbar-h) 0 0 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 55;
+  border: 0;
+}
+@media (min-width: 60rem) {
+  .mpanel-bar,
+  .mpanel-scrim {
+    display: none !important;
+  }
+}
+@media (max-width: 60rem) {
+  .mpanel-bar {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+  }
+}
 
 /* Silky fade-in for the detail content when a node is selected.
    Triggered by Alpine's x-if mounting the inner div. ``.nebula-body``

@@ -14,6 +14,12 @@ divergence was purely in the templates; this matrix + the guard test
 make it impossible to drift again.
 """
 
+# `collapse` is the single-source rail-collapse mechanic (C1.R, v4.4):
+# the mechanic exists on BOTH surfaces, only the default state differs.
+# `rail_collapsed_default` = start collapsed? (page: no -- behaviour
+# unchanged; dock: yes -- a growing session list must never eat the
+# dock bubble). chat.js railOpen reads the surface-aware default; the
+# guard test enforces both the capability and the defaults.
 CHAT_SURFACES: dict[str, dict[str, bool]] = {
     "page": {
         "rail": True,
@@ -22,6 +28,8 @@ CHAT_SURFACES: dict[str, dict[str, bool]] = {
         "bookmarks": True,
         "examples": True,
         "composer": True,
+        "collapse": True,
+        "rail_collapsed_default": False,
     },
     "dock": {
         "rail": True,
@@ -30,5 +38,7 @@ CHAT_SURFACES: dict[str, dict[str, bool]] = {
         "bookmarks": True,
         "examples": True,
         "composer": True,
+        "collapse": True,
+        "rail_collapsed_default": True,
     },
 }

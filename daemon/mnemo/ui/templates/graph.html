@@ -32,7 +32,25 @@
   <!-- Alpine auto-invokes init() when it lives on the x-data object,
        so no explicit x-init="init()" -- adding it would run init()
        twice and force-render the fcose layout twice on first load. -->
-  <section class="nebula-shell" x-data="nebula()">
+  <section class="nebula-shell" x-data="nebula()"
+           :class="{ 'mp-tree': mPanel === 'tree', 'mp-detail': mPanel === 'detail' }">
+
+    <!-- C1.R (v4.4): < --bp-md the 3-panel shell collapses; these
+         toggles + scrim make the tree/detail drawers reachable. CSS
+         (.mpanel-bar) hides this entirely >= --bp-md (desktop
+         unchanged). -->
+    <div class="mpanel-bar">
+      <button type="button" class="mpanel-toggle"
+              :class="{ active: mPanel === 'tree' }"
+              :aria-expanded="mPanel === 'tree'"
+              @click="toggleMPanel('tree')">&#9776; Tree</button>
+      <button type="button" class="mpanel-toggle"
+              :class="{ active: mPanel === 'detail' }"
+              :aria-expanded="mPanel === 'detail'"
+              @click="toggleMPanel('detail')">Detail</button>
+    </div>
+    <div class="mpanel-scrim" x-show="mPanel" x-cloak
+         @click="mPanel = ''" aria-hidden="true"></div>
 
     <!-- Left: file tree (VSCode-style) -->
     <aside class="nebula-tree">
@@ -346,6 +364,14 @@ function nebula() {
     _adj: {},                    // node id -> [{ id, rel, confidence }]
     booting: false,              // GPU warm-up shimmer
     bootMsg: 'warming the nebula',
+
+    // C1.R (v4.4): which side panel is open as a drawer < --bp-md.
+    // '' = none (canvas full-width); 'tree' | 'detail'. CSS owns the
+    // layout; this is the only state Alpine adds for the shell.
+    mPanel: '',
+    toggleMPanel(which) {
+      this.mPanel = this.mPanel === which ? '' : which;
+    },
 
     selected: null,
     neighbors: [],
