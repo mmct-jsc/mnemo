@@ -545,11 +545,7 @@
 </head>
 <body>
   <header class="topbar" x-data="navDrawer()" @keydown.escape.window="if (open) close()">
-    <a href="/" class="brand" aria-label="mnemo home">
-      <img src="/static/mnem/mark.svg?v={{ mnemo_version }}" width="22" height="22" alt="" class="brand-mark">
-      <span>mnemo</span>
-    </a>
-
+    <!-- v4.4.1: hamburger is leftmost (the user's explicit IA). -->
     <button type="button" class="nav-toggle" x-ref="navToggle"
             @click="toggle()" :aria-expanded="open"
             aria-controls="nav-drawer" aria-label="Menu">
@@ -561,6 +557,10 @@
         <line x1="3" y1="18" x2="21" y2="18"/>
       </svg>
     </button>
+    <a href="/" class="brand" aria-label="mnemo home">
+      <img src="/static/mnem/mark.svg?v={{ mnemo_version }}" width="22" height="22" alt="" class="brand-mark">
+      <span>mnemo</span>
+    </a>
 
     <div class="nav-drawer" id="nav-drawer" :class="{ open }">
     <nav>
@@ -573,6 +573,16 @@
       <a href="/audit-page"   class="{% if page == 'audit' %}active{% endif %}">Audit</a>
       <a href="/settings"     class="{% if page == 'settings' %}active{% endif %}">Settings</a>
     </nav>
+      <span class="help">
+        <a href="https://github.com/mmct-jsc/mnemo" target="_blank" rel="noopener">docs</a>
+      </span>
+    </div><!-- /.nav-drawer -->
+
+    <!-- v4.4.1: workspace + notifications are NOT in the drawer -- they
+         stay right-aligned in the topbar, always directly clickable on
+         every screen size (the user's explicit information architecture
+         from the v4.4.0 live review). -->
+    <div class="topbar-actions">
 
     <!-- v2.6 phase 10.1: active-project pill removed. Workspaces fully
          own retrieval scope now -- the workspace-switcher below sits
@@ -755,10 +765,7 @@
       </div>
     </div>
 
-    <span class="help">
-      <a href="https://github.com/mmct-jsc/mnemo" target="_blank" rel="noopener">docs</a>
-    </span>
-    </div><!-- /.nav-drawer -->
+    </div><!-- /.topbar-actions -->
 
     <div class="nav-scrim" x-show="open" x-cloak @click="close()" aria-hidden="true"></div>
   </header>

@@ -181,6 +181,18 @@ body {
 .nav-drawer {
   display: contents;
 }
+/* v4.4.1: workspace-switcher + notification bell live here (NOT in
+   the drawer) -- always right-aligned + directly clickable on every
+   screen size (the user's explicit IA). >= --bp-md the contents-
+   drawer's nav has flex:1 so this group sits at the right exactly as
+   before; < --bp-md the drawer is out of flow so margin-left:auto
+   right-aligns it (the topbar is then [hamburger][brand]...[actions]). */
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  min-width: 0;
+}
 .nav-toggle {
   display: none;
   align-items: center;
@@ -218,10 +230,27 @@ body {
   }
 }
 @media (max-width: 60rem) {
-  /* --bp-md: collapse the topbar into the off-canvas drawer. */
+  /* --bp-md: collapse the topbar into the off-canvas drawer. The
+     hamburger is leftmost (no margin-left:auto); the workspace+bell
+     actions group right-aligns instead (always visible, not drawered). */
   .nav-toggle {
     display: inline-flex;
+  }
+  /* v4.4.1: the 2rem desktop gap + 1.5rem padding overflow a 375
+     row once toggle+brand+actions all show. Tighten on mobile. */
+  .topbar {
+    gap: 0.55rem;
+    padding: 0.55rem 0.85rem;
+  }
+  .topbar-actions {
     margin-left: auto;
+    gap: 0.45rem;
+  }
+  .topbar-actions .workspace-switcher-label {
+    max-width: 7rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   /* Closed = display:none so the panel occupies zero space and can
      NEVER extend the page (a position:fixed translateX(100%) panel
@@ -259,10 +288,6 @@ body {
   }
   .nav-drawer nav a.active::after {
     display: none;
-  }
-  .nav-drawer .workspace-switcher,
-  .nav-drawer .bell-wrap {
-    width: 100%;
   }
   .nav-drawer .help {
     padding: 0.5rem 0.25rem;
