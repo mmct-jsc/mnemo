@@ -24,9 +24,11 @@ Algorithm
    centroid gravity for cohesion, with a cooling schedule so it
    *converges* (edges end up much shorter than random pairs -- the
    readable-structure metric the client could never reliably hit).
-3. Everything else (small components + singletons) is packed into a
-   compact phyllotaxis halo *outside* the giant's radius -- tidy,
-   bounded, never flung (the bbox-blow-out failure cannot recur).
+3. Everything else (small components + singletons) is scattered into a
+   compact ORGANIC dust halo *outside* the giant's radius -- a golden-
+   angle skeleton broken by a deterministic, independent-seed radial +
+   angular jitter (an irregular cloud, not a geometric "mandala" ring),
+   still bounded + never flung (the bbox-blow-out failure cannot recur).
 
 Determinism: every random draw uses a fixed-seed ``numpy`` generator,
 so the same graph yields a byte-identical layout (cacheable, stable).
@@ -189,29 +191,40 @@ def compute_graph_layout(n: int, edges: list[tuple[int, int]]) -> list[float]:
         others.setdefault(int(labels[i]), []).append(i)
     groups = sorted(others.values(), key=len, reverse=True)
 
-    # The halo is a phyllotaxis (sunflower) disc that stays CLOSE to
-    # the core so the giant component DOMINATES the frame (a bright
-    # dense galaxy with a tidy dust halo) -- not a tiny core lost in a
-    # vast sparse ring (which sigma's fit-to-bbox would shrink to mud,
-    # the very failure that started this). Radius scales with
-    # sqrt(rank/total) so it's a uniform-density disc bounded to
-    # ~2.2*_R_CORE: with the core at ~_R_CORE the giant is ~45% of the
-    # rendered frame.
+    # The halo stays CLOSE to the core so the giant component DOMINATES
+    # the frame (a bright dense galaxy with a dust halo) -- not a tiny
+    # core lost in a vast sparse ring (which sigma's fit-to-bbox would
+    # shrink to mud, the failure that started this). A phyllotaxis angle
+    # gives uniform density, but a PERFECT sunflower lattice rendered as
+    # a too-regular geometric "mandala" ring -- the user rejected the
+    # placement as "not good and lively / weird layout". v4.5.4: keep
+    # the uniform-density sqrt radius + golden angle as the SKELETON,
+    # then break the lattice with a deterministic per-group radial +
+    # angular jitter so it reads as an irregular organic dust field
+    # (still bounded ~2.6*_R_CORE; the giant is still ~40% of frame).
+    # The jitter draws from an INDEPENDENT fixed-seed stream so it is
+    # byte-identical regardless of the giant's size (whose own rng draws
+    # vary with g) -- determinism + cacheability preserved.
     golden = math.pi * (3.0 - math.sqrt(5.0))  # sunflower angle
     ng = max(1, len(groups))
+    hrng = np.random.default_rng(_SEED + 1)
+    rj = hrng.uniform(-0.16, 0.16, ng)  # per-group radial jitter (frac)
+    aj = hrng.uniform(-0.55, 0.55, ng)  # per-group angular jitter (rad)
     for s, members in enumerate(groups):
         frac = (s + 1) / ng
-        rr = _R_CORE * (1.35 + 0.85 * math.sqrt(frac))
-        th = (s + 1) * golden
+        rr = _R_CORE * (1.32 + 0.92 * math.sqrt(frac)) * (1.0 + rj[s])
+        th = (s + 1) * golden + aj[s]
         gx, gy = math.cos(th) * rr, math.sin(th) * rr
         if len(members) == 1:
             pos[members[0]] = (gx, gy)
         else:
-            # a tiny ring for the small component's members
-            cr = _R_CORE * 0.04 + len(members) * 1.2
+            # an irregular CLOUD for the small component's members (not
+            # a perfect ring): jittered polar offsets around the anchor.
+            base = _R_CORE * 0.05 + len(members) * 1.3
+            ma = hrng.uniform(0.0, 2.0 * math.pi, len(members))
+            mr = base * np.sqrt(hrng.uniform(0.15, 1.0, len(members)))
             for j, node in enumerate(members):
-                a = 2 * math.pi * j / len(members)
-                pos[node] = (gx + math.cos(a) * cr, gy + math.sin(a) * cr)
+                pos[node] = (gx + math.cos(ma[j]) * mr[j], gy + math.sin(ma[j]) * mr[j])
 
     out: list[float] = [0.0] * (2 * n)
     for i in range(n):
