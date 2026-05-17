@@ -60,6 +60,18 @@ class Config:
     # scoring boost via epsilon). Useful when the user wants more
     # cross-project surfacing.
     project_isolation_mode: str = "strict"
+    # v4.3.2: in 'strict' mode, a cross/inactive-project non-BASE
+    # candidate is no longer HARD-dropped (that hid a dramatically
+    # stronger exact match behind a weaker BASE node -- a silent-zero;
+    # the user's "result seems wrong"). It is kept but its final score
+    # is multiplied by this penalty, so BASE + in-project still win for
+    # comparable relevance while a dominant cross-project match still
+    # surfaces. 1.0 = no isolation; lower = stronger isolation. 0.85
+    # tuned so a *comparable* cross-project node still loses to BASE/
+    # in-project, but a *dramatically* stronger exact match (e.g. the
+    # v4 handover, ~0.71 vs a 0.53 BASE node) still wins -- honoring
+    # the principle, not over-penalizing.
+    project_isolation_penalty: float = 0.85
     # v1.2 phase 2: inferred-re-query detector. When a new prompt is
     # cosine-similar to a query within the look-back window, the daemon
     # writes a `signal=-0.5, reason='inferred_requery'` row against the
@@ -149,6 +161,7 @@ def save(cfg: Config) -> None:
         "mmr_lambda": cfg.mmr_lambda,
         "retune_min_queries": cfg.retune_min_queries,
         "project_isolation_mode": cfg.project_isolation_mode,
+        "project_isolation_penalty": cfg.project_isolation_penalty,
         "default_provider": cfg.default_provider,
         "providers": cfg.providers,
         "companion": cfg.companion,
@@ -199,6 +212,8 @@ def _apply(cfg: Config, raw: dict) -> None:
         mode = raw["project_isolation_mode"].strip().lower()
         if mode in ("strict", "boost"):
             cfg.project_isolation_mode = mode
+    if isinstance(raw.get("project_isolation_penalty"), int | float):
+        cfg.project_isolation_penalty = max(0.0, min(1.0, float(raw["project_isolation_penalty"])))
     if isinstance(raw.get("requery_window_seconds"), int):
         cfg.requery_window_seconds = max(0, int(raw["requery_window_seconds"]))
     if isinstance(raw.get("requery_cosine_threshold"), int | float):
