@@ -40,9 +40,7 @@ def _components(n: int, edges: list[tuple[int, int]]):
     r = np.fromiter((e[0] for e in edges), np.int64, len(edges))
     c = np.fromiter((e[1] for e in edges), np.int64, len(edges))
     d = np.ones(len(edges) * 2, np.int8)
-    adj = coo_matrix(
-        (d, (np.concatenate([r, c]), np.concatenate([c, r]))), shape=(n, n)
-    ).tocsr()
+    adj = coo_matrix((d, (np.concatenate([r, c]), np.concatenate([c, r]))), shape=(n, n)).tocsr()
     ncomp, lab = connected_components(adj, directed=False)
     if ncomp <= 1:
         return lab, int(lab[0]) if n else -1
@@ -164,27 +162,31 @@ def _normalize_full_extent(pos: np.ndarray) -> np.ndarray:
 def _grid_pack(
     boxes: list[tuple[float, float]], anchor_r: float, rng: random.Random
 ) -> list[tuple[float, float]]:
-    """Deterministic shelf bin-pack of (w,h) component boxes into a
-    DENSE band of concentric shelves starting at radius ``anchor_r``.
-    Returns a centre (cx,cy) per box. Dense + textured -- never the
-    one-dot-per-component confetti / sparse ring of v4.5.x."""
+    """Place N component centres in a BOUNDED uniform-density annulus
+    hugging the giant (a phyllotaxis disc, NOT an unbounded expanding
+    shelf-pack). The shelf-pack grew the outer radius without limit --
+    on the real ~2298-component scope it reached ~8x the giant radius
+    so the giant became a tiny core lost in a vast halo (the exact
+    failure this whole arc started from; caught by the real-scope
+    numeric verify). Here radius = inner + (outer-inner)*sqrt(k/N):
+    the sqrt gives UNIFORM density (dense, no sparse ring) and the
+    outer bound is fixed at ~2.6x the giant radius BY CONSTRUCTION,
+    regardless of component count. The golden angle + per-site jitter +
+    the per-component blob shapes keep it an organic textured field,
+    never a single-dot mandala. Deterministic (seeded ``rng``)."""
+    n = len(boxes)
+    if n == 0:
+        return []
+    inner = max(anchor_r, 1.0)
+    outer = max(inner * 2.35, inner + 1.0)  # ~2.6x giant_r total
+    golden = math.pi * (3.0 - math.sqrt(5.0))
     placed: list[tuple[float, float]] = []
-    r = max(anchor_r, 1.0)
-    circ = 2.0 * math.pi * r
-    x = 0.0
-    shelf_h = 0.0
-    for w, h in boxes:
-        if x + w > circ and x > 0.0:  # next outer shelf
-            r += shelf_h * 1.1 + 6.0
-            circ = 2.0 * math.pi * r
-            x = 0.0
-            shelf_h = 0.0
-        a = (x + w / 2.0) / r  # arc length -> angle
-        jit = (rng.random() - 0.5) * 5.0
-        rr = r + jit
-        placed.append((math.cos(a) * rr, math.sin(a) * rr))
-        x += w + 5.0
-        shelf_h = max(shelf_h, h)
+    for k in range(n):
+        frac = (k + 0.5) / n
+        rr = inner + (outer - inner) * math.sqrt(frac)
+        rr += (rng.random() - 0.5) * 7.0  # radial jitter (anti-lattice)
+        th = (k + 1) * golden + (rng.random() - 0.5) * 0.5
+        placed.append((math.cos(th) * rr, math.sin(th) * rr))
     return placed
 
 

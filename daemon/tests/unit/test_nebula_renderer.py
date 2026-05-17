@@ -109,12 +109,24 @@ def test_cosmos_gl_is_gone_tombstone(graph_html: str) -> None:
     )
 
 
-def test_base_html_no_cosmos_modulepreload(base_html: str) -> None:
-    """base.html prewarmed the cosmos esm.sh bundle on every page.
-    That modulepreload must be gone (the renderer is vendored now)."""
-    assert "@cosmos.gl" not in base_html, (
-        "base.html must not modulepreload the cosmos.gl CDN bundle "
-        "anymore -- the renderer is vendored locally."
+def test_base_html_prewarms_only_the_v46_renderer(base_html: str) -> None:
+    """base.html prewarms the renderer site-wide. It must NOT preload/
+    prefetch cosmos.gl NOR the v4.5 stack (those vendor files are
+    deleted -> dead 404 prefetches that also leak the forbidden
+    literals into every served page -- caught live in P4). It must
+    prefetch the v4.6 vendored bundles instead."""
+    assert "@cosmos.gl" not in base_html, "no cosmos.gl modulepreload"
+    low = base_html.lower()
+    assert "sigma" not in low, (
+        "base.html must not reference the v4.5 renderer (dead prefetch "
+        "+ leaks the literal into every served page)"
+    )
+    assert "graphology" not in low, "base.html must not reference graphology"
+    assert "/static/vendor/regl.min.js" in base_html, (
+        "base.html must prefetch the v4.6 regl bundle"
+    )
+    assert "/static/vendor/nebula-gl.js" in base_html, (
+        "base.html must prefetch the v4.6 nebula-gl renderer"
     )
 
 
