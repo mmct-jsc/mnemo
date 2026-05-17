@@ -371,3 +371,101 @@ def test_sigma_render_is_dark_themed(graph_html: str) -> None:
         ".nebula-canvas backdrop must use the C1 dark base (#07090f) -- "
         "the reported 'white background, colors too bright'."
     )
+
+
+# --- v4.5.2 LIVING NEBULA (user live-review of v4.5.1) ----------------
+#
+# v4.5.1 fixed the layout (deterministic, server-side) but the render
+# was STATIC + flat: "only circle shape and straight edges", "no
+# moving like its actually living", "drag make all edge disappear",
+# "highlight node only node no edge". v4.5.2 makes it a LIVING nebula
+# WITHOUT touching the (correct) server layout: the structure is the
+# settled server position; the client adds bounded life + cosmic
+# rendering, purely in the cheap reducer hot path (no graph mutation,
+# no force sim -- the proven-fragile thing stays gone).
+
+
+def test_nebula_is_alive_camera_float_plus_star_twinkle(graph_html: str) -> None:
+    """The nebula must be ALIVE without a per-frame full-graph
+    position mutation. PROVEN constraints: sigma's nodeReducer does
+    NOT render an overridden x/y (verified live -- a +400 offset moved
+    nothing), and mutating 11k graph positions every frame pegs the
+    main thread (the "1fps" jank the user rejected). So the motion is
+    the CHEAP, GUARANTEED, smooth-at-any-scale pair: (1) a gentle
+    bounded CAMERA float (one GPU transform/frame) so the whole cosmos
+    drifts; (2) a per-star SIZE twinkle in the reducer (size IS the
+    one motion sigma's reducer honors -- no graph writes). NO
+    per-frame graph mutation."""
+    assert "cam.setState({" in graph_html, (
+        "_startLife must FLOAT the camera (cheap GPU transform) -- the "
+        "whole nebula gently drifts = alive at any node count."
+    )
+    assert "home.x + 0.018" in graph_html, (
+        "the camera float must oscillate in a small BOUNDED range "
+        "around the auto-fit rest pose ('moving only in a predefined "
+        "area'), never a wander-off pan."
+    )
+    assert "Math.sin(t * 0.21)" in graph_html, (
+        "the camera float is a slow Lissajous around the rest pose."
+    )
+    assert "res.size = base * (1 + 0.16 * Math.sin(rs.t" in graph_html, (
+        "nbNodeReduce must apply a per-star SIZE twinkle (size is the "
+        "ONLY motion sigma's reducer renders; the cheap no-graph-write "
+        "path -- a reducer x/y override is ignored, verified)."
+    )
+    assert "'ph', (i * 2.39996323)" in graph_html, (
+        "_applyCachedPositions must assign a STABLE golden-angle "
+        "per-node phase so stars twinkle on their own beat (not in unison)."
+    )
+    assert "updateEachNodeAttributes" not in graph_html, (
+        "there must be NO per-frame full-graph position mutation -- "
+        "11k graph writes/frame pegged the main thread (the 1fps jank)."
+    )
+
+
+def test_nebula_has_an_raf_life_loop(graph_html: str) -> None:
+    """A single rAF loop advances the clock + refreshes -- the breath.
+    It is paused when the tab is hidden and cancelled on reload /
+    destroy (token + _stopLife)."""
+    assert "_startLife()" in graph_html, "graph.html must have _startLife() -- the breathing loop."
+    assert "_stopLife()" in graph_html, (
+        "graph.html must have _stopLife() -- cancels the breathing loop."
+    )
+    assert "requestAnimationFrame(tick)" in graph_html, (
+        "the life loop must drive on requestAnimationFrame."
+    )
+    assert "document.hidden" in graph_html, (
+        "the life loop must pause when the tab is hidden (battery)."
+    )
+    assert "this._stopLife();" in graph_html, (
+        "reload (renderCanvas) + destroy must stop a prior life loop."
+    )
+
+
+def test_nebula_renders_stars_and_filaments_not_flat(graph_html: str) -> None:
+    """Soft star POINTS + gently CURVED luminous filaments -- not flat
+    circles + straight lines (the reported "only circle shape and
+    straight edges"). Both programs are bundled in vendored sigma."""
+    assert "NodePointProgram" in graph_html, (
+        "nodes must render via NodePointProgram (soft stars), not the hard flat default circle."
+    )
+    assert "EdgeCurveProgram" in graph_html, (
+        "edges must render via EdgeCurveProgram (curved filaments), not straight lines."
+    )
+    assert "curvature:" in graph_html, (
+        "edges need a per-edge curvature so the filaments actually arc."
+    )
+    assert "hideEdgesOnMove: false" in graph_html, (
+        "edges must STAY while dragging (the reported 'drag make all edge disappear')."
+    )
+
+
+def test_selected_node_ignites_its_filaments(graph_html: str) -> None:
+    """Highlight must read on EDGES too: a selected/hovered node's
+    incident filaments glow accent (the reported "highlight node only
+    node no edge")."""
+    assert "data._s === sel || data._t === sel" in graph_html, (
+        "nbEdgeReduce must accent-glow edges incident to the selected "
+        "node (ignite the constellation, not just the node)."
+    )
+    assert "rs.accent" in graph_html
