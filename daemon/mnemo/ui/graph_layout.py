@@ -230,7 +230,10 @@ def _grid_pack(
     if n == 0:
         return []
     inner = max(anchor_r, 1.0)
-    outer = max(inner * 2.05, inner + 1.0)
+    # reach FAR out (3.2x) so the galaxy sits in a vast space -- the
+    # field thins hard outward (frac**0.85) into the void, giving the
+    # "massive universe" sense of scale the user asked for.
+    outer = max(inner * 3.2, inner + 1.0)
     golden = math.pi * (3.0 - math.sqrt(5.0))
     placed: list[tuple[float, float]] = []
     for k in range(n):
