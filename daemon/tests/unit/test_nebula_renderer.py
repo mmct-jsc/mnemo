@@ -191,6 +191,17 @@ def test_renders_via_vendored_nebula_gl(graph_html: str) -> None:
         "graph.html must instantiate the renderer via "
         "window.NebulaGL.create(canvas, {nodes, edges, theme, labels})."
     )
+    # the vendor scripts MUST be version-cache-busted like every other
+    # client asset (app.css/app.js/chat.js use ?v={{ mnemo_version }}).
+    # A bare URL means an upgrading user keeps a stale cached renderer
+    # and never receives a fix -- the documented gotcha-29 class.
+    assert "/static/vendor/regl.min.js?v=" in graph_html, (
+        "regl must be loaded version-busted (?v=...) so a release "
+        "actually delivers the new bundle (no stale cache)."
+    )
+    assert "/static/vendor/nebula-gl.js?v=" in graph_html, (
+        "nebula-gl.js must be loaded version-busted (?v=...)."
+    )
 
 
 # --- 3. The reused shell is unchanged (minimal blast radius) ---------

@@ -160,7 +160,7 @@
     });
 
     var cam = { x: 0, y: 0, zoom: 1 };
-    var raf = 0, disposed = false;
+    var raf = 0, disposed = false, fitted = false;
     var hoverId = -1, selId = -1, dragId = -1;
     var hl = null; // Set | null
     var cbs = {};
@@ -235,7 +235,12 @@
         'varying vec3 vC;' +
         'void main(){ vC=col; vec2 p=(pos-cam)*zoom;' +
         ' gl_Position=vec4(p.x/(res.x*0.5),p.y/(res.y*0.5),0.0,1.0);' +
-        ' gl_PointSize=clamp(siz*zoom*2.0,2.0,90.0);}',
+        // Point size is mostly SCREEN-space with a mild zoom response
+        // -- NOT siz*zoom (the world is ~+/-5000 vs siz 3..12, so
+        // siz*zoom collapses every node to the 2px floor at fit zoom:
+        // the "black, one line" report). This keeps nodes a crisp
+        // 3..64 px: clearly visible at fit, growing when zoomed in.
+        ' gl_PointSize=clamp(siz*(0.7+26.0*zoom),3.0,64.0);}',
       frag:
         'precision highp float; varying vec3 vC; uniform float glow;' +
         'void main(){ vec2 q=gl_PointCoord-0.5; float d=length(q);' +
@@ -325,12 +330,25 @@
     }
 
     function resize() {
+      // The canvas frequently has NO layout size when create() runs
+      // (renderCanvas fires before the panel is painted), so the
+      // create()-time fitCamera used the 800x600 fallback and the
+      // whole world squeezed into a ~500px speck of 2px points (the
+      // "black with one line" report). Authoritative fix: size the
+      // drawing buffer from the real client box, and the FIRST time
+      // we get a real size, fit the camera to it (drawing-buffer px,
+      // consistent with the shader's res). Subsequent resizes only
+      // resize the buffer -- the user's camera is preserved.
       var w = Math.max(1, Math.floor(canvas.clientWidth * dpr));
       var h = Math.max(1, Math.floor(canvas.clientHeight * dpr));
       if (canvas.width !== w || canvas.height !== h) {
         canvas.width = w;
         canvas.height = h;
         invalidate();
+      }
+      if (!fitted && canvas.width > 2 && canvas.height > 2) {
+        fitCamera(cam, nodes, canvas.width, canvas.height);
+        fitted = true;
       }
     }
 
@@ -466,10 +484,23 @@
       },
       destroy: function () {
         disposed = true;
+        if (ro) { try { ro.disconnect(); } catch (e) { /* gone */ } }
         if (raf) global.cancelAnimationFrame(raf);
         try { regl.destroy(); } catch (e) { /* already gone */ }
       },
     };
+    // The canvas is routinely 0x0 when create() runs (panel not yet
+    // painted) and a plain rAF can fire before first layout. A
+    // ResizeObserver on the canvas fires when its box goes 0 -> real
+    // (first layout, panel toggles, window resize) -> a frame runs ->
+    // resize() sizes the buffer + fits the camera. (This observes the
+    // ELEMENT box, which DOES change on layout, unlike a CDP viewport
+    // resize which fires nothing.)
+    var ro = null;
+    if (typeof global.ResizeObserver === 'function') {
+      ro = new global.ResizeObserver(function () { invalidate(); });
+      try { ro.observe(canvas); } catch (e) { ro = null; }
+    }
     invalidate();
     return handle;
   }
