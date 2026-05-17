@@ -91,6 +91,47 @@ def test_fingerprint_stable_then_changes_on_graph_change(client: TestClient, sto
     assert fp2 != fp1
 
 
+# --- v4.5: the cache is renderer/layout-ALGORITHM versioned -----------
+#
+# Root cause of the v4.5 "messy nebula" (live review): the layout
+# cache key was (scope, node-set, edge-count) with NO renderer /
+# layout-algorithm dimension. cosmos.gl had PUT its force-sim
+# coordinates; after the sigma.js swap the SAME fingerprint was a
+# permanent HIT, so sigma rendered cosmos's geometry forever and the
+# new forceatlas2 NEVER ran. A LAYOUT_VERSION token must participate
+# in the fingerprint so a renderer/algorithm change busts every
+# stale entry and the client recomputes + re-caches a fresh layout
+# ("something off with re-reindex" -- it now invalidates on algo
+# change too, not only node-set change).
+
+
+def test_fingerprint_is_layout_algorithm_versioned() -> None:
+    """A LAYOUT_VERSION constant must participate in the fingerprint
+    so the cosmos-era cache misses after the sigma renderer swap."""
+    from mnemo.ui import routes
+
+    assert hasattr(routes, "LAYOUT_VERSION"), (
+        "routes.py must define a LAYOUT_VERSION token (bumped when the "
+        "renderer / layout algorithm changes) so the layout cache "
+        "self-invalidates across a renderer swap (v4.5 RC1)."
+    )
+    ids = [f"id{i}" for i in range(8)]
+    fp_before = routes._graph_fingerprint(ids, 5)
+    original = routes.LAYOUT_VERSION
+    try:
+        routes.LAYOUT_VERSION = original + "-CHANGED"
+        fp_after = routes._graph_fingerprint(ids, 5)
+    finally:
+        routes.LAYOUT_VERSION = original
+    assert fp_before != fp_after, (
+        "_graph_fingerprint MUST incorporate LAYOUT_VERSION -- otherwise "
+        "a renderer/algorithm swap keeps serving the old engine's cached "
+        "coordinates (the v4.5 cosmos-positions-in-sigma bug)."
+    )
+    # and it must be stable when nothing changes (cache still works).
+    assert routes._graph_fingerprint(ids, 5) == fp_before
+
+
 # --- the layout cache endpoints ----------------------------------------
 
 
@@ -98,7 +139,10 @@ def test_graph_layout_miss_then_put_then_hit(client: TestClient) -> None:
     miss = client.get(
         "/ui/graph-layout", params={"scope_key": "keys:P1", "fingerprint": "fpA"}
     ).json()
-    assert miss == {"hit": False, "reason": "no_layout"}
+    # v4.5: the response also carries a ``computing`` flag (the layout
+    # is computed server-side; the client polls instead of computing).
+    assert miss["hit"] is False
+    assert miss["reason"] == "no_layout"
 
     put = client.put(
         "/ui/graph-layout",
@@ -119,7 +163,8 @@ def test_graph_layout_stale_fingerprint_is_a_miss(client: TestClient) -> None:
         json={"scope_key": "s", "fingerprint": "old", "positions": [0, 0]},
     )
     stale = client.get("/ui/graph-layout", params={"scope_key": "s", "fingerprint": "new"}).json()
-    assert stale == {"hit": False, "reason": "stale"}
+    assert stale["hit"] is False
+    assert stale["reason"] == "stale"
 
 
 def test_graph_layout_put_overwrites_in_place(client: TestClient) -> None:
