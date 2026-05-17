@@ -2,6 +2,47 @@
 
 All notable changes to mnemo are documented here.
 
+## [4.4.0] - 2026-05-17
+
+**C1.R Responsive / Adaptive Layout -- responsiveness is now a C1
+design-system contract every page inherits, not per-page media-query
+hacks. Utilize space on small windows; never overflow; feel great.**
+
+### Added
+- **Breakpoint token layer** -- `--bp-sm/md/lg` (40/60/80rem) live
+  once in `app.css :root`, exactly like the C1 colour tokens. CSS
+  `@media` can't take `var()`, so the rem literal IS the single-source
+  contract; a guard test forbids any raw px width media literal (in
+  app.css AND inline page `<style>`).
+- **`.u-truncate` / `.u-clamp` / `.table-scroll`** shared no-overflow
+  primitives (the v4.3.1 audit-overflow lesson, generalized + single-
+  sourced); applied to node lists, search/cite, audit, dashboard,
+  node detail, the sources table.
+- **Adaptive mobile nav drawer** (`navDrawer()`): below `--bp-md` the
+  topbar collapses to a hamburger + off-canvas drawer (a11y:
+  aria-controls/-expanded, Escape close, focus return; persisted).
+- **Collapsible shared session rail**: `CHAT_SURFACES` gains
+  `collapse` (dock collapsed-by-default so a growing session list
+  never eats the bubble; page unchanged) -- one shared component.
+- **Adaptive full-window shells**: the 3-panel `.nebula-shell` /
+  chat `.mn` collapse to a single usable pane < `--bp-md` with the
+  side panels reachable as drawers (no 277px-sliver pathology).
+
+### Changed
+- 15 ad-hoc `@media` literals (1100/980/1080/800/900/1000px)
+  consolidated to `--bp-md`; chat shell 1100px and settings 700px
+  migrated to tokens. Desktop pixel-parity preserved (live-verified).
+- Polish: >= 44px touch targets + C1-token focus rings on the new
+  nav-toggle / mpanel-toggle / rail-collapse affordances.
+
+### Fixed
+- The v4.3.1 grid-implicit-`auto` overflow bug class recurred on
+  `.node-list`, `.query-mini`, `dl.meta` and (as a too-wide floor)
+  `.code-project-grid`; the sources `<table>` and the endpoint
+  filter also overflowed < `--bp-md`. All fixed and the rule is now
+  systematized + guard-tested -- zero horizontal overflow on every
+  page at 375/768/1280 (screenshot-independent live-verify).
+
 ## [4.3.2] - 2026-05-17
 
 **Patch: retrieval relevance -- a dominant cross-project match is no

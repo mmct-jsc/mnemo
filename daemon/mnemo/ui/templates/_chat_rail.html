@@ -18,7 +18,23 @@
     <span>＋</span> New chat
   </button>
   {% endif %}
-  <div class="rail-scroll">
+  {# C1.R (v4.4): single-source collapse toggle. Matrix-gated; one
+     component, both surfaces (no per-surface duplication). Dock starts
+     collapsed (CHAT_SURFACES.rail_collapsed_default) so a growing
+     session list never eats the bubble. #}
+  {% if chat_surfaces[surface].collapse %}
+  <button class="rail-collapse" type="button"
+          @click="toggleRail()"
+          :aria-expanded="railOpen"
+          aria-controls="rail-scroll-{{ surface }}">
+    <span class="rail-collapse-caret" :class="{ open: railOpen }"
+          aria-hidden="true">&#9656;</span>
+    <span class="rail-collapse-label">Conversations</span>
+    <span class="rail-collapse-count" x-text="conversations.length"></span>
+  </button>
+  {% endif %}
+  <div class="rail-scroll" id="rail-scroll-{{ surface }}"
+       {% if chat_surfaces[surface].collapse %}x-show="railOpen" x-cloak{% endif %}>
     <template x-for="grp in groupedConversations" :key="grp.label">
       <div class="rail-group">
         <div class="rail-group-label" x-text="grp.label"></div>

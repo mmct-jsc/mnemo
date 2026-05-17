@@ -210,3 +210,36 @@ and blows the page width; `overflow:hidden;text-overflow:ellipsis` is
 inert without a width-constrained ancestor. Same
 `test_design_system_contract.py` guard
 (`test_audit_grids_constrain_long_content`) is the teeth.
+
+**Breakpoint scale (C1.R, v4.4).** Responsiveness is a C1 contract,
+not per-page media-query hacks. The breakpoint scale lives once in
+`app.css :root`, exactly like the colour tokens:
+
+| Token     | Value   | ≈ px @16px root | Role                        |
+|-----------|---------|-----------------|-----------------------------|
+| `--bp-sm` | `40rem` | ~640px          | tight / mobile              |
+| `--bp-md` | `60rem` | ~960px          | the primary collapse point  |
+| `--bp-lg` | `80rem` | ~1280px         | wide desktop                |
+
+CSS `@media` cannot take `var()`, so the *rem literal in every width
+media query IS the single-source contract* —
+`tests/unit/test_responsive_contract.py` forbids any `px` width
+literal or any rem value outside the 3-token set. The 15 ad-hoc
+literals were consolidated to their natural cluster point `--bp-md`
+(documented px↔rem map):
+
+| Was            | Now (token)        | Affects                              |
+|----------------|--------------------|--------------------------------------|
+| `max-width:1100px` | `60rem` (`--bp-md`) | centred-page `main` padding tighten |
+| `max-width:800px`  | `60rem` (`--bp-md`) | `.dash-row` 2→1 col                  |
+| `max-width:980px`  | `60rem` (`--bp-md`) | `.dash-row.split-2` / `.node-detail-grid` |
+| `max-width:1080px` | `60rem` (`--bp-md`) | `.dash-row.split-3`                  |
+| `min-width:900px`  | `60rem` (`--bp-md`) | `.code-columns` / `.ego-network`     |
+| `min-width:1000px` | `60rem` (`--bp-md`) | `.project-columns`                   |
+
+Desktop pixel-parity at 1280/1440 is preserved by construction: every
+`max-width:60rem` stays inactive and every `min-width:60rem` stays
+active at those widths, identical to the pre-consolidation 800–1100 /
+900–1000 px behaviour (live-verified via `matchMedia`, gotcha-19
+screenshot-independent). `prefers-reduced-motion` / `prefers-color-scheme`
+are feature queries, not width literals, and are unaffected.

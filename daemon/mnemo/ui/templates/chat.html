@@ -8,6 +8,7 @@
 <script src="/static/chat.js?v={{ mnemo_version }}" defer></script>
 <main class="full">
 <section class="mn" x-data="mnemoChat({ surface: 'page' })" x-init="init()"
+         :class="{ 'mp-rail': mPanel === 'rail', 'mp-cite': mPanel === 'cite' }"
          @mnemo-cite.document="onCiteEvent($event.detail.node_id)">
 
   <!-- left rail: conversations -->
@@ -21,6 +22,22 @@
        shrink-to-fit + centre it instead of filling the cell -> the
        v3.2 "messages shrink / not left aligned" bug, gotcha 35). -->
   <div class="chat-thread">
+
+    <!-- C1.R (v4.4): < --bp-md the 3-panel shell is single-pane; this
+         bar (CSS-hidden >= --bp-md, desktop unchanged) makes the
+         conversations rail + cite panel reachable as drawers. -->
+    <div class="mpanel-bar">
+      <button type="button" class="mpanel-toggle"
+              :class="{ active: mPanel === 'rail' }"
+              :aria-expanded="mPanel === 'rail'"
+              @click="toggleMPanel('rail')">&#9776; Chats</button>
+      <button type="button" class="mpanel-toggle"
+              :class="{ active: mPanel === 'cite' }"
+              :aria-expanded="mPanel === 'cite'"
+              @click="toggleMPanel('cite')">Cite</button>
+    </div>
+    <div class="mpanel-scrim" x-show="mPanel" x-cloak
+         @click="mPanel = ''" aria-hidden="true"></div>
 
     <!-- running token budget bar (tokens_total vs per-provider cap) -->
     <div class="tok-bar" :class="{ warn: budgetWarn }" x-show="activeId" x-cloak>
@@ -589,9 +606,29 @@
      for the collapsed-width bug fixed above; with .assistant-body
      flex:1 in a full-width inner row the prose fills naturally.) */
 
-  @media (max-width: 1100px) {
+  /* C1.R (v4.4): single-source breakpoint (60rem == --bp-md, NOT a
+     stray 1100px). < --bp-md the shell is single-pane (thread full
+     width, no 277px sliver) and the rail/cite become reachable
+     off-canvas drawers (display:none<->block + edge-pinned fixed box
+     within the viewport -- the Task-3 lesson, NOT translateX). >=
+     --bp-md the 3-panel grid is untouched (desktop parity). */
+  @media (max-width: 60rem) {
     .mn { grid-template-columns: 1fr; }
-    .chat-rail, .chat-cite { display: none; }
+    .chat-rail, .chat-cite {
+      display: none;
+      position: fixed;
+      top: var(--topbar-h);
+      bottom: 0;
+      width: min(86vw, 300px);
+      z-index: 60;
+      overflow-y: auto;
+      background: var(--panel);
+      box-shadow: var(--shadow);
+    }
+    .chat-rail { left: 0; }
+    .chat-cite { right: 0; }
+    .mn.mp-rail .chat-rail { display: flex; }
+    .mn.mp-cite .chat-cite { display: block; }
   }
 </style>
 {% endblock %}
