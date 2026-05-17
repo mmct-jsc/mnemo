@@ -345,6 +345,31 @@ button.primary:hover {
 a { color: var(--accent); text-decoration: none; }
 a:hover { color: var(--accent-hover); }
 
+/* --- C1.R no-overflow primitives (v4.4) ---------------------------
+   The v4.3.1 audit-overflow lesson, generalized + single-sourced. A
+   long string must fit its box: .u-truncate clips to one line with an
+   ellipsis; .u-clamp clips to var(--u-clamp) lines (default 3) for
+   descriptions / previews. Both set min-width:0 -- an un-shrinkable
+   box makes the clip inert (the v4.3.1 root cause; the ancestor
+   grid/flex track must also allow shrink via minmax(0,...)/min-width:0).
+   The line count is a token so a surface tunes it without redefining
+   the primitive. Forbidden to redefine in any page template
+   (test_responsive_contract is the teeth). */
+.u-truncate {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.u-clamp {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: var(--u-clamp, 3);
+  line-clamp: var(--u-clamp, 3);
+  min-width: 0;
+  overflow: hidden;
+}
+
 /* --- C1 shared chat primitives (v4.0) ------------------------------
    Single canonical home. Pre-v4.0 these were duplicated + divergent
    in chat.html (page) and base.html (dock); the dock copies were 5px
@@ -1172,13 +1197,15 @@ dl.meta dd { margin: 0; color: var(--fg); }
   white-space: nowrap;
 }
 .hit-row .hit-desc {
+  /* 1-line clip is delegated to the .u-truncate primitive on the span
+     (C1.R single-source); this rule only carries the audit-row-
+     specific colour/size + the 12rem flex floor. The v4.3.1 fix is
+     intact: .hit-row has min-width:0 and .query-log uses minmax(0,1fr)
+     so the row shrinks and .u-truncate's ellipsis engages. */
   color: var(--fg-muted);
   font-size: 0.78rem;
   flex: 1 1 0;
   min-width: 12rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .hit-row .hit-id {
   font-family: var(--mono);
