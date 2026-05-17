@@ -24,7 +24,7 @@ import numpy as np
 from mnemo.ui._repel import repulsion
 
 _SEED = 42
-_ITERS = 260  # FA2 converges faster than FR; offline + cached
+_ITERS = 120  # FA2 declutter on top of the spectral embedding
 _GRAVITY = 0.05  # weak, NON-strong
 _SCALE = 14.0  # ForceAtlas2 repulsion scaling ratio
 _WORLD = 2000.0  # post-normalize target half-extent
@@ -49,39 +49,106 @@ def _components(n: int, edges: list[tuple[int, int]]):
     return lab, int(np.bincount(lab, minlength=ncomp).argmax())
 
 
+_KS = 0.1  # FA2 per-node speed constant
+_KS_MAX = 10.0  # FA2 per-node speed cap
+_TAU = 1.0  # FA2 jitter tolerance
+
+
+def _spectral(m: int, edges_arr: np.ndarray) -> np.ndarray:
+    """Spectral embedding: the 2 non-trivial eigenvectors of the
+    normalized graph Laplacian. Low-frequency Laplacian eigenvectors
+    are community indicators (this is exactly what spectral clustering
+    uses), so nodes in the same community get nearby coordinates --
+    communities separate BY CONSTRUCTION, with no force-balance tuning
+    (the trap that kept producing a uniform blob). Deterministic via a
+    fixed starting vector + sign canonicalisation."""
+    from scipy.sparse import csr_matrix, diags, identity
+    from scipy.sparse.linalg import eigsh
+
+    if edges_arr.size == 0 or m < 3:
+        a = np.linspace(0.0, 2.0 * math.pi, m, endpoint=False)
+        return np.column_stack([np.cos(a), np.sin(a)]) * 100.0
+    ii = np.concatenate([edges_arr[:, 0], edges_arr[:, 1]])
+    jj = np.concatenate([edges_arr[:, 1], edges_arr[:, 0]])
+    a_mat = csr_matrix((np.ones(ii.shape[0]), (ii, jj)), shape=(m, m))
+    deg = np.asarray(a_mat.sum(axis=1)).ravel()
+    deg[deg == 0.0] = 1.0
+    dinv = diags(1.0 / np.sqrt(deg))
+    lap = identity(m) - dinv @ a_mat @ dinv
+    k = min(4, m - 1)
+    v0 = np.full(m, 1.0 / math.sqrt(m), np.float64)  # deterministic
+    try:
+        vals, vecs = eigsh(lap, k=k, sigma=1e-6, which="LM", v0=v0, maxiter=4000)
+    except Exception:
+        try:
+            vals, vecs = eigsh(lap, k=k, which="SM", v0=v0, maxiter=8000)
+        except Exception:
+            a0 = np.linspace(0.0, 2.0 * math.pi, m, endpoint=False)
+            return np.column_stack([np.cos(a0), np.sin(a0)]) * 100.0
+    order = np.argsort(vals)
+    vecs = vecs[:, order]
+    xy = np.array(vecs[:, 1:3], np.float64)  # drop the trivial vector
+    if xy.shape[1] < 2:  # tiny / degenerate spectrum
+        a0 = np.linspace(0.0, 2.0 * math.pi, m, endpoint=False)
+        return np.column_stack([np.cos(a0), np.sin(a0)]) * 100.0
+    for c in range(2):  # eigenvector sign is arbitrary -> canonicalise
+        if xy[np.argmax(np.abs(xy[:, c])), c] < 0.0:
+            xy[:, c] = -xy[:, c]
+    return xy * 1000.0
+
+
 def _layout_component(
     pos: np.ndarray, edges_arr: np.ndarray, deg: np.ndarray, iters: int
 ) -> np.ndarray:
-    """ForceAtlas2 + LinLog on one component. ``pos`` (m,2) is mutated
-    and returned. ``edges_arr`` is (E,2) of LOCAL indices."""
+    """ForceAtlas2 (LinLog variant) on one component. ``pos`` (m,2) is
+    mutated and returned. ``edges_arr`` is (E,2) of LOCAL indices.
+
+    Uses the FAITHFUL FA2 adaptive-speed integrator (global speed from
+    swing/traction + a per-node speed). A fixed cooling cap is NOT FA2
+    -- it just freezes a near-random spread (the layout never descends
+    the LinLog energy, so communities never separate). The adaptive
+    speed is scale-invariant and is what makes clusters form.
+    """
     m = pos.shape[0]
     if m <= 1:
         return pos
     mass = deg + 1.0
-    if edges_arr.size:
+    has_e = edges_arr.size > 0
+    if has_e:
         ea = edges_arr[:, 0]
         eb = edges_arr[:, 1]
         src_mass = mass[ea]  # outbound-attraction distribution
+    prev_f = np.zeros((m, 2), np.float64)
+    speed = 1.0
     for it in range(iters):
-        disp = repulsion(pos, mass, _SCALE)
+        f = repulsion(pos, mass, _SCALE)
         # LinLog attraction F = log(1 + d), divided by source mass so
         # hubs are pushed to the periphery, not piled in the centre.
-        if edges_arr.size:
+        if has_e:
             d = pos[ea] - pos[eb]
             dist = np.sqrt(np.einsum("ij,ij->i", d, d)) + 1e-9
             fa = (np.log1p(dist) / dist / src_mass)[:, None] * d
-            np.add.at(disp, ea, -fa)
-            np.add.at(disp, eb, fa)
-        # weak gravity toward the centroid (NOT strong gravity -- that
-        # is what crushed the v4.5.x core into a blob).
-        ctr = pos.mean(axis=0)
-        g = ctr - pos
-        gd = np.sqrt(np.einsum("ij,ij->i", g, g)) + 1e-9
-        disp += g / gd[:, None] * (_GRAVITY * mass)[:, None]
-        # adaptive cooling: bounded step that decays over the run.
-        dlen = np.sqrt(np.einsum("ij,ij->i", disp, disp)) + 1e-9
-        cap = _WORLD * 0.10 * (1.0 - it / iters) + 1.0
-        pos += disp / dlen[:, None] * np.minimum(dlen, cap)[:, None]
+            np.add.at(f, ea, -fa)
+            np.add.at(f, eb, fa)
+        # weak gravity toward the origin (NOT strong gravity -- strong
+        # gravity is what crushed the v4.5.x core into a blob).
+        gd = np.sqrt(np.einsum("ij,ij->i", pos, pos)) + 1e-9
+        f -= pos / gd[:, None] * (_GRAVITY * mass)[:, None]
+        # --- FA2 adaptive speed (the real integrator) ---
+        df = f - prev_f
+        sf = f + prev_f
+        swing_i = np.sqrt(np.einsum("ij,ij->i", df, df))
+        tract_i = np.sqrt(np.einsum("ij,ij->i", sf, sf)) / 2.0
+        swing = float((mass * swing_i).sum())
+        tract = float((mass * tract_i).sum())
+        if swing > 1e-9:
+            gs = _TAU * tract / swing
+            speed = gs if it == 0 else min(gs, 1.5 * speed)
+        si = _KS * speed / (1.0 + speed * np.sqrt(swing_i) + 1e-9)
+        fmag = np.sqrt(np.einsum("ij,ij->i", f, f)) + 1e-9
+        si = np.minimum(si, _KS_MAX / fmag)
+        pos += f * si[:, None]
+        prev_f = f
     return pos
 
 
@@ -141,7 +208,6 @@ def compute_graph_layout(n: int, edges: list[tuple[int, int]]) -> list[float]:
     if n == 1:
         return [0.0, 0.0]
 
-    rng = np.random.default_rng(_SEED)
     pos = np.zeros((n, 2), np.float64)
     clean = _clean_edges(n, edges)
 
@@ -161,9 +227,8 @@ def compute_graph_layout(n: int, edges: list[tuple[int, int]]) -> list[float]:
             [(remap[a], remap[b]) for a, b in clean if gmask[a] and gmask[b]],
             np.int64,
         ).reshape(-1, 2)
-        ang = rng.uniform(0, 2 * math.pi, gidx.size)
-        rad = np.sqrt(rng.uniform(0, 1, gidx.size)) * (_WORLD * 0.5)
-        gp = np.column_stack([np.cos(ang) * rad, np.sin(ang) * rad])
+        # community-separating spectral embedding -> FA2 declutter.
+        gp = _spectral(gidx.size, ge)
         gp = _layout_component(gp, ge, deg[gidx], _ITERS)
         gp = _normalize_full_extent(gp)
         pos[gidx] = gp
@@ -191,8 +256,7 @@ def compute_graph_layout(n: int, edges: list[tuple[int, int]]) -> list[float]:
             [(rmap[a], rmap[b]) for a, b in clean if a in rmap and b in rmap],
             np.int64,
         ).reshape(-1, 2)
-        a0 = rng.uniform(0, 2 * math.pi, m)
-        sp = np.column_stack([np.cos(a0), np.sin(a0)]) * (7.0 + m)
+        sp = _spectral(m, ce)
         sp = _layout_component(sp, ce, deg[members], _SMALL_ITERS)
         sp -= (sp.max(axis=0) + sp.min(axis=0)) / 2.0
         blobs.append(sp)
