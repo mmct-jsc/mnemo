@@ -39,6 +39,10 @@
       surface: surface,
       pageContext: pageContext,
       railOpen: railOpen,
+      // v4.4 (C1.R): which side panel is open as a drawer < --bp-md
+      // ('' = single-pane thread; 'rail' | 'cite'). Page shell only;
+      // harmless/unused on the dock surface. CSS owns the layout.
+      mPanel: '',
       conversations: [],
       activeId: null,
       messages: [],
@@ -160,6 +164,12 @@
         try {
           localStorage.setItem(railKey, this.railOpen ? '1' : '0');
         } catch (e) {}
+      },
+
+      // v4.4 (C1.R): toggle the < --bp-md side-panel drawer (rail /
+      // cite). Click the active one again to close (single-pane).
+      toggleMPanel: function (which) {
+        this.mPanel = this.mPanel === which ? '' : which;
       },
 
       init: function () {

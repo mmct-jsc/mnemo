@@ -4152,6 +4152,112 @@ dl.meta dd { margin: 0; color: var(--fg); }
 }
 .nebula-detail::-webkit-scrollbar-thumb:hover { background: rgba(126, 231, 224, 0.4); }
 
+/* C1.R (v4.4): adaptive full-window shell. < --bp-md the 5-col
+   .nebula-shell collapses to a single full-width canvas (no 277px-
+   sliver pathology) and the tree/detail panels become reachable
+   off-canvas drawers via display:none<->block (NOT translateX -- the
+   Task-3 lesson: a translated fixed panel extends scrollWidth). The
+   shell carries mp-tree / mp-detail (nebula().mPanel); a scrim closes
+   it. Desktop (>= --bp-md) 3-panel layout is untouched. */
+@media (max-width: 60rem) {
+  /* display:flex (NOT grid). With grid + 1 explicit column the in-grid
+     children (canvas grid-column:3/4, filterbar 1/6, the two resize
+     gutters at cols 2 & 4) keep auto-generating IMPLICIT columns -- the
+     graph stayed a 247px sliver through 4 grid tweaks. flex makes every
+     grid-column / grid-row inert: no tracks, no slivers, deterministic
+     (feedback_three_failed_fixes_architecture). The canvas flexes to
+     full width/height; the filterbar stacks under it; the gutters are
+     useless on a single-pane mobile view. */
+  .nebula-shell {
+    display: flex;
+    flex-direction: column;
+  }
+  .nebula-canvas {
+    flex: 1 1 auto;
+    min-height: 0;
+    width: 100%;
+  }
+  .nebula-filterbar {
+    flex: 0 0 auto;
+    width: 100%;
+  }
+  .nebula-gutter {
+    display: none;
+  }
+  .nebula-tree,
+  .nebula-detail {
+    display: none;
+    position: fixed;
+    top: var(--topbar-h);
+    bottom: 0;
+    width: min(86vw, 320px);
+    z-index: 60;
+    box-shadow: var(--shadow);
+  }
+  .nebula-tree {
+    left: 0;
+  }
+  .nebula-detail {
+    right: 0;
+  }
+  .nebula-shell.mp-tree .nebula-tree {
+    display: block;
+  }
+  .nebula-shell.mp-detail .nebula-detail {
+    display: block;
+  }
+}
+
+/* C1.R shared mobile-panel affordances (both full-window shells,
+   single-source). The toggle bar + scrim only exist < --bp-md; the
+   desktop 3-panel layouts never see them. */
+.mpanel-bar {
+  display: none;
+}
+.mpanel-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.35rem 0.7rem;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  color: var(--fg);
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: var(--transition);
+}
+.mpanel-toggle:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.mpanel-toggle.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.mpanel-scrim {
+  position: fixed;
+  inset: var(--topbar-h) 0 0 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 55;
+  border: 0;
+}
+@media (min-width: 60rem) {
+  .mpanel-bar,
+  .mpanel-scrim {
+    display: none !important;
+  }
+}
+@media (max-width: 60rem) {
+  .mpanel-bar {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+  }
+}
+
 /* Silky fade-in for the detail content when a node is selected.
    Triggered by Alpine's x-if mounting the inner div. ``.nebula-body``
    is the v2.2.7 generic body container (replaces the old hardcoded

@@ -237,3 +237,64 @@ def test_nav_drawer_css_desktop_parity_and_collapse(app_css: str) -> None:
         "the open state (.nav-drawer.open -> translateX(0)) must exist."
     )
     assert ".nav-scrim" in app_css, ".nav-scrim must be styled (the drawer backdrop)."
+
+
+def test_chat_shell_breakpoint_is_single_sourced() -> None:
+    """The chat .mn 3-panel shell collapses at the C1.R token
+    breakpoint (60rem == --bp-md), not a stray 1100px literal -- the
+    full-window shell breakpoint is part of the contract too (the
+    inline page <style> must obey it, not just app.css)."""
+    chat = (TPL / "chat.html").read_text(encoding="utf-8")
+    for prelude in re.findall(r"@media([^{]+)\{", chat):
+        for value in re.findall(r"(?:min|max)-width:\s*([0-9.]+(?:px|rem|em))", prelude):
+            assert value in ALLOWED_BP_LITERALS, (
+                f"chat.html shell @media uses {value}; the shell "
+                f"breakpoint must be a C1.R token (60rem == --bp-md), "
+                f"not a raw px literal."
+            )
+
+
+def test_full_window_shells_collapse_and_keep_panels_reachable(
+    app_css: str,
+) -> None:
+    """< --bp-md the 3-panel shells collapse to a single usable pane
+    (no 277px-sliver pathology) AND the side panels stay reachable via
+    a toggle (not display:none-forever). The .nebula-shell collapse
+    lives in app.css (token-gated); nebula()/mnemoChat() own a minimal
+    mPanel state; the toggles are in the templates."""
+    # .nebula-shell collapses to one column inside a --bp-md media
+    # query (window-based, not comment-delimited -- robust to inline
+    # explanatory comments inside the @media block).
+    nb = app_css.index(".nebula-shell {")
+    nb_media = app_css.index("@media (max-width: 60rem)", nb)
+    nb_block = app_css[nb_media : nb_media + 900]
+    assert ".nebula-shell {" in nb_block, (
+        ".nebula-shell must have a < --bp-md collapse rule (single "
+        "column -- the graph must not crush to a sliver)."
+    )
+    sh = nb_block.index(".nebula-shell {")
+    sh_body = nb_block[sh : nb_block.index("}", sh)]
+    assert "display: flex" in sh_body, (
+        "the collapsed .nebula-shell must be display:flex, NOT the "
+        "5-track desktop grid -- grid keeps auto-generating implicit "
+        "columns from the in-grid children (canvas/filterbar/gutters), "
+        "crushing the graph to a sliver. flex makes grid-column inert."
+    )
+    graph = (TPL / "graph.html").read_text(encoding="utf-8")
+    chat = (TPL / "chat.html").read_text(encoding="utf-8")
+    assert "mPanel" in graph, (
+        "nebula() must own a minimal mPanel state (which side panel is "
+        "open as a drawer on small screens)."
+    )
+    assert "mPanel" in chat, (
+        "mnemoChat()/chat.html must own mPanel (mobile side-panel "
+        "drawer state) so the rail/cite stay reachable < --bp-md."
+    )
+    assert "mpanel-toggle" in graph, (
+        "graph.html must render the side-panel toggle affordance "
+        "(.mpanel-toggle) so the tree/detail drawers are reachable."
+    )
+    assert "mpanel-toggle" in chat, (
+        "chat.html must render the side-panel toggle affordance so the "
+        "rail/cite drawers are reachable < --bp-md."
+    )
