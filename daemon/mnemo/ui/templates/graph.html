@@ -10,14 +10,19 @@
      highlight listener re-triggered the documented converge-and-stop
      freeze. Per the TOMBSTONE rule we do NOT re-attempt or re-tune
      that engine -- we swap it. sigma's nodeReducer/edgeReducer make a
-     highlight a pure
-     data change (no renderer-internal-state trap), and click / hover /
-     drag / camera are first-class events. The bundles load as plain
-     classic <script> in <head> so window.Sigma / window.graphology /
-     window.graphologyLibrary are defined before Alpine's deferred
-     init() runs nebula(). -->
+     highlight a pure data change (no renderer-internal-state trap),
+     and click / hover / drag / camera are first-class events.
+
+     v4.5 ARCHITECTURE PIVOT: the LAYOUT is computed SERVER-SIDE
+     (mnemo/ui/graph_layout.py) -- deterministic + fully converged +
+     cached -- because doing a client-side force layout (sync, then a
+     Web Worker) was proven non-deterministic + quality-fragile across
+     3 measured attempts (the "3 failed fixes => wrong architecture"
+     rule). So the standalone layout bundle is no longer loaded; only
+     graphology (sigma's Graph data model) + sigma. The classic
+     <script> in <head> means window.graphology / window.Sigma are
+     defined before Alpine's deferred init() runs nebula(). -->
 <script src="/static/vendor/graphology.umd.min.js"></script>
-<script src="/static/vendor/graphology-library.min.js"></script>
 <script src="/static/vendor/sigma.min.js"></script>
 <!-- Prism is loaded site-wide from base.html; no per-page setup. -->
 {% endblock %}
@@ -335,6 +340,7 @@ const REL_COLORS = {
 let NB_RS = {
   sel: null, hover: null, bright: null,
   accent: '#7ee7e0',
+  fg: '#e6edf3',                   // C1 --fg: dark-theme label ink
   dim05: 'rgba(58,67,88,0.5)',     // greyed node (precomputed)
   dimEdge: 'rgba(58,67,88,0.12)',  // greyed edge (precomputed)
   labels: true, edges: true,
@@ -384,6 +390,71 @@ function nbEdgeReduce(rs, data) {
     res.color = data.cBase;         // resting soft connective tissue
   }
   return res;
+}
+
+// RC7 (v4.5 live review): sigma's default node-label renderer draws a
+// WHITE pill behind light text -- unreadable on the dark C1 nebula
+// ("label has white background and light text color"). These draw a
+// DARK pill (matching the .nebula-detail glass) + C1 --fg ink; hover
+// adds an --accent hairline. Module-scope so the sigma config closure
+// uses them with zero Alpine-proxy cost.
+function nbDrawLabel(context, data, settings) {
+  if (!data || !data.label) return;
+  const size = settings.labelSize || 12;
+  context.font =
+    (settings.labelWeight || '600') + ' ' + size + 'px ' +
+    (settings.labelFont || 'sans-serif');
+  const pad = 5;
+  const w = context.measureText(data.label).width;
+  const nx = data.x + (data.size || 4) + 4;
+  const ny = data.y;
+  context.fillStyle = 'rgba(7,9,15,0.86)';
+  const bx = nx - pad, by = ny - size / 2 - pad;
+  const bw = w + pad * 2, bh = size + pad * 2;
+  if (context.roundRect) {
+    context.beginPath();
+    context.roundRect(bx, by, bw, bh, 5);
+    context.fill();
+  } else {
+    context.fillRect(bx, by, bw, bh);
+  }
+  context.fillStyle = NB_RS.fg || '#e6edf3';
+  context.textAlign = 'left';
+  context.textBaseline = 'middle';
+  context.fillText(data.label, nx, ny);
+}
+
+function nbDrawHover(context, data, settings) {
+  if (!data) return;
+  const size = settings.labelSize || 12;
+  context.font =
+    (settings.labelWeight || '600') + ' ' + size + 'px ' +
+    (settings.labelFont || 'sans-serif');
+  const label = data.label || '';
+  const pad = 6;
+  const w = label ? context.measureText(label).width : 0;
+  const nx = data.x + (data.size || 4) + 5;
+  const ny = data.y;
+  const bx = nx - pad, by = ny - size / 2 - pad;
+  const bw = w + pad * 2, bh = size + pad * 2;
+  context.fillStyle = 'rgba(7,9,15,0.94)';
+  context.strokeStyle = NB_RS.accent || '#7ee7e0';
+  context.lineWidth = 1;
+  if (label) {
+    if (context.roundRect) {
+      context.beginPath();
+      context.roundRect(bx, by, bw, bh, 6);
+      context.fill();
+      context.stroke();
+    } else {
+      context.fillRect(bx, by, bw, bh);
+      context.strokeRect(bx, by, bw, bh);
+    }
+    context.fillStyle = NB_RS.accent || '#7ee7e0';
+    context.textAlign = 'left';
+    context.textBaseline = 'middle';
+    context.fillText(label, nx, ny);
+  }
 }
 
 function nebula() {
@@ -548,7 +619,7 @@ function nebula() {
       return new Promise((resolve, reject) => {
         let tries = 0;
         const check = () => {
-          if (window.Sigma && window.graphology && window.graphologyLibrary) {
+          if (window.Sigma && window.graphology) {
             resolve();
             return;
           }
@@ -664,9 +735,9 @@ function nebula() {
     },
 
     destroy() {
-      // cancel any in-flight forceatlas2 worker (token + worker + timer).
+      // invalidate the layout token so any in-flight server-layout
+      // poll (_awaitServerLayout) bails on its next tick.
       this._layoutToken = {};
-      this._killForceLayout();
       if (this._onHighlight) {
         document.removeEventListener('mnemo-highlight-nodes', this._onHighlight);
         this._onHighlight = null;
@@ -737,35 +808,33 @@ function nebula() {
       // contract -- the fingerprint self-invalidates on reindex).
       this._scopeKey = data.scope_key || 'global';
       this._fingerprint = data.fingerprint || '';
-      this._layoutPersisted = false;
-
       this._buildGraphModel();
+      // tree + filters need no positions -- render them immediately so
+      // the page is usable while the server layout computes.
+      this.buildTree();
+      this.buildTypeFilters();
 
-      // Try the server-side layout cache BEFORE we render. A hit means
-      // the settled layout for this exact graph (scope + fingerprint)
-      // is on disk -- apply those positions and SKIP forceatlas2
-      // entirely (instant settled nebula). A miss / stale fingerprint
-      // (graph changed via reindex) runs a bounded forceatlas2 then
-      // PUTs the converged positions back.
+      // v4.5 ARCHITECTURE PIVOT: the layout is computed + cached
+      // SERVER-SIDE (deterministic, fully converged -- client FA2 was
+      // proven non-deterministic + fragile across 3 attempts). The
+      // browser is a PURE renderer: poll the cache until the daemon's
+      // background compute has stored this scope's layout, then render.
+      // A fresh token cancels any in-flight poll from a prior scope.
+      this._layoutToken = {};
       this._cachedPositions = null;
-      if (this._fingerprint) {
-        try {
-          const lr = await fetch(
-            '/ui/graph-layout?scope_key=' + encodeURIComponent(this._scopeKey) +
-            '&fingerprint=' + encodeURIComponent(this._fingerprint));
-          if (lr.ok) {
-            const lj = await lr.json();
-            if (lj.hit && Array.isArray(lj.positions) &&
-                lj.positions.length === this._order.length * 2) {
-              this._cachedPositions = lj.positions;
-            }
-          }
-        } catch (_) { /* cache offline -- fall back to live layout */ }
+      this.booting = true;
+      this.bootMsg = 'preparing the nebula…';
+      const ok = await this._awaitServerLayout();
+      if (!ok) {
+        this.booting = false;
+        this.bootMsg = '';
+        window.toast && window.toast(
+          'The graph layout is taking unusually long to compute on the '
+          + 'server -- reload in a moment.', 'info');
+        return;
       }
 
       this.renderCanvas();
-      this.buildTree();
-      this.buildTypeFilters();
       this.applyFilters();
 
       // Deep-link: ?node=<id> selects that node WITHIN the full graph.
@@ -801,8 +870,9 @@ function nebula() {
           project: d.project || '',
           color: TYPE_COLORS[d.type] || TYPE_COLOR_FALLBACK,
           // gentle log-ish size ramp: hubs read bigger without
-          // swamping the field.
-          size: 3 + Math.min(14, Math.sqrt(deg) * 1.8),
+          // swamping the field. Tighter range than the first cut so
+          // the dense core reads as points, not overlapping mud (RC4).
+          size: 2 + Math.min(11, Math.sqrt(deg) * 1.5),
           deg: deg,
         };
         order.push(d.id);
@@ -821,7 +891,7 @@ function nebula() {
         const conf = e.data.confidence ?? 1.0;
         (adj[s] = adj[s] || []).push({ id: t, rel, confidence: conf });
         (adj[t] = adj[t] || []).push({ id: s, rel, confidence: conf });
-        const key = s < t ? s + ' ' + t : t + ' ' + s;
+        const key = s < t ? s + '~' + t : t + '~' + s;
         const prev = bestPair[key];
         if (!prev || conf > prev.conf) {
           bestPair[key] = { s, t, rel, conf };
@@ -843,7 +913,10 @@ function nebula() {
           x: Math.cos(ang) * rad,
           y: Math.sin(ang) * rad,
           size: rec.size,
-          label: rec.name,
+          // truncate the rendered label so a long node name can't
+          // render as a giant white bar (RC4); the side panel still
+          // shows the full name from _byId.
+          label: rec.name.length > 36 ? rec.name.slice(0, 35) + '…' : rec.name,
           color: rec.color,
           ntype: rec.type,        // our category (sigma reserves `type`
                                   // for the node program).
@@ -871,6 +944,9 @@ function nebula() {
         linkCount += 1;
       }
 
+      // v4.5 pivot: connected components + the whole layout are
+      // computed SERVER-SIDE now (mnemo/ui/graph_layout.py). The client
+      // builds only the render model; positions arrive from the cache.
       this.graph = graph;
       this._order = order;
       this._byId = byId;
@@ -891,116 +967,42 @@ function nebula() {
       }
     },
 
-    // Cache MISS: a BOUNDED forceatlas2 run that NEVER blocks the main
-    // thread (a synchronous FA2.assign on an 11 k-node scope froze the
-    // tab ~56 s -- the documented renderer-freeze symptom; cosmos ran
-    // its cold-converge off the main thread on the GPU, so this must
-    // be off-thread too). sigma is mounted on the disc seed first
-    // (instant + interactive); the FA2 Web Worker then relaxes it
-    // off-thread and the user WATCHES the nebula form (the loved
-    // cold-converge feel), fully interactive throughout. After a
-    // bounded run the worker STOPS (freeze -- no perpetual sim) and
-    // the settled layout is PUT so the next visit is an instant cache
-    // hit. A reload / scope change invalidates _layoutToken + kills
-    // the worker so an in-flight run bails.
-    _runForceLayout() {
-      const lib = window.graphologyLibrary;
-      const FA2 = lib && lib.layoutForceAtlas2;
-      if (!FA2 || !FA2.assign) { this.booting = false; return; }
-      let settings;
-      try { settings = FA2.inferSettings(this.graph); }
-      catch (_) { settings = {}; }
-      const n = this._order.length;
+    // v4.5 ARCHITECTURE PIVOT: the layout is computed SERVER-SIDE
+    // (mnemo/ui/graph_layout.py), deterministic + fully converged +
+    // cached. Client-side forceatlas2 (sync then Web Worker) was
+    // PROVEN non-deterministic + quality-fragile across 3 measured
+    // attempts on the real 11k/2298-component scope (sync converged,
+    // the worker exploded, packing alone = structureless confetti)
+    // -- the documented "3 failed fixes => wrong architecture" pivot.
+    // The browser is now a PURE sigma renderer: poll the cache until
+    // the daemon's background compute has stored the layout, then
+    // apply it. No client force layout, no worker, no PUT.
+    async _awaitServerLayout() {
       const token = this._layoutToken;
-
-      // SMALL scope: a synchronous FA2 is fast (<~300ms) and gives an
-      // instant good layout -- no worker spin-up, no rAF-sync latency.
-      if (n <= 800) {
+      const url = '/ui/graph-layout?scope_key=' +
+        encodeURIComponent(this._scopeKey) +
+        '&fingerprint=' + encodeURIComponent(this._fingerprint);
+      const want = this._order.length * 2;
+      // generous cap: the first compute for a big NEW scope is a
+      // one-time server cost (then cached forever); ~2.5 min ceiling.
+      for (let i = 0; i < 100; i++) {
+        if (token !== this._layoutToken) return false;  // superseded
+        let lj = null;
         try {
-          FA2.assign(this.graph, { iterations: 320, settings });
-        } catch (_) { /* keep the disc seed */ }
-        this.booting = false;
-        this._persistLayout();  // FREEZE -- one fast pass, then static.
-        return;
+          const r = await fetch(url);
+          if (r.ok) lj = await r.json();
+        } catch (_) { /* daemon blip -- retry */ }
+        if (lj && lj.hit && Array.isArray(lj.positions) &&
+            lj.positions.length === want) {
+          this._cachedPositions = lj.positions;
+          return true;
+        }
+        this.bootMsg = (lj && lj.computing)
+          ? 'computing the nebula layout on the server…'
+          : 'preparing the nebula…';
+        await new Promise((res) => setTimeout(res, 1500));
       }
-
-      // LARGE scope: graphology's JS FA2 is ~400ms/iteration at 11 k
-      // nodes -- a synchronous (or even rAF-chunked) run would freeze
-      // / jank the tab for ~a minute (the documented renderer-freeze
-      // symptom; cosmos ran its converge on the GPU, off the main
-      // thread). Run it in the FA2Layout WEB WORKER instead (the
-      // design's intent): the
-      // compute is entirely off the main thread, the page stays fully
-      // interactive on the disc seed and the user WATCHES it form
-      // (the loved cold-converge), and a BOUNDED run duration stops it
-      // (no perpetual sim) then the settled layout is PUT + frozen.
-      // The FA2 worker SUPERVISOR is a top-level graphology-library
-      // export (graphologyLibrary.FA2Layout), NOT a member of
-      // layoutForceAtlas2 (which only carries assign/inferSettings).
-      const FA2Layout = lib.FA2Layout || (lib.default && lib.default.FA2Layout);
-      if (typeof FA2Layout !== 'function') {
-        // no worker in the bundle -> don't block; keep the disc seed
-        // (a reload re-tries; far better than a 56 s main-thread jam).
-        this.booting = false;
-        return;
-      }
-      let layout;
-      try {
-        layout = new FA2Layout(this.graph, { settings });
-        layout.start();
-      } catch (_) {
-        this.booting = false;
-        this._fa2Worker = null;
-        return;
-      }
-      this._fa2Worker = layout;
-      // bounded run -> matches the cosmos ~7 s cold-converge feel, then
-      // STOP (freeze). Scales with node count.
-      const runMs = n > 6000 ? 9000 : n > 2000 ? 5500 : 3000;
-      this._fa2StopT = setTimeout(() => {
-        if (token !== this._layoutToken) return;  // superseded reload
-        try { layout.stop(); } catch (_) {}
-        try { layout.kill(); } catch (_) {}
-        this._fa2Worker = null;
-        this.booting = false;
-        this._persistLayout();  // FREEZE: bounded run done, settled.
-      }, runMs);
-    },
-
-    // Tear down an in-flight FA2 worker + its stop-timer (reload /
-    // scope change / destroy). Safe to call when none is running.
-    _killForceLayout() {
-      if (this._fa2StopT) {
-        try { clearTimeout(this._fa2StopT); } catch (_) {}
-        this._fa2StopT = null;
-      }
-      if (this._fa2Worker) {
-        try { this._fa2Worker.stop(); } catch (_) {}
-        try { this._fa2Worker.kill(); } catch (_) {}
-        this._fa2Worker = null;
-      }
-    },
-
-    // PUT the settled positions to the server cache, keyed by scope +
-    // fingerprint (UNCHANGED contract). Best-effort.
-    _persistLayout() {
-      if (!this.graph || !this._fingerprint || this._layoutPersisted) return;
-      const pos = new Array(this._order.length * 2);
-      for (let i = 0; i < this._order.length; i++) {
-        const a = this.graph.getNodeAttributes(this._order[i]);
-        pos[i * 2] = a.x;
-        pos[i * 2 + 1] = a.y;
-      }
-      this._layoutPersisted = true;
-      fetch('/ui/graph-layout', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          scope_key: this._scopeKey,
-          fingerprint: this._fingerprint,
-          positions: pos,
-        }),
-      }).catch(() => { this._layoutPersisted = false; });
+      return false;  // gave up -- render an empty canvas (toast below)
     },
 
     // --- sigma reducers: highlight is a PURE DATA CHANGE ----------
@@ -1032,6 +1034,7 @@ function nebula() {
       NB_RS.hover = this._hoverId;
       NB_RS.bright = this._bright;
       NB_RS.accent = this._theme.accent;
+      NB_RS.fg = this._theme.fg;
       NB_RS.dim05 = this._rgba(this._theme.dim, 0.5);
       NB_RS.dimEdge = this._rgba(this._theme.dim, 0.12);
       NB_RS.labels = this.labelsVisible;
@@ -1064,44 +1067,45 @@ function nebula() {
         return;
       }
 
-      // Invalidate + tear down any in-flight forceatlas2 worker from a
-      // prior scope (the new token also makes its stop-timer a no-op).
-      this._layoutToken = {};
-      this._killForceLayout();
-      const useCache = this._cachedPositions &&
-        this._cachedPositions.length === this._order.length * 2;
-      if (useCache) {
-        this._applyCachedPositions();
-        this.booting = false;
-        this.bootMsg = '';
-      } else {
-        // mount sigma on the disc seed FIRST (interactive instantly,
-        // no freeze); _runForceLayout() relaxes it across frames.
-        this.booting = true;
-        this.bootMsg = 'forming ' + this._order.length.toLocaleString() + ' nodes';
-      }
+      // v4.5 PIVOT: positions ALWAYS come from the server cache --
+      // reload() awaited _awaitServerLayout() before calling this, so
+      // _cachedPositions is set + length-matched. The client never
+      // computes or seeds layout (no force sim, no worker, no packing).
+      this._applyCachedPositions();
+      this.booting = false;
+      this.bootMsg = '';
 
       // populate the plain hot-path snapshot before the first paint.
       this._syncReducerState();
       const Sigma = window.Sigma;
       try {
         this.sig = new Sigma(this.graph, container, {
-          // transparent canvas -> the .nebula-shell starfield CSS
-          // shows through (the loved nebula backdrop, kept).
+          // sigma's WebGL canvases are transparent (alpha context) so
+          // the opaque-dark .nebula-canvas (app.css) is the backdrop --
+          // the C1 nebula theme. Labels are drawn DARK (nbDrawLabel /
+          // nbDrawHover) -- sigma's default white label pill was the
+          // reported "white label background, light text".
           allowInvalidContainer: true,
           renderLabels: this.labelsVisible,
           labelColor: { color: this._theme.fg },
           labelSize: 12,
           labelWeight: '600',
           labelFont: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
-          labelDensity: 0.6,
-          labelGridCellSize: 70,
-          labelRenderedSizeThreshold: 8,
+          labelDensity: 0.55,
+          labelGridCellSize: 72,
+          labelRenderedSizeThreshold: 9,
           defaultNodeColor: TYPE_COLOR_FALLBACK,
           defaultEdgeColor: this._rgba('#8aa6c8', 0.34),
           minCameraRatio: 0.05,
           maxCameraRatio: 12,
           zIndex: true,
+          // RC4 perf: 15.5k edges + 11k labels must not repaint every
+          // pan/zoom frame (the reported lag). Hidden while the camera
+          // moves, restored when it settles.
+          hideEdgesOnMove: true,
+          hideLabelsOnMove: true,
+          defaultDrawNodeLabel: nbDrawLabel,
+          defaultDrawNodeHover: nbDrawHover,
           nodeReducer: (id, data) => nbNodeReduce(NB_RS, id, data),
           edgeReducer: (key, data) => nbEdgeReduce(NB_RS, data),
         });
@@ -1112,10 +1116,6 @@ function nebula() {
       }
 
       this._wireInteraction();
-      // Cache miss: relax the disc seed via the chunked, non-blocking
-      // forceatlas2 (it clears `booting` + PUTs the layout when the
-      // bounded run completes). Hit path already cleared `booting`.
-      if (!useCache) this._runForceLayout();
     },
 
     // --- full interaction (sigma first-class events) --------------
