@@ -167,3 +167,73 @@ def test_overflow_prone_surfaces_reference_the_primitives() -> None:
         "audit.html .hit-desc must reference the .u-truncate primitive "
         "(the v4.3.1 1-line ellipsis, now single-sourced not inline)."
     )
+
+
+@pytest.fixture(scope="module")
+def base_html() -> str:
+    return (TPL / "base.html").read_text(encoding="utf-8")
+
+
+def test_nav_drawer_markup_and_a11y(base_html: str) -> None:
+    """Below --bp-md the topbar collapses into an off-canvas drawer.
+    base.html must carry the hamburger toggle (a11y: aria-controls +
+    aria-expanded bound to the open state), the #nav-drawer container,
+    and a scrim -- the markup the responsive CSS hangs off."""
+    assert 'class="nav-toggle"' in base_html, (
+        "base.html must have a .nav-toggle hamburger button (the < --bp-md "
+        "affordance; topbar overflows on a narrow window without it)."
+    )
+    assert 'aria-controls="nav-drawer"' in base_html, (
+        'the hamburger must declare aria-controls="nav-drawer" (a11y).'
+    )
+    assert ':aria-expanded="open"' in base_html, (
+        "the hamburger must bind :aria-expanded to the drawer open state."
+    )
+    assert 'id="nav-drawer"' in base_html, (
+        "base.html must have the #nav-drawer off-canvas container."
+    )
+    assert 'class="nav-scrim"' in base_html, (
+        "base.html must have a .nav-scrim (click-outside-to-close, a11y)."
+    )
+
+
+def test_nav_drawer_factory_named_no_double_init(base_html: str) -> None:
+    """navDrawer() is a named factory (feedback_mnemo_alpine_gotchas) and
+    is NOT paired with x-init="init()" -- Alpine auto-runs init(); the
+    pair double-fires it (feedback_alpine_double_init)."""
+    assert "function navDrawer()" in base_html, (
+        "navDrawer() must be a named factory (mirrors bellHistory())."
+    )
+    assert 'x-data="navDrawer()"' in base_html, 'the topbar must mount x-data="navDrawer()".'
+    assert not re.search(r'x-data="navDrawer\(\)"\s+x-init="init\(\)"', base_html), (
+        'x-data="navDrawer()" + x-init="init()" double-runs init() '
+        "(feedback_alpine_double_init). Drop the redundant x-init."
+    )
+    assert "localStorage" in base_html, "navDrawer() must persist its open state in localStorage."
+    assert "mnemo.nav" in base_html, (
+        "navDrawer() must use a namespaced localStorage key (feedback_mnemo_alpine_gotchas)."
+    )
+
+
+def test_nav_drawer_css_desktop_parity_and_collapse(app_css: str) -> None:
+    """>= --bp-md the drawer is display:contents so nav/workspace/bell/
+    help stay direct topbar flex items (desktop pixel-parity, like the
+    Task 1 consolidation). The toggle is hidden by default and only the
+    < --bp-md (60rem) media query turns it on + makes .nav-drawer a
+    fixed off-canvas panel."""
+    nd_start = app_css.index(".nav-drawer {")
+    nd_body = app_css[nd_start : app_css.index("}", nd_start)]
+    assert "display: contents" in nd_body, (
+        ".nav-drawer must be display:contents at >= --bp-md so its "
+        "children stay direct topbar flex items (desktop parity)."
+    )
+    nt_start = app_css.index(".nav-toggle {")
+    nt_body = app_css[nt_start : app_css.index("}", nt_start)]
+    assert "display: none" in nt_body, (
+        ".nav-toggle must be display:none by default (desktop has the "
+        "inline nav; the hamburger only appears < --bp-md)."
+    )
+    assert ".nav-drawer.open" in app_css, (
+        "the open state (.nav-drawer.open -> translateX(0)) must exist."
+    )
+    assert ".nav-scrim" in app_css, ".nav-scrim must be styled (the drawer backdrop)."
