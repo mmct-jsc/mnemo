@@ -18,8 +18,8 @@
      the server-side + cached pipeline is unchanged. The classic
      <script> in <head> means window.createREGL / window.NebulaGL are
      defined before Alpine's deferred init() runs nebula(). -->
-<script src="/static/vendor/regl.min.js"></script>
-<script src="/static/vendor/nebula-gl.js"></script>
+<script src="/static/vendor/regl.min.js?v={{ mnemo_version }}"></script>
+<script src="/static/vendor/nebula-gl.js?v={{ mnemo_version }}"></script>
 <!-- Prism is loaded site-wide from base.html; no per-page setup. -->
 {% endblock %}
 {% block layout %}
