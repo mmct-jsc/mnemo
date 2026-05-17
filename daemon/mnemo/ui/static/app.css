@@ -181,6 +181,18 @@ body {
 .nav-drawer {
   display: contents;
 }
+/* v4.4.1: workspace-switcher + notification bell live here (NOT in
+   the drawer) -- always right-aligned + directly clickable on every
+   screen size (the user's explicit IA). >= --bp-md the contents-
+   drawer's nav has flex:1 so this group sits at the right exactly as
+   before; < --bp-md the drawer is out of flow so margin-left:auto
+   right-aligns it (the topbar is then [hamburger][brand]...[actions]). */
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  min-width: 0;
+}
 .nav-toggle {
   display: none;
   align-items: center;
@@ -218,29 +230,55 @@ body {
   }
 }
 @media (max-width: 60rem) {
-  /* --bp-md: collapse the topbar into the off-canvas drawer. */
+  /* --bp-md: collapse the topbar into the off-canvas drawer. The
+     hamburger is leftmost (no margin-left:auto); the workspace+bell
+     actions group right-aligns instead (always visible, not drawered). */
   .nav-toggle {
     display: inline-flex;
-    margin-left: auto;
   }
-  /* Closed = display:none so the panel occupies zero space and can
-     NEVER extend the page (a position:fixed translateX(100%) panel
-     still adds to document scrollWidth regardless of clip/containing-
-     block -- proven; the topbar's backdrop-filter is a CB trap). Open
-     = a fixed panel pinned right:0, so its box is always WITHIN the
-     viewport [vw-w, vw]. Slide/transition is Task-6 polish (discrete
-     display animation), correctness first. */
+  /* v4.4.1: the 2rem desktop gap + 1.5rem padding overflow a 375
+     row once toggle+brand+actions all show. Tighten on mobile. AND
+     drop backdrop-filter < --bp-md: it makes .topbar the containing
+     block for its position:fixed children (.nav-drawer / .nav-scrim),
+     so the drawer resolved against the 63px topbar box -> a broken
+     32px strip on click. Without it they resolve against the viewport
+     -> a real full-height side panel + a full-screen scrim. (Desktop
+     keeps the glass blur; there the drawer is display:contents, not
+     fixed, so no CB trap.) */
+  .topbar {
+    gap: 0.55rem;
+    padding: 0.55rem 0.85rem;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+  .topbar-actions {
+    margin-left: auto;
+    gap: 0.45rem;
+  }
+  .topbar-actions .workspace-switcher-label {
+    max-width: 7rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  /* v4.4.1: a real full-height side panel anchored LEFT (the
+     hamburger is leftmost -> the menu sticks to the left; a left
+     trigger opening a right panel was disorienting). display:none
+     when closed (zero footprint, never extends scrollWidth); when
+     open it's a fixed panel pinned top:--topbar-h / left:0 / bottom:0,
+     full height now that .topbar drops backdrop-filter < --bp-md so
+     this resolves against the viewport (not the 63px topbar). */
   .nav-drawer {
     display: none;
     position: fixed;
-    inset: var(--topbar-h) 0 0 auto;
+    inset: var(--topbar-h) auto 0 0;
     width: min(82vw, 320px);
     flex-direction: column;
     align-items: stretch;
     gap: 0.4rem;
     padding: 1rem;
     background: var(--panel);
-    border-left: 1px solid var(--border);
+    border-right: 1px solid var(--border);
     box-shadow: var(--shadow);
     overflow-y: auto;
     z-index: 60;
@@ -259,10 +297,6 @@ body {
   }
   .nav-drawer nav a.active::after {
     display: none;
-  }
-  .nav-drawer .workspace-switcher,
-  .nav-drawer .bell-wrap {
-    width: 100%;
   }
   .nav-drawer .help {
     padding: 0.5rem 0.25rem;
@@ -2267,8 +2301,13 @@ dl.meta dd { margin: 0; color: var(--fg); min-width: 0; overflow-wrap: anywhere;
 /* --- Node detail edge list -------------------------------------- */
 
 .back-row { margin-bottom: 0.85rem; }
-.edge-list { list-style: none; padding: 0; margin: 0.5rem 0; display: grid; gap: 0.4rem; }
+.edge-list { list-style: none; padding: 0; margin: 0.5rem 0; display: grid;
+  /* minmax(0,1fr): implicit auto track = max-content; a long node
+     .name otherwise blows the connections list -> page width
+     (v4.3.1 bug class, systematized C1.R). */
+  grid-template-columns: minmax(0, 1fr); gap: 0.4rem; }
 .edge-list li {
+  min-width: 0;
   background: var(--panel-2); border: 1px solid var(--border-soft);
   padding: 0.5rem 0.85rem; border-radius: var(--radius);
   display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
@@ -2279,8 +2318,12 @@ dl.meta dd { margin: 0; color: var(--fg); min-width: 0; overflow-wrap: anywhere;
 }
 .edge-list .arrow { color: var(--fg-dim); }
 .edge-target {
-  display: inline-flex; gap: 0.5rem; align-items: center;
+  display: flex; gap: 0.5rem; align-items: center;
   text-decoration: none;
+  /* take the remaining row space + clip, so the .name u-truncate
+     ellipsis actually engages (a nowrap child needs a bounded,
+     clipping flex parent -- the systematized v4.3.1 rule). */
+  flex: 1 1 8rem; min-width: 0; overflow: hidden;
 }
 .edge-target:hover .name { color: var(--accent); }
 .edge-target .name { color: var(--fg); }
@@ -2575,7 +2618,11 @@ dl.meta dd { margin: 0; color: var(--fg); min-width: 0; overflow-wrap: anywhere;
 /* --- Full-dive page hero (audit/settings/node) -------------------- */
 .page-hero {
   display: flex;
-  align-items: center;
+  /* v4.4.1: flex-start, not center -- center floated the actions
+     (BASE / cite / Copy citation) at the vertical MIDDLE of a tall
+     description, disconnected and awkward (the v4.4.0 live-review
+     screenshot). Top-aligned reads as a proper header. */
+  align-items: flex-start;
   justify-content: space-between;
   gap: 2rem;
   flex-wrap: wrap;
@@ -2690,12 +2737,20 @@ dl.meta dd { margin: 0; color: var(--fg); min-width: 0; overflow-wrap: anywhere;
 .node-edit { max-width: none; }
 .node-detail-grid {
   display: grid;
-  grid-template-columns: 2fr 1fr;
+  /* v4.4.1: minmax(0,...) -- a long nowrap <code> path/id in dl.meta
+     otherwise grows the 1fr/2fr track to max-content and blows the
+     page width at < --bp-md (the v4.3.1 bug class; the v4.4.0 Task-6
+     dl.meta fix was insufficient while the SHELL track stayed bare
+     1fr). Systematized. */
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
   gap: 1.5rem;
   align-items: start;
 }
+.node-detail-main {
+  min-width: 0; /* grid item must shrink so dl.meta/code can wrap */
+}
 @media (max-width: 60rem) { /* --bp-md (was 980px) */
-  .node-detail-grid { grid-template-columns: 1fr; }
+  .node-detail-grid { grid-template-columns: minmax(0, 1fr); }
 }
 .node-detail-side {
   position: sticky;
@@ -4253,37 +4308,42 @@ dl.meta dd { margin: 0; color: var(--fg); min-width: 0; overflow-wrap: anywhere;
 /* C1.R shared mobile-panel affordances (both full-window shells,
    single-source). The toggle bar + scrim only exist < --bp-md; the
    desktop 3-panel layouts never see them. */
+/* v4.4.1: a refined SEGMENTED CONTROL, not two floating bordered
+   pills with a stray inconsistent glyph (the v4.4.0 review found
+   "Chats / Cite" + "Tree / Detail" weird). One inset track, the
+   active segment filled with --accent-soft. C1-token, dark-theme,
+   single-source for BOTH shells (chat #6 + nebula #8). */
 .mpanel-bar {
   display: none;
 }
 .mpanel-toggle {
   display: inline-flex;
+  flex: 1; /* v4.4.1: full-width 50/50 segments (the user's pick) */
   align-items: center;
   justify-content: center;
-  gap: 0.35rem;
-  min-height: 44px; /* C1.R polish: >= 44px touch target */
-  padding: 0.35rem 0.9rem;
-  background: var(--panel-2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-pill);
-  color: var(--fg);
+  min-height: 40px;
+  padding: 0 0.95rem;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius);
+  color: var(--fg-muted);
   font: inherit;
-  font-size: 0.8rem;
+  font-size: 0.82rem;
+  font-weight: 500;
+  white-space: nowrap;
   cursor: pointer;
   transition: var(--transition);
 }
 .mpanel-toggle:hover {
-  border-color: var(--accent);
-  color: var(--accent);
+  color: var(--fg);
 }
 .mpanel-toggle:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 .mpanel-toggle.active {
-  border-color: var(--accent);
-  color: var(--accent);
   background: var(--accent-soft);
+  color: var(--accent);
 }
 .mpanel-scrim {
   position: fixed;
@@ -4299,10 +4359,18 @@ dl.meta dd { margin: 0; color: var(--fg); min-width: 0; overflow-wrap: anywhere;
   }
 }
 @media (max-width: 60rem) {
+  /* v4.4.1: a FULL-WIDTH 50/50 segmented control (the user rejected
+     the compact left pill as unprofessional). The track spans the
+     pane; the two .mpanel-toggle segments each flex:1. */
   .mpanel-bar {
     display: flex;
-    gap: 0.5rem;
-    align-items: center;
+    width: 100%;
+    gap: 3px;
+    margin: 0.6rem 0 0.45rem;
+    padding: 3px;
+    background: var(--panel-2);
+    border: 1px solid var(--border-soft);
+    border-radius: var(--radius-lg);
   }
 }
 

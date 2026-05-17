@@ -545,11 +545,7 @@
 </head>
 <body>
   <header class="topbar" x-data="navDrawer()" @keydown.escape.window="if (open) close()">
-    <a href="/" class="brand" aria-label="mnemo home">
-      <img src="/static/mnem/mark.svg?v={{ mnemo_version }}" width="22" height="22" alt="" class="brand-mark">
-      <span>mnemo</span>
-    </a>
-
+    <!-- v4.4.1: hamburger is leftmost (the user's explicit IA). -->
     <button type="button" class="nav-toggle" x-ref="navToggle"
             @click="toggle()" :aria-expanded="open"
             aria-controls="nav-drawer" aria-label="Menu">
@@ -561,6 +557,10 @@
         <line x1="3" y1="18" x2="21" y2="18"/>
       </svg>
     </button>
+    <a href="/" class="brand" aria-label="mnemo home">
+      <img src="/static/mnem/mark.svg?v={{ mnemo_version }}" width="22" height="22" alt="" class="brand-mark">
+      <span>mnemo</span>
+    </a>
 
     <div class="nav-drawer" id="nav-drawer" :class="{ open }">
     <nav>
@@ -573,6 +573,16 @@
       <a href="/audit-page"   class="{% if page == 'audit' %}active{% endif %}">Audit</a>
       <a href="/settings"     class="{% if page == 'settings' %}active{% endif %}">Settings</a>
     </nav>
+      <span class="help">
+        <a href="https://github.com/mmct-jsc/mnemo" target="_blank" rel="noopener">docs</a>
+      </span>
+    </div><!-- /.nav-drawer -->
+
+    <!-- v4.4.1: workspace + notifications are NOT in the drawer -- they
+         stay right-aligned in the topbar, always directly clickable on
+         every screen size (the user's explicit information architecture
+         from the v4.4.0 live review). -->
+    <div class="topbar-actions">
 
     <!-- v2.6 phase 10.1: active-project pill removed. Workspaces fully
          own retrieval scope now -- the workspace-switcher below sits
@@ -755,10 +765,7 @@
       </div>
     </div>
 
-    <span class="help">
-      <a href="https://github.com/mmct-jsc/mnemo" target="_blank" rel="noopener">docs</a>
-    </span>
-    </div><!-- /.nav-drawer -->
+    </div><!-- /.topbar-actions -->
 
     <div class="nav-scrim" x-show="open" x-cloak @click="close()" aria-hidden="true"></div>
   </header>
@@ -788,9 +795,13 @@
        this stays an ADDITIVE sibling of toast-stack/modal
        (reference_mnemo_v3 gotcha 10). -->
   <div class="mnem-wrap" x-data="mnemDock()" x-show="!hiddenOnChat" x-cloak
-       :style="posStyle" :class="{ dragging }">
+       :style="posStyle" :class="{ dragging }"
+       @click.outside="if (state !== 'closed') { state='closed'; persist(); } bubble=''">
 
-    <div class="mnem-bubble" x-show="bubble" x-cloak @click="open()">
+    <!-- v4.4.1: the proactive nudge never coexists with the open dock
+         panel (state==='closed' gate); it auto-dismisses on a timer
+         (mnemDock._maybeNudge); click-outside closes the panel first. -->
+    <div class="mnem-bubble" x-show="bubble && state === 'closed'" x-cloak @click="open()">
       <span x-text="bubble"></span>
       <button class="mnem-bubble-x" @click.stop="bubble=''" aria-label="dismiss">×</button>
     </div>
@@ -909,10 +920,22 @@
       hiddenOnChat: window.location.pathname.startsWith('/chat'),
       pos: { x: null, y: null, edge: 'right' }, dragging: false,
       _moved: false, _start: null, _dwell: null, _lastNudge: 0,
+      _vp: 0, // v4.4.1: reactive viewport tick (bumped on resize)
       get posStyle() {
+        // v4.4.1: clamp at RENDER time, not only on a resize event.
+        // A debounced resize listener can miss (it did -- the dock
+        // stranded off-screen after a window shrink). Reading _vp makes
+        // this re-evaluate on resize; the clamp guarantees the launcher
+        // can NEVER paint outside the viewport on ANY path.
+        this._vp; // reactive dependency
         var p = this.pos;
         if (p.x == null) return '';
-        return 'left:' + p.x + 'px; top:' + p.y + 'px; right:auto; bottom:auto;';
+        var de = document.documentElement;
+        var vw = de.clientWidth || 0, vh = de.clientHeight || 0;
+        var sz = 56; // launcher footprint
+        var x = vw ? Math.max(8, Math.min(vw - sz - 8, p.x)) : p.x;
+        var y = vh ? Math.max(8, Math.min(vh - sz - 8, p.y)) : p.y;
+        return 'left:' + x + 'px; top:' + y + 'px; right:auto; bottom:auto;';
       },
       // Keep the (now launcher-only) wrap fully inside the CURRENT
       // viewport. A persisted mnem.pos from a bigger window / another
@@ -948,10 +971,39 @@
         this.$nextTick(() => this._clampPos());
         var self = this;
         var rt;
-        window.addEventListener('resize', function () {
+        var reclamp = function () {
+          self._vp++; // instant reactive re-clamp via posStyle
           clearTimeout(rt);
           rt = setTimeout(function () { self._clampPos(); }, 120);
-        });
+        };
+        window.addEventListener('resize', reclamp);
+        // v4.4.1: window 'resize' does NOT fire on a CDP/preview
+        // viewport change (proven: the dock stranded off-screen). A
+        // ResizeObserver on the root element is layout-driven and
+        // fires on ANY viewport change -- the robust path so Mnem can
+        // never leave the screen regardless of how it shrank.
+        if (window.ResizeObserver) {
+          var ro = new ResizeObserver(reclamp);
+          ro.observe(document.documentElement);
+        }
+        // v4.4.1: bulletproof watchdog. Neither window.resize NOR
+        // ResizeObserver fire on the CDP/preview viewport change
+        // (proven: _vp stayed 0, the dock stranded at x=1180 off a
+        // 390 viewport). The dock is positioned imperatively
+        // (el.style.inset via _applyXY/drag), so the reactive
+        // posStyle clamp can't save it either. This cheap interval
+        // (no-op unless actually out of bounds) guarantees Mnem
+        // returns on-screen within ~0.6s on ANY platform/resize path.
+        setInterval(function () {
+          if (self.pos.x == null) return;
+          var de = document.documentElement;
+          var vw = de.clientWidth, vh = de.clientHeight;
+          if (!vw) return;
+          if (self.pos.x > vw - 64 || self.pos.y > vh - 64
+              || self.pos.x < 0 || self.pos.y < 0) {
+            self._clampPos();
+          }
+        }, 600);
         document.addEventListener('mnemo-mnem-mood', (e) => {
           if (e.detail && e.detail.mood) this.mood = e.detail.mood;
         });
@@ -1173,9 +1225,19 @@
         var now = Date.now();
         if (!this.proactive || now - this._lastNudge < this.freq) return;
         if (window.location.pathname.startsWith('/chat')) return;
+        // v4.4.1: never nudge while the dock panel is open -- the
+        // suggest must NOT coexist with the open chat.
+        if (this.state !== 'closed') return;
         this._lastNudge = now;
         this.bubble = 'Want me to summarize what you are looking at?';
         this._repositionSoon(); // glue it to the launcher; never reflow
+        // v4.4.1: auto-dismiss the unanswered nudge after 12s so it
+        // never lingers (the user must not have to chase the ×).
+        var self = this;
+        if (this._nudgeTO) clearTimeout(this._nudgeTO);
+        this._nudgeTO = setTimeout(function () {
+          if (self.bubble && self.state === 'closed') self.bubble = '';
+        }, 12000);
       },
     };
   }
@@ -1361,18 +1423,24 @@
        a pre-layout offsetWidth read clipped it to "Want m to").
        _positionBubble() glues it next to the launcher + clamps it
        on-screen; right/bottom here is just a pre-JS fallback. */
+    /* v4.4.1: the × is an absolute top-right affordance (not a flex
+       sibling fighting the wrapping text at flex-start -- that read as
+       "weird padding"). The text gets even padding with right room
+       reserved for the dismiss target (>=24px hit area). */
     .mnem-bubble { position: fixed; right: 16px; bottom: 84px;
       z-index: 61; width: min(280px, calc(100vw - 32px));
       background: var(--panel);
       border: 1px solid var(--accent); color: var(--fg);
-      padding: .7rem .85rem; border-radius: var(--radius-lg);
+      padding: .8rem 2.15rem .8rem .95rem; border-radius: var(--radius-lg);
       cursor: pointer; font-size: .85rem; line-height: 1.45;
-      display: flex; gap: .5rem; align-items: flex-start;
       box-shadow: var(--shadow);
       animation: mnem-pop 220ms cubic-bezier(.2,.7,.3,1) both; }
-    .mnem-bubble-x { background: none; border: 0; color: var(--fg-dim);
+    .mnem-bubble-x { position: absolute; top: .35rem; right: .4rem;
+      width: 1.6rem; height: 1.6rem; display: inline-flex;
+      align-items: center; justify-content: center;
+      background: none; border: 0; color: var(--fg-dim); border-radius: var(--radius-pill);
       cursor: pointer; font-weight: 700; font-size: 1rem; line-height: 1; }
-    .mnem-bubble-x:hover { color: var(--fg); }
+    .mnem-bubble-x:hover { color: var(--fg); background: var(--panel-2); }
 
     /* v3.2: shared inline cite popover (context-aware [mnemo:id]) --
        a node preview in place instead of a blind redirect. */
