@@ -139,6 +139,30 @@
           ctx.fillText(it.text, bx, by + 9 * dpr);
         }
       },
+      // v4.6 debug HUD -- a one-line ground-truth readout drawn on
+      // the overlay every frame. The dev preview is a 0x0 hidden tab
+      // (no WebGL paint), so this is how the USER reports the real
+      // renderer state back precisely instead of "it's dark". Drawn
+      // AFTER _render so it survives the per-frame clear. Removed
+      // before the v4.6.0 release.
+      _hud: function (text, dpr) {
+        var ctx = canvasEl.getContext('2d');
+        ctx.font = (11 * dpr) + 'px ui-monospace,monospace';
+        ctx.textBaseline = 'top';
+        var lines = String(text).split('\n');
+        var w = 0;
+        for (var i = 0; i < lines.length; i++) {
+          w = Math.max(w, ctx.measureText(lines[i]).width);
+        }
+        var lh = 15 * dpr;
+        ctx.fillStyle = 'rgba(7,9,15,0.85)';
+        ctx.fillRect(0, 0, w + 16 * dpr, lines.length * lh + 8 * dpr);
+        ctx.fillStyle = '#7ee7e0';
+        for (var j = 0; j < lines.length; j++) {
+          ctx.fillText(lines[j], 8 * dpr, 6 * dpr + j * lh);
+        }
+      },
+      _canvas: canvasEl,
     };
     return api;
   }
@@ -158,9 +182,24 @@
       canvas: canvas,
       attributes: { antialias: false, alpha: false, depth: false },
     });
+    // The SAME GL context regl owns (getContext returns the existing
+    // one). Used ONLY by the debug HUD to report regl-internal ground
+    // truth (drawing-buffer size, viewport rect, GL error, draw
+    // throws) -- the dev preview is a 0x0 hidden tab so this is the
+    // only way to see why the draw calls render nothing. Removed with
+    // the HUD before the v4.6.0 release.
+    var rawgl = canvas.getContext('webgl2') || canvas.getContext('webgl');
+    var diag = { dbg: '?', vp: '?', err: 0, draw: 'ok' };
+    var _lastLog = 0;
 
     var cam = { x: 0, y: 0, zoom: 1 };
     var raf = 0, disposed = false, fitted = false;
+    var fitZoom = 1;     // the zoom fitCamera last produced (the
+                         // whole-graph scale) -- select() must stay
+                         // anchored to THIS, never a hard 0.5 floor
+                         // (0.5 on a fit~0.07 graph = fly 7x into the
+                         // void = the "click -> black" report).
+    var nDraws = 0;      // frames drawn (debug HUD)
     var hoverId = -1, selId = -1, dragId = -1;
     var hl = null; // Set | null
     var cbs = {};
@@ -183,43 +222,43 @@
     var colBuf = regl.buffer(colArr);
     var sizBuf = regl.buffer(sizArr);
 
-    var ea = new Float32Array(edges.length * 2);
-    var eb = new Float32Array(edges.length * 2);
+    // --- edges: ONE non-instanced LINES draw, 2 vertices per edge.
+    // The prior per-instance setup had no per-vertex attribute stream
+    // and rendered nothing. A flat per-vertex position buffer is the
+    // robust, extension-free pattern with no instancing pitfalls.
+    var edgePos = new Float32Array(edges.length * 4);
     function rebuildEdges() {
       for (var i = 0; i < edges.length; i++) {
         var s = nodes[edges[i].s], t = nodes[edges[i].t];
-        ea[i * 2] = s.x; ea[i * 2 + 1] = s.y;
-        eb[i * 2] = t.x; eb[i * 2 + 1] = t.y;
+        edgePos[i * 4] = s.x; edgePos[i * 4 + 1] = s.y;
+        edgePos[i * 4 + 2] = t.x; edgePos[i * 4 + 3] = t.y;
       }
     }
     rebuildEdges();
-    var eaBuf = regl.buffer({ usage: 'dynamic', data: ea });
-    var ebBuf = regl.buffer({ usage: 'dynamic', data: eb });
+    var edgeBuf = regl.buffer({ usage: 'dynamic', data: edgePos });
 
     function res(ctx) { return [ctx.drawingBufferWidth, ctx.drawingBufferHeight]; }
 
+    var EDGE_VERT =
+      'precision highp float; attribute vec2 position;' +
+      'uniform vec2 cam,res; uniform float zoom;' +
+      'void main(){ vec2 p=(position-cam)*zoom;' +
+      ' gl_Position=vec4(p.x/(res.x*0.5),p.y/(res.y*0.5),0.0,1.0);}';
+    var EDGE_FRAG =
+      'precision highp float; uniform vec4 ec;' +
+      'void main(){ gl_FragColor=ec; }';
+
     var drawEdges = regl({
-      vert:
-        'precision highp float; attribute vec2 a,b; attribute float t;' +
-        'uniform vec2 cam,res; uniform float zoom;' +
-        'void main(){ vec2 w=mix(a,b,t); vec2 p=(w-cam)*zoom;' +
-        ' gl_Position=vec4(p.x/(res.x*0.5),p.y/(res.y*0.5),0.0,1.0);}',
-      frag:
-        'precision highp float; uniform vec4 ec;' +
-        'void main(){ gl_FragColor=ec; }',
-      attributes: {
-        a: { buffer: eaBuf, divisor: 1 },
-        b: { buffer: ebBuf, divisor: 1 },
-        t: [0, 1],
-      },
+      vert: EDGE_VERT,
+      frag: EDGE_FRAG,
+      attributes: { position: edgeBuf },
       uniforms: {
         cam: function () { return [cam.x, cam.y]; },
         zoom: function () { return cam.zoom; },
         res: function (c) { return res(c); },
         ec: function () { return edgeColor; },
       },
-      count: 2,
-      instances: function () { return edges.length; },
+      count: edges.length * 2,
       primitive: 'lines',
       blend: {
         enable: true,
@@ -241,16 +280,25 @@
         // the "black, one line" report). This keeps nodes a crisp
         // 3..64 px: clearly visible at fit, growing when zoomed in.
         ' gl_PointSize=clamp(siz*(0.7+26.0*zoom),3.0,64.0);}',
+      // NO screen-space-derivative call: on a WebGL1 context (regl's
+      // default) those need the OES_standard_derivatives extension +
+      // an #extension pragma; without it the fragment shader FAILS TO
+      // COMPILE -> an invalid program -> useProgram INVALID_OPERATION
+      // (1282) every frame -> the whole canvas renders nothing (THE
+      // "black" root cause, proven by the console diagnostic). A
+      // fixed-width SDF feather is extension-free, works everywhere;
+      // 0.07 of the point radius is a crisp ~1-4 px edge at 3..64 px.
       frag:
         'precision highp float; varying vec3 vC; uniform float glow;' +
         'void main(){ vec2 q=gl_PointCoord-0.5; float d=length(q);' +
-        ' float aa=fwidth(d)+0.001;' +
+        ' float aa=0.09;' +
+        // clean soft-edged disc -- NO dark inner rim (that read as a
+        // glossy 3D marble; the design wants crisp flat star points).
         ' float core=1.0-smoothstep(0.5-aa,0.5,d);' +
-        ' float rim=smoothstep(0.40-aa,0.46,d)*core;' +
-        ' float halo=glow*(1.0-smoothstep(0.0,0.5,d))*0.45;' +
-        ' vec3 c=mix(vC, vC*0.55, rim);' +
-        ' gl_FragColor=vec4(c*core, core)+vec4(vC*halo, 0.0);' +
-        ' if(gl_FragColor.a<0.01 && halo<0.01) discard;}',
+        // a restrained outer bloom only (the single tasteful flourish).
+        ' float bloom=glow*(1.0-smoothstep(0.06,0.5,d))*0.30;' +
+        ' gl_FragColor=vec4(vC, core)+vec4(vC*bloom, 0.0);' +
+        ' if(gl_FragColor.a<0.01 && bloom<0.01) discard;}',
       attributes: { pos: posBuf, col: colBuf, siz: sizBuf },
       uniforms: {
         cam: function () { return [cam.x, cam.y]; },
@@ -267,23 +315,38 @@
       depth: { enable: false },
     });
 
-    // highlight pass: a selected/hovered/highlighted node + its
-    // incident edges, brighter, on top -- via per-call color override.
+    // highlight pass: the selected/hovered node's incident edges,
+    // accent + on top -- SAME robust non-instanced LINES pattern,
+    // its own dynamic buffer (never instanced).
     var accent = theme.accent || [0.494, 0.906, 0.878]; // #7ee7e0
+    var hiPos = new Float32Array(4);
+    var hiBuf = regl.buffer({ usage: 'dynamic', data: hiPos });
+    var hiVerts = 0;  // highlighted VERTICES (2 per incident edge)
+    function rebuildHi() {
+      var foc = selId >= 0 ? selId : hoverId;
+      var cnt = 0;
+      if (foc >= 0) {
+        for (var i = 0; i < edges.length; i++) {
+          if (edges[i].s === foc || edges[i].t === foc) cnt++;
+        }
+      }
+      if (cnt === 0) { hiVerts = 0; return; }
+      if (hiPos.length < cnt * 4) hiPos = new Float32Array(cnt * 4);
+      var k = 0;
+      for (var j = 0; j < edges.length; j++) {
+        if (edges[j].s === foc || edges[j].t === foc) {
+          var s = nodes[edges[j].s], t = nodes[edges[j].t];
+          hiPos[k++] = s.x; hiPos[k++] = s.y;
+          hiPos[k++] = t.x; hiPos[k++] = t.y;
+        }
+      }
+      hiVerts = cnt * 2;
+      hiBuf({ data: hiPos.subarray(0, cnt * 4) });
+    }
     var hiEdges = regl({
-      vert: drawEdges._vert ||
-        'precision highp float; attribute vec2 a,b; attribute float t;' +
-        'uniform vec2 cam,res; uniform float zoom;' +
-        'void main(){ vec2 w=mix(a,b,t); vec2 p=(w-cam)*zoom;' +
-        ' gl_Position=vec4(p.x/(res.x*0.5),p.y/(res.y*0.5),0.0,1.0);}',
-      frag:
-        'precision highp float; uniform vec4 ec;' +
-        'void main(){ gl_FragColor=ec; }',
-      attributes: {
-        a: { buffer: eaBuf, divisor: 1 },
-        b: { buffer: ebBuf, divisor: 1 },
-        t: [0, 1],
-      },
+      vert: EDGE_VERT,
+      frag: EDGE_FRAG,
+      attributes: { position: hiBuf },
       uniforms: {
         cam: function () { return [cam.x, cam.y]; },
         zoom: function () { return cam.zoom; },
@@ -292,32 +355,11 @@
           return [accent[0], accent[1], accent[2], 0.55];
         },
       },
-      count: 2,
-      instances: function () { return hiCount; },
+      count: function () { return hiVerts; },
       primitive: 'lines',
       blend: { enable: true, func: { src: 'src alpha', dst: 'one' } },
       depth: { enable: false },
     });
-    var hiA = regl.buffer({ usage: 'dynamic', data: new Float32Array(2) });
-    var hiB = regl.buffer({ usage: 'dynamic', data: new Float32Array(2) });
-    var hiCount = 0;
-    function rebuildHi() {
-      var foc = selId >= 0 ? selId : hoverId;
-      var sa = [], sb = [];
-      if (foc >= 0) {
-        for (var i = 0; i < edges.length; i++) {
-          if (edges[i].s === foc || edges[i].t === foc) {
-            var s = nodes[edges[i].s], t = nodes[edges[i].t];
-            sa.push(s.x, s.y); sb.push(t.x, t.y);
-          }
-        }
-      }
-      hiCount = sa.length / 2;
-      if (hiCount) {
-        hiA({ data: new Float32Array(sa) });
-        hiB({ data: new Float32Array(sb) });
-      }
-    }
 
     var pick = buildPickIndex(nodes);
 
@@ -348,6 +390,7 @@
       }
       if (!fitted && canvas.width > 2 && canvas.height > 2) {
         fitCamera(cam, nodes, canvas.width, canvas.height);
+        fitZoom = cam.zoom;
         fitted = true;
       }
     }
@@ -358,11 +401,44 @@
       resize();
       regl.poll();
       regl.clear({ color: bg, depth: 1 });
-      if (edges.length) drawEdges();
-      drawNodes();
-      if (hiCount) hiEdges();
+      // wrap the draws so a regl/GL throw is REPORTED on the HUD
+      // instead of silently rendering nothing (the exact mystery).
+      try {
+        if (edges.length) drawEdges();
+        drawNodes();
+        if (hiVerts) hiEdges();
+        diag.draw = 'ok';
+      } catch (e) {
+        diag.draw = (e && e.message ? e.message : String(e)).slice(0, 70);
+      }
+      nDraws++;
+      if (rawgl) {
+        diag.dbg = rawgl.drawingBufferWidth + 'x' + rawgl.drawingBufferHeight;
+        var v = rawgl.getParameter(rawgl.VIEWPORT);
+        diag.vp = v ? v[2] + 'x' + v[3] : '?';
+        diag.err = rawgl.getError();
+      }
       if (labels && labels._render) {
         labels._render(cam, canvas.width, canvas.height, dpr);
+      }
+      // Ground-truth diagnostic to the CONSOLE (NOT an on-canvas
+      // overlay -- the HUD obstructed the view). Logged ~once/sec so
+      // the user can copy ONE line from DevTools: high-level state +
+      // regl-INTERNAL truth (drawing-buffer size the shader divides
+      // by, GL viewport rect, GL error code, any draw-call throw) ->
+      // pinpoints why the draw calls render nothing. Removed before
+      // the v4.6.0 release.
+      var now = (global.performance || Date).now();
+      if (now - _lastLog > 1000) {
+        _lastLog = now;
+        global.console && global.console.log(
+          '[nebula-gl] gl ' + canvas.width + 'x' + canvas.height +
+          ' | fit ' + fitZoom.toExponential(2) +
+          ' | zoom ' + cam.zoom.toExponential(2) +
+          ' | N ' + nodes.length + ' E ' + edges.length +
+          ' | sel ' + selId + ' | draws ' + nDraws +
+          ' || reglDB ' + diag.dbg + ' | vp ' + diag.vp +
+          ' | glErr ' + diag.err + ' | draw ' + diag.draw);
       }
     }
     function invalidate() {
@@ -421,8 +497,7 @@
           posArr[dragId * 2 + 1] = w.y;
           posBuf({ data: posArr });
           rebuildEdges();
-          eaBuf({ data: ea });
-          ebBuf({ data: eb });
+          edgeBuf({ data: edgePos });
           rebuildHi();
           invalidate();
         } else {
@@ -466,8 +541,15 @@
         selId = (i == null) ? -1 : i;
         rebuildHi();
         if (selId >= 0) {
-          easeTo(nodes[selId].x, nodes[selId].y,
-            Math.max(cam.zoom, 0.5));
+          // Pan to the node and gently zoom IN -- but stay anchored
+          // to the whole-graph scale (fitZoom). Clamp to
+          // [fitZoom .. 6x fitZoom]: from a full-fit view a click
+          // zooms ~3x (node + its local cluster, context kept), and
+          // it can NEVER fly to the old 0.5 floor (~7x past fit ->
+          // the surrounding nebula vanished = the "black" report).
+          var tz = Math.min(Math.max(cam.zoom, fitZoom * 3.0),
+            fitZoom * 6.0);
+          easeTo(nodes[selId].x, nodes[selId].y, tz);
         } else {
           invalidate();
         }
@@ -480,6 +562,7 @@
       highlightSet: function () { return hl; },
       fit: function () {
         fitCamera(cam, nodes, canvas.width, canvas.height);
+        fitZoom = cam.zoom;
         invalidate();
       },
       destroy: function () {
