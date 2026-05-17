@@ -56,3 +56,20 @@ def _planted(communities: int, per: int, singles: int, seed: int = 7):
 
 def _xy(pos: list[float], i: int) -> tuple[float, float]:
     return pos[2 * i], pos[2 * i + 1]
+
+
+def test_shape_finite_deterministic() -> None:
+    n, edges, _ = _planted(6, 60, 90)
+    a = compute_graph_layout(n, edges)
+    b = compute_graph_layout(n, edges)
+    assert len(a) == 2 * n
+    assert all(math.isfinite(v) for v in a), "every coordinate finite"
+    assert a == b, "byte-identical for a fixed graph (cacheable)"
+
+
+def test_degenerate_inputs() -> None:
+    assert compute_graph_layout(0, []) == []
+    assert len(compute_graph_layout(1, [])) == 2
+    iso = compute_graph_layout(40, [])
+    assert len(iso) == 80
+    assert all(math.isfinite(v) for v in iso)
