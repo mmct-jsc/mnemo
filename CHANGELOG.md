@@ -2,6 +2,49 @@
 
 All notable changes to mnemo are documented here.
 
+## [4.4.1] - 2026-05-17
+
+**Patch: v4.4.0 live-review UX fixes -- the responsive chapter,
+finished to a professional bar.**
+
+### Fixed
+- **Settings rendered the tab strip twice.** `chat_settings.html`
+  carried both the shared `_settings_tabs` cross-route strip and a
+  redundant in-page Alpine button row. Removed the duplicate; sections
+  now follow the strip's `#hash` (syncTabFromHash + hashchange).
+- **Topbar information architecture.** Hamburger moved to the LEFT
+  (leftmost); the drawer holds only nav + docs; the workspace-switcher
+  and notification bell are NOT drawered -- a right-aligned
+  `.topbar-actions` group, always directly clickable on every screen.
+- **The nav drawer never actually opened.** It was a `position:fixed`
+  child of the `backdrop-filter` topbar, so it resolved against the
+  63px topbar box -> a broken ~32px strip on click. Dropped
+  `backdrop-filter` `< --bp-md` (desktop keeps the glass; there the
+  drawer is `display:contents`) so it resolves against the viewport:
+  a real full-height panel, anchored LEFT to match the hamburger.
+- **Mobile panel toggles** (chat Chats/Cite, nebula Tree/Detail) were
+  weird floating pills with an inconsistent glyph. Now a single
+  shared **full-width 50/50 segmented control** (active segment
+  filled `--accent-soft`), guard-tested deterministically.
+- **Companion dock**: the proactive nudge auto-dismisses (12s), never
+  coexists with the open panel, click-outside closes the panel first;
+  the `×` is an absolute affordance (even padding).
+- **Mnem could leave the viewport.** `window.resize` AND
+  `ResizeObserver` do not fire on a CDP/preview viewport change; the
+  dock is positioned imperatively. Added a `posStyle` render-clamp +
+  a cheap watchdog interval -> Mnem returns on-screen within ~0.6s on
+  any platform / resize path.
+- **Users can copy their own messages** (same `.msg-copy` /
+  `copyText()` as the assistant).
+- **Node detail fits**: `.page-hero` top-aligned (was floating actions
+  mid-description); the v4.3.1 grid-overflow bug class recurred on
+  `.node-detail-grid` / `.edge-list` -- both `minmax(0,…)` +
+  systematized into the no-overflow guard.
+
+Live-verified screenshot-independently at 375/768/1280: zero
+horizontal overflow, desktop pixel-parity. Full suite 1213 passed /
+2 skipped, ruff clean.
+
 ## [4.4.0] - 2026-05-17
 
 **C1.R Responsive / Adaptive Layout -- responsiveness is now a C1

@@ -160,6 +160,8 @@ GRID_LIST_SELECTORS = (
     "\n.query-mini {",
     "\n.query details ul.hits {",
     "\ndl.meta {",
+    "\n.node-detail-grid {",
+    "\n.edge-list {",
 )
 
 
@@ -351,3 +353,53 @@ def test_full_window_shells_collapse_and_keep_panels_reachable(
         "chat.html must render the side-panel toggle affordance so the "
         "rail/cite drawers are reachable < --bp-md."
     )
+
+
+def _rule_body(css: str, sel: str) -> str:
+    i = css.index(sel)
+    return css[i : css.index("}", i)]
+
+
+def test_v441_drawer_and_segmented_control_contract(app_css: str) -> None:
+    """v4.4.1 (post-v4.4.0 live review). Deterministic CSS-source
+    guards -- the preview's getComputedStyle was flaky this chapter, so
+    the contract is enforced statically here, not by a live read.
+
+    1. The < --bp-md .topbar MUST drop backdrop-filter. backdrop-filter
+       makes .topbar the containing block for its position:fixed
+       children (.nav-drawer / .nav-scrim); with it the drawer resolved
+       against the 63px topbar -> a broken 32px strip on click ("menu
+       not displaying"). Without it they resolve against the viewport.
+    2. The drawer is anchored LEFT (matches the leftmost hamburger --
+       "menu bar stick to the left"): inset top auto 0 0, NOT 0 0 auto.
+    3. The mobile panel toggle is a FULL-WIDTH 50/50 segmented control
+       (.mpanel-toggle flex:1; the compact left pill was rejected as
+       unprofessional), and the ACTIVE segment is visibly filled
+       (var(--accent-soft) + var(--accent))."""
+    # 1. topbar drops backdrop-filter < --bp-md (the CB-trap fix)
+    mq = app_css.index("@media (max-width: 60rem)")
+    mq_block = app_css[mq : app_css.index("\n}\n", mq) + 2]
+    tb = _rule_body(mq_block, ".topbar {")
+    assert "backdrop-filter: none" in tb, (
+        "< --bp-md .topbar MUST set backdrop-filter:none -- otherwise it "
+        "is the containing block for the fixed .nav-drawer (the v4.4.0 "
+        "32px-strip 'menu not displaying on click' bug)."
+    )
+    # 2. drawer anchored LEFT (full-height side panel)
+    nd = _rule_body(mq_block, ".nav-drawer {")
+    assert "var(--topbar-h) auto 0 0" in nd, (
+        "the < --bp-md .nav-drawer must be inset:var(--topbar-h) auto "
+        "0 0 (LEFT-anchored, full height) -- a left hamburger opening a "
+        "right panel was disorienting ('menu bar stick to the left')."
+    )
+    # 3. full-width 50/50 segments + visible active fill
+    tog = _rule_body(app_css, "\n.mpanel-toggle {")
+    assert "flex: 1" in tog, (
+        ".mpanel-toggle must be flex:1 -- a FULL-WIDTH 50/50 segmented "
+        "control (the compact left pill was rejected as unprofessional)."
+    )
+    act = _rule_body(app_css, ".mpanel-toggle.active {")
+    assert "var(--accent-soft)" in act, (
+        "the active segment must be visibly filled (var(--accent-soft))."
+    )
+    assert "var(--accent)" in act, "the active segment label must be var(--accent)."
