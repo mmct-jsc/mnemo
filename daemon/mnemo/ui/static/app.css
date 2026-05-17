@@ -237,10 +237,19 @@ body {
     display: inline-flex;
   }
   /* v4.4.1: the 2rem desktop gap + 1.5rem padding overflow a 375
-     row once toggle+brand+actions all show. Tighten on mobile. */
+     row once toggle+brand+actions all show. Tighten on mobile. AND
+     drop backdrop-filter < --bp-md: it makes .topbar the containing
+     block for its position:fixed children (.nav-drawer / .nav-scrim),
+     so the drawer resolved against the 63px topbar box -> a broken
+     32px strip on click. Without it they resolve against the viewport
+     -> a real full-height side panel + a full-screen scrim. (Desktop
+     keeps the glass blur; there the drawer is display:contents, not
+     fixed, so no CB trap.) */
   .topbar {
     gap: 0.55rem;
     padding: 0.55rem 0.85rem;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
   }
   .topbar-actions {
     margin-left: auto;
@@ -252,24 +261,24 @@ body {
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  /* Closed = display:none so the panel occupies zero space and can
-     NEVER extend the page (a position:fixed translateX(100%) panel
-     still adds to document scrollWidth regardless of clip/containing-
-     block -- proven; the topbar's backdrop-filter is a CB trap). Open
-     = a fixed panel pinned right:0, so its box is always WITHIN the
-     viewport [vw-w, vw]. Slide/transition is Task-6 polish (discrete
-     display animation), correctness first. */
+  /* v4.4.1: a real full-height side panel anchored LEFT (the
+     hamburger is leftmost -> the menu sticks to the left; a left
+     trigger opening a right panel was disorienting). display:none
+     when closed (zero footprint, never extends scrollWidth); when
+     open it's a fixed panel pinned top:--topbar-h / left:0 / bottom:0,
+     full height now that .topbar drops backdrop-filter < --bp-md so
+     this resolves against the viewport (not the 63px topbar). */
   .nav-drawer {
     display: none;
     position: fixed;
-    inset: var(--topbar-h) 0 0 auto;
+    inset: var(--topbar-h) auto 0 0;
     width: min(82vw, 320px);
     flex-direction: column;
     align-items: stretch;
     gap: 0.4rem;
     padding: 1rem;
     background: var(--panel);
-    border-left: 1px solid var(--border);
+    border-right: 1px solid var(--border);
     box-shadow: var(--shadow);
     overflow-y: auto;
     z-index: 60;
@@ -4309,13 +4318,14 @@ dl.meta dd { margin: 0; color: var(--fg); min-width: 0; overflow-wrap: anywhere;
 }
 .mpanel-toggle {
   display: inline-flex;
+  flex: 1; /* v4.4.1: full-width 50/50 segments (the user's pick) */
   align-items: center;
   justify-content: center;
-  min-height: 38px;
+  min-height: 40px;
   padding: 0 0.95rem;
   background: transparent;
   border: 0;
-  border-radius: var(--radius-pill);
+  border-radius: var(--radius);
   color: var(--fg-muted);
   font: inherit;
   font-size: 0.82rem;
@@ -4349,17 +4359,18 @@ dl.meta dd { margin: 0; color: var(--fg); min-width: 0; overflow-wrap: anywhere;
   }
 }
 @media (max-width: 60rem) {
-  /* the inset segmented "track" -- compact, left-aligned, hugs its
-     two segments (not a full-width 2-button bar). */
+  /* v4.4.1: a FULL-WIDTH 50/50 segmented control (the user rejected
+     the compact left pill as unprofessional). The track spans the
+     pane; the two .mpanel-toggle segments each flex:1. */
   .mpanel-bar {
-    display: inline-flex;
-    align-self: flex-start;
-    gap: 2px;
-    margin: 0.55rem 0 0.3rem;
+    display: flex;
+    width: 100%;
+    gap: 3px;
+    margin: 0.6rem 0 0.45rem;
     padding: 3px;
     background: var(--panel-2);
     border: 1px solid var(--border-soft);
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-lg);
   }
 }
 

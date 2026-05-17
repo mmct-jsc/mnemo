@@ -920,10 +920,22 @@
       hiddenOnChat: window.location.pathname.startsWith('/chat'),
       pos: { x: null, y: null, edge: 'right' }, dragging: false,
       _moved: false, _start: null, _dwell: null, _lastNudge: 0,
+      _vp: 0, // v4.4.1: reactive viewport tick (bumped on resize)
       get posStyle() {
+        // v4.4.1: clamp at RENDER time, not only on a resize event.
+        // A debounced resize listener can miss (it did -- the dock
+        // stranded off-screen after a window shrink). Reading _vp makes
+        // this re-evaluate on resize; the clamp guarantees the launcher
+        // can NEVER paint outside the viewport on ANY path.
+        this._vp; // reactive dependency
         var p = this.pos;
         if (p.x == null) return '';
-        return 'left:' + p.x + 'px; top:' + p.y + 'px; right:auto; bottom:auto;';
+        var de = document.documentElement;
+        var vw = de.clientWidth || 0, vh = de.clientHeight || 0;
+        var sz = 56; // launcher footprint
+        var x = vw ? Math.max(8, Math.min(vw - sz - 8, p.x)) : p.x;
+        var y = vh ? Math.max(8, Math.min(vh - sz - 8, p.y)) : p.y;
+        return 'left:' + x + 'px; top:' + y + 'px; right:auto; bottom:auto;';
       },
       // Keep the (now launcher-only) wrap fully inside the CURRENT
       // viewport. A persisted mnem.pos from a bigger window / another
@@ -959,10 +971,39 @@
         this.$nextTick(() => this._clampPos());
         var self = this;
         var rt;
-        window.addEventListener('resize', function () {
+        var reclamp = function () {
+          self._vp++; // instant reactive re-clamp via posStyle
           clearTimeout(rt);
           rt = setTimeout(function () { self._clampPos(); }, 120);
-        });
+        };
+        window.addEventListener('resize', reclamp);
+        // v4.4.1: window 'resize' does NOT fire on a CDP/preview
+        // viewport change (proven: the dock stranded off-screen). A
+        // ResizeObserver on the root element is layout-driven and
+        // fires on ANY viewport change -- the robust path so Mnem can
+        // never leave the screen regardless of how it shrank.
+        if (window.ResizeObserver) {
+          var ro = new ResizeObserver(reclamp);
+          ro.observe(document.documentElement);
+        }
+        // v4.4.1: bulletproof watchdog. Neither window.resize NOR
+        // ResizeObserver fire on the CDP/preview viewport change
+        // (proven: _vp stayed 0, the dock stranded at x=1180 off a
+        // 390 viewport). The dock is positioned imperatively
+        // (el.style.inset via _applyXY/drag), so the reactive
+        // posStyle clamp can't save it either. This cheap interval
+        // (no-op unless actually out of bounds) guarantees Mnem
+        // returns on-screen within ~0.6s on ANY platform/resize path.
+        setInterval(function () {
+          if (self.pos.x == null) return;
+          var de = document.documentElement;
+          var vw = de.clientWidth, vh = de.clientHeight;
+          if (!vw) return;
+          if (self.pos.x > vw - 64 || self.pos.y > vh - 64
+              || self.pos.x < 0 || self.pos.y < 0) {
+            self._clampPos();
+          }
+        }, 600);
         document.addEventListener('mnemo-mnem-mood', (e) => {
           if (e.detail && e.detail.mood) this.mood = e.detail.mood;
         });
