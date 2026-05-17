@@ -452,9 +452,11 @@ def _mnemo_page_context(ctx: ToolContext) -> dict:
 #
 # "What's related in THIS session?" -- the cited / tool-used node ids of
 # the running conversation + their 1-hop neighbours. The companion calls
-# this then mnemo_highlight_nodes to surface the subgraph in the chat
-# side panel instead of guessing (design v3.2 S3.4; the cosmos
-# graph-view highlight is a closed ceiling -- gotcha 31).
+# this then mnemo_highlight_nodes to highlight the subgraph ON THE LIVE
+# NEBULA GRAPH instead of guessing. v4.5 swapped the renderer to
+# sigma.js v3 + graphology, whose nodeReducer makes a real graph-view
+# highlight a pure data change -- this closes the old gotcha-31 cosmos
+# ceiling and the v3.2 "side panel, not the graph" honesty caveat.
 
 _SESSION_CITE_RE = re.compile(r"\[mnemo:([^\]\s]+)\]")
 # the tool args that unambiguously name a node (so a tool the user
@@ -468,7 +470,8 @@ _NODE_ID_ARGS = ("node_id", "start_id")
     description=(
         "The nodes this conversation has cited or acted on, plus their "
         "1-hop neighbours. Use to ground 'what's related in this "
-        "session / show it in the side panel' before mnemo_highlight_nodes."
+        "session / highlight it on the Nebula graph' before "
+        "mnemo_highlight_nodes."
     ),
     parameters=_obj({}, []),
 )
@@ -854,12 +857,15 @@ def _mnemo_open_panel(ctx: ToolContext, *, panel_id: str) -> dict:
     name="mnemo_highlight_nodes",
     risk=RISK_CONFIRM,
     description=(
-        "Surface a SET of related nodes in the chat side panel (the "
-        "off-renderer highlight surface). Pair with mnemo_session_nodes "
-        "to show 'what's related in this session'. NOTE: this lists them "
-        "in the side panel -- do NOT tell the user it lit them up on the "
-        "live graph canvas (that renderer path is a known closed "
-        "ceiling; never claim a graph-view highlight)."
+        "Highlight a SET of related nodes ON THE LIVE NEBULA GRAPH: "
+        "sigma's nodeReducer spotlights them (kept at full vivid "
+        "color, labelled, enlarged) and greys the rest (never hidden), "
+        "and the camera frames the set. Pair with mnemo_session_nodes "
+        "to show 'what's related in this session'. This DOES light "
+        "them up on the graph -- tell the user so (v4.5's sigma.js "
+        "renderer swap closed the old cosmos highlight ceiling; the "
+        "graph itself now delivers it). The /graph page must be open "
+        "for the user to see it."
     ),
     parameters=_obj(
         {"node_ids": {"type": "array", "items": {"type": "string"}}},

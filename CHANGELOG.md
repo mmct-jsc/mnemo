@@ -2,6 +2,63 @@
 
 All notable changes to mnemo are documented here.
 
+## [4.5.0] - 2026-05-17
+
+**Nebula renderer swap: cosmos.gl -> sigma.js v3 + graphology.**
+Closes the gotcha-31 / C3-honesty loop -- the graph itself now
+delivers a real node-highlight + full interaction. The TOMBSTONE
+chapter: cosmos.gl is replaced outright, never re-tuned
+(reference_cosmos_gl_nebula).
+
+### Added
+- sigma.js v3 + graphology + the graphology standard library
+  vendored under `daemon/mnemo/ui/static/vendor/` (pinned
+  sigma@3.0.3, graphology@0.26.0, graphology-library@0.8.0 -- no CDN
+  runtime dependency, no Node build). base.html prefetches them.
+- Real graph node-highlight via sigma's `nodeReducer`/`edgeReducer`:
+  the companion's `mnemo_highlight_nodes` / `mnemo_select_node` `_ui`
+  sentinels (redispatched by chat.js as `mnemo-highlight-nodes` /
+  `mnemo-select-node` document events) now light up the live Nebula
+  graph -- spotlit set kept vivid + labelled + enlarged, the rest
+  greyed (never hidden), camera frames the set.
+- Full interaction: click-select + cite, hover emphasis, node drag,
+  animated camera centering, click-empty deselect.
+- `test_nebula_renderer.py` -- the TOMBSTONE + sigma-surface guard.
+
+### Changed
+- `graph.html` nebula() fully rewritten on graphology + Sigma. The
+  3-panel shell, `/ui/graph-data` + server layout-cache contract,
+  workspace scoping, file tree, detail panel, and the v4.4 C1.R
+  responsive mPanel drawer are all preserved verbatim (minimal blast
+  radius). Themed 100% from the C1 tokens + `MNEMO_TYPE_COLORS`.
+- Cache MISS layout now runs the graphology FA2 **Web Worker** off
+  the main thread (bounded run, then freeze + PUT) instead of a
+  synchronous FA2 that froze the tab ~56 s on a large scope. Cache
+  HIT still applies the settled positions instantly (no layout runs).
+- The cosmos-era DOM label overlay is removed (sigma renders labels
+  natively) -- a net simplification.
+- `agent_tools.py`: the C3 "do NOT claim a graph-view highlight /
+  side panel, not the graph" honesty caveat is reverted to the
+  now-true "highlights ON THE LIVE NEBULA GRAPH" (wording matched to
+  the actual behavior).
+- Resting edge alpha softened (0.5 -> 0.34) so the starfield backdrop
+  + node constellation lead on the dense graph.
+
+### Fixed
+- Hover/selection now always wins over the bright-set dimming (you
+  can hover-preview any node while a set is focused).
+- Performance: the per-element reducers are pure module functions
+  over a plain non-reactive snapshot (was reading the Alpine
+  reactive `this` ~26 k times/refresh + rebuilding a Set per node);
+  the bright set is memoized; per-edge colors/endpoints precomputed.
+
+### Tests
+- `test_nebula_progressive.py` (cosmos contract) removed; the
+  cosmos-renderer guards in `test_v32_live_fixes` /
+  `test_nebula_highlight_honesty` / `test_in_page_actions` /
+  `test_session_nodes` evolved to the v4.5 truth (contract
+  evolution, not weakening). Full suite 1219 passed / 2 skipped.
+
 ## [4.4.1] - 2026-05-17
 
 **Patch: v4.4.0 live-review UX fixes -- the responsive chapter,
