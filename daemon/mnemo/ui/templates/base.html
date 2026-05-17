@@ -795,9 +795,13 @@
        this stays an ADDITIVE sibling of toast-stack/modal
        (reference_mnemo_v3 gotcha 10). -->
   <div class="mnem-wrap" x-data="mnemDock()" x-show="!hiddenOnChat" x-cloak
-       :style="posStyle" :class="{ dragging }">
+       :style="posStyle" :class="{ dragging }"
+       @click.outside="if (state !== 'closed') { state='closed'; persist(); } bubble=''">
 
-    <div class="mnem-bubble" x-show="bubble" x-cloak @click="open()">
+    <!-- v4.4.1: the proactive nudge never coexists with the open dock
+         panel (state==='closed' gate); it auto-dismisses on a timer
+         (mnemDock._maybeNudge); click-outside closes the panel first. -->
+    <div class="mnem-bubble" x-show="bubble && state === 'closed'" x-cloak @click="open()">
       <span x-text="bubble"></span>
       <button class="mnem-bubble-x" @click.stop="bubble=''" aria-label="dismiss">×</button>
     </div>
@@ -1180,9 +1184,19 @@
         var now = Date.now();
         if (!this.proactive || now - this._lastNudge < this.freq) return;
         if (window.location.pathname.startsWith('/chat')) return;
+        // v4.4.1: never nudge while the dock panel is open -- the
+        // suggest must NOT coexist with the open chat.
+        if (this.state !== 'closed') return;
         this._lastNudge = now;
         this.bubble = 'Want me to summarize what you are looking at?';
         this._repositionSoon(); // glue it to the launcher; never reflow
+        // v4.4.1: auto-dismiss the unanswered nudge after 12s so it
+        // never lingers (the user must not have to chase the ×).
+        var self = this;
+        if (this._nudgeTO) clearTimeout(this._nudgeTO);
+        this._nudgeTO = setTimeout(function () {
+          if (self.bubble && self.state === 'closed') self.bubble = '';
+        }, 12000);
       },
     };
   }
@@ -1368,18 +1382,24 @@
        a pre-layout offsetWidth read clipped it to "Want m to").
        _positionBubble() glues it next to the launcher + clamps it
        on-screen; right/bottom here is just a pre-JS fallback. */
+    /* v4.4.1: the × is an absolute top-right affordance (not a flex
+       sibling fighting the wrapping text at flex-start -- that read as
+       "weird padding"). The text gets even padding with right room
+       reserved for the dismiss target (>=24px hit area). */
     .mnem-bubble { position: fixed; right: 16px; bottom: 84px;
       z-index: 61; width: min(280px, calc(100vw - 32px));
       background: var(--panel);
       border: 1px solid var(--accent); color: var(--fg);
-      padding: .7rem .85rem; border-radius: var(--radius-lg);
+      padding: .8rem 2.15rem .8rem .95rem; border-radius: var(--radius-lg);
       cursor: pointer; font-size: .85rem; line-height: 1.45;
-      display: flex; gap: .5rem; align-items: flex-start;
       box-shadow: var(--shadow);
       animation: mnem-pop 220ms cubic-bezier(.2,.7,.3,1) both; }
-    .mnem-bubble-x { background: none; border: 0; color: var(--fg-dim);
+    .mnem-bubble-x { position: absolute; top: .35rem; right: .4rem;
+      width: 1.6rem; height: 1.6rem; display: inline-flex;
+      align-items: center; justify-content: center;
+      background: none; border: 0; color: var(--fg-dim); border-radius: var(--radius-pill);
       cursor: pointer; font-weight: 700; font-size: 1rem; line-height: 1; }
-    .mnem-bubble-x:hover { color: var(--fg); }
+    .mnem-bubble-x:hover { color: var(--fg); background: var(--panel-2); }
 
     /* v3.2: shared inline cite popover (context-aware [mnemo:id]) --
        a node preview in place instead of a blind redirect. */
