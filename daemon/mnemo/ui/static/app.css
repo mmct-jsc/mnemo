@@ -1085,8 +1085,15 @@ dl.meta dd { margin: 0; color: var(--fg); }
 /* Drop the default <ul> margin so queries-left and summary-right
    share the same first-row baseline inside the audit dash-row. */
 .audit .query-log { margin: 0; }
-.query-log { list-style: none; padding: 0; margin: 1rem 0; display: grid; gap: 0.6rem; }
+/* v4.3.1: minmax(0,1fr) -- an implicit `auto` track sizes to
+   max-content, so a long white-space:nowrap .hit-desc propagated up
+   this grid and blew the page width horizontally. minmax(0,...) lets
+   the track shrink below max-content so the .hit-desc ellipsis
+   truncates to fit. */
+.query-log { list-style: none; padding: 0; margin: 1rem 0;
+  display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.6rem; }
 .query {
+  min-width: 0;  /* v4.3.1: grid item must shrink below min-content */
   background: var(--panel);
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-lg);
@@ -1116,7 +1123,8 @@ dl.meta dd { margin: 0; color: var(--fg); }
 }
 .query details summary:hover { color: var(--accent); }
 .query details ul.hits {
-  margin-top: 0.5rem; padding: 0; list-style: none; display: grid; gap: 0.3rem;
+  margin-top: 0.5rem; padding: 0; list-style: none;
+  display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.3rem;
   font-size: 0.82rem;
 }
 .query details ul.hits li {
@@ -1130,6 +1138,7 @@ dl.meta dd { margin: 0; color: var(--fg); }
 /* v2.6.0 polish: each audit hit row now carries name + type badge +
    description + truncated ID. align cleanly across rows.            */
 .query details ul.hits li.hit-row {
+  min-width: 0;  /* v4.3.1: grid item must shrink so .hit-desc clips */
   align-items: baseline;
   flex-wrap: wrap;
   gap: 0.5rem 0.6rem;

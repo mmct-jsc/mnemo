@@ -114,3 +114,29 @@ def test_page_shell_contract_no_forbidden_constructs() -> None:
             f"{name}: a nested second <main> inherits app.css main{{}} and "
             f"shrink-to-fit-centres as a grid item (the v3.2 bug)."
         )
+
+
+def _rule_body(css: str, selector: str) -> str:
+    i = css.index(selector)
+    return css[i : css.index("}", i)]
+
+
+def test_audit_grids_constrain_long_content(app_css: str) -> None:
+    """v4.3.1: the audit hit row has a white-space:nowrap .hit-desc.
+    If .query-log / .query details ul.hits use implicit `auto` grid
+    columns they size to MAX-CONTENT, so a long node description
+    propagates up the grid/flex chain and blows the page width
+    horizontally (the .hit-desc ellipsis never engages). The grids
+    MUST use minmax(0, ...) so the track can shrink below max-content
+    and the v2.6.0 ellipsis truncates to fit."""
+    qlog = _rule_body(app_css, "\n.query-log {")
+    assert "minmax(0" in qlog, (
+        ".query-log must use grid-template-columns: minmax(0,...) -- an "
+        "implicit auto track grows to the nowrap .hit-desc max-content "
+        "and blows the page width (v4.3.1)."
+    )
+    hits = _rule_body(app_css, "\n.query details ul.hits {")
+    assert "minmax(0" in hits, (
+        ".query details ul.hits must use minmax(0,...) for the same "
+        "reason -- the hits grid auto track blows out on a long desc."
+    )

@@ -200,3 +200,13 @@ a `<div>` for inner regions (gotcha 35).
 their single canonical definition in `app.css`; no page template may
 redefine them (they were duplicated + divergent across chat.html/
 base.html pre-v4.0).
+
+**No-overflow rule (v4.3.1).** A CSS `grid`/`flex` container whose
+descendants include long `white-space:nowrap` text (e.g. the audit
+`.hit-desc`) MUST use `grid-template-columns: minmax(0, …)` (or
+`min-width:0` on the flex/grid items) -- an implicit `auto` track
+sizes to *max-content* and the nowrap text propagates up the chain
+and blows the page width; `overflow:hidden;text-overflow:ellipsis` is
+inert without a width-constrained ancestor. Same
+`test_design_system_contract.py` guard
+(`test_audit_grids_constrain_long_content`) is the teeth.
