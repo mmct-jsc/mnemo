@@ -116,6 +116,19 @@ def test_chat_settings_page_renders_three_tabs(client: TestClient) -> None:
     assert 'x-data="settingsPage()"' in html
     for tab in ("Providers", "Companion", "Permissions"):
         assert tab in html
+    # v4.4.1: the shared _settings_tabs strip is the SINGLE tab UI.
+    # The old in-page Alpine `<div class="tabs" role="tablist">` button
+    # row duplicated Providers/Companion/Permissions verbatim (the user
+    # saw the strip rendered twice). It must be gone; sections switch
+    # off the strip's #hash via syncTabFromHash().
+    assert "settings-tabs" in html, "the shared cross-route strip must render"
+    assert 'role="tablist"' not in html, (
+        "the redundant in-page tab button row must be gone (it "
+        "duplicated the shared _settings_tabs strip -- v4.4.1)."
+    )
+    assert "syncTabFromHash" in html, (
+        "sections must follow the shared strip's #hash (the only tab UI)."
+    )
 
 
 def test_existing_retrieval_settings_still_renders(client: TestClient) -> None:

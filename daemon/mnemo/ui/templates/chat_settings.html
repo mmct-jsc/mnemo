@@ -12,13 +12,12 @@
     </div>
   </header>
 
+  {# C1.R v4.4.1: the shared _settings_tabs strip IS the only tab UI.
+     The old in-page Alpine <div class="tabs"> button row duplicated
+     Providers/Companion/Permissions verbatim (the user saw the strip
+     twice). Sections now switch purely off the strip's #hash links
+     via syncTabFromHash() + a hashchange listener. #}
   {% include "_settings_tabs.html" %}
-
-  <div class="tabs" role="tablist">
-    <button :class="{active: tab==='providers'}" @click="tab='providers'">Providers &amp; keys</button>
-    <button :class="{active: tab==='companion'}" @click="tab='companion'">Companion</button>
-    <button :class="{active: tab==='permissions'}" @click="tab='permissions'">Permissions &amp; history</button>
-  </div>
 
   <p x-show="loading" class="hint">Loading&hellip;</p>
 
@@ -145,11 +144,16 @@ function settingsPage() {
       this._stubUnconfigured();
       this.retention = this.data.chat_history_retention_days == null
         ? '' : String(this.data.chat_history_retention_days);
-      // C4 (v4.2): the shared settings strip deep-links via #hash;
-      // honor it so the cross-route tab lands on the right section.
+      // C1.R v4.4.1: the shared settings strip is the ONLY tab UI; the
+      // section follows its #hash links (incl. same-path clicks via
+      // the hashchange listener -- no page reload needed).
+      this.syncTabFromHash();
+      window.addEventListener('hashchange', () => this.syncTabFromHash());
+      this.loading = false;
+    },
+    syncTabFromHash() {
       var h = location.hash.slice(1);
       if (['providers', 'companion', 'permissions'].includes(h)) this.tab = h;
-      this.loading = false;
     },
     async removeKey(name) {
       const r = await fetch('/v1/settings/providers/' + name + '/key',
