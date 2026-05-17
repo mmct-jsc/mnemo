@@ -65,11 +65,16 @@ def test_claim_is_backed_by_real_graph_wiring() -> None:
         "highlight() -- the real graph highlight (v4.5 closed loop)."
     )
     assert "this.highlight(" in GRAPH_HTML, (
-        "the listener must drive the sigma nodeReducer via highlight()."
+        "the listener must drive the renderer highlight via highlight()."
     )
-    assert "nodeReducer" in GRAPH_HTML, (
-        "the highlight is a sigma nodeReducer data change (the "
-        "capability cosmos.gl structurally lacked)."
+    # Contract evolution v4.5 -> v4.6: the highlight is a real
+    # graph-renderer data change (the capability cosmos.gl lacked).
+    # v4.5 did it via a 2D-renderer node reducer; v4.6's custom WebGL
+    # engine does it via the handle's setHighlight() -- still a pure
+    # data change, now structurally (no per-element callback).
+    assert "setHighlight" in GRAPH_HTML, (
+        "highlight() must drive the renderer handle's setHighlight() "
+        "-- the graph itself lights up (the closed gotcha-31 loop)."
     )
     # the dispatch half is still emitted by chat.js (the _ui ->
     # ui_action SSE -> CustomEvent chain).

@@ -1,32 +1,45 @@
-"""Nebula renderer contract (v4.5: sigma.js v3 + graphology).
+"""Nebula renderer contract (v4.6: custom WebGL engine, nebula-gl.js).
 
-TOMBSTONE chapter. This SUPERSEDES test_nebula_progressive.py (the
-cosmos.gl / @cosmos.gl/graph contract). cosmos.gl had a documented
-closed ceiling -- it could not do stable layout + smooth camera +
-node-highlight + full interaction at once; every attempt to wire a
-highlight listener re-triggered the v2.6.8 freeze (reference_cosmos_
-gl_nebula, gotcha 31 TOMBSTONE). v4.5 *replaces* the renderer with
-sigma.js v3 + graphology -- the only sanctioned path past that
-ceiling. These assertions are the contract's teeth:
+TOMBSTONE chapter (evolved through v4.5 -> v4.6). The history:
 
-  1. cosmos.gl is GONE (the import literal AND its API tokens) and
-     does not silently creep back -- the TOMBSTONE.
-  2. sigma.js v3 + graphology + the graphology standard library
-     (forceatlas2) are vendored locally (no CDN runtime dep, no Node
-     build) and loaded by the page.
-  3. The reused shell is unchanged: the #cy-nebula mount, the
+  * cosmos.gl had a documented closed ceiling -- it could not do
+    stable layout + smooth camera + node-highlight + full interaction
+    at once; every attempt to wire a highlight listener re-triggered
+    the v2.6.8 freeze (reference_cosmos_gl_nebula, gotcha 31).
+  * v4.5 replaced it with a third-party 2D graph renderer + a
+    graph-library data model + a CSS "atmosphere". On live review
+    that render was flat/laggy; the transparent-canvas + CSS
+    atmosphere coupling was the documented failure source.
+  * v4.6 replaces THAT stack with a purpose-built single-file WebGL
+    renderer (nebula-gl.js + vendored regl): crisp SDF star points +
+    low-alpha density edges + a true opaque dark gl.clearColor +
+    render-only-when-dirty. Highlight / select / hover are pure
+    handle methods, so "highlight is a pure data change" holds
+    structurally (no per-element framework callback hot path).
+
+These assertions are the contract's teeth:
+
+  1. cosmos.gl is GONE (import literal AND API tokens) and the whole
+     v4.5 third-party renderer stack (the names of those libraries)
+     is GONE too -- neither silently creeps back (the TOMBSTONE).
+  2. The page renders via the vendored regl + nebula-gl.js (no CDN
+     runtime dep, no Node build) and calls NebulaGL.create.
+  3. The reused shell is unchanged: the #cy-nebula legacy node, the
      .nebula-shell 3-panel grid, and the v4.4 C1.R responsive
      mPanel drawer state all survive (minimal blast radius).
   4. The carried-forward contract still holds: the side-panel body
      streams via mnemoRenderBody, the neighbors list via
      mnemoStaggeredReveal, the page still 200s, no cytoscape, no
-     degree cap, no ego-fetch-on-tree-click.
+     degree cap, no ego-fetch-on-tree-click, the layout is computed
+     SERVER-SIDE and the client is a pure renderer.
+  5. There is no CSS "atmosphere" anymore (the v4.5.x failure
+     source) -- .nebula-canvas is a plain opaque dark container.
 
 We can't run WebGL in pytest, but we lock the SURFACE of the new
 renderer + the parts of the old contract that still hold. The live
-behaviour (render parity, highlight dims+spotlights, click/cite,
-camera, drag, >=15s no-freeze) is verified per
-feedback_reproduce_user_exact_scenario at an explicit viewport.
+behaviour (render quality, highlight, click/cite, camera, drag, the
+community-separation de-blob gate) is verified per
+feedback_reproduce_user_exact_scenario + test_graph_layout_server.py.
 """
 
 from __future__ import annotations
@@ -62,7 +75,7 @@ def base_html() -> str:
     return (_UI / "templates" / "base.html").read_text(encoding="utf-8")
 
 
-# --- 1. TOMBSTONE: cosmos.gl is gone and stays gone --------------------
+# --- 1. TOMBSTONE: cosmos.gl is gone and stays gone -------------------
 
 # The cosmos.gl API surface. The renderer swap removes ALL of it; a
 # refactor must never reintroduce any token (each one was a documented
@@ -87,8 +100,8 @@ COSMOS_TOKENS = (
 
 def test_cosmos_gl_is_gone_tombstone(graph_html: str) -> None:
     """The TOMBSTONE. cosmos.gl's import AND its entire API surface
-    must be absent from graph.html -- v4.5 replaces the renderer, it
-    does not tune it (reference_cosmos_gl_nebula: never re-attempt)."""
+    must be absent from graph.html -- every renderer chapter replaces,
+    it never re-tunes (reference_cosmos_gl_nebula: never re-attempt)."""
     leaked = [t for t in COSMOS_TOKENS if t in graph_html]
     assert not leaked, (
         f"cosmos.gl tokens must be fully removed (TOMBSTONE -- "
@@ -101,90 +114,90 @@ def test_base_html_no_cosmos_modulepreload(base_html: str) -> None:
     That modulepreload must be gone (the renderer is vendored now)."""
     assert "@cosmos.gl" not in base_html, (
         "base.html must not modulepreload the cosmos.gl CDN bundle "
-        "anymore -- the renderer is vendored locally in v4.5."
+        "anymore -- the renderer is vendored locally."
     )
 
 
-# --- 2. sigma.js v3 + graphology vendored + loaded --------------------
+def test_cosmos_and_sigma_and_graphology_all_gone(graph_html: str) -> None:
+    """v4.6 removes the v4.5 third-party renderer stack outright (the
+    deferred TOMBSTONE chapter). Neither cosmos.gl NOR the v4.5
+    library names may appear anywhere in graph.html -- not even in a
+    comment (the recurring grep-guard-vs-prose failure: an explanatory
+    comment must never contain a literal a guard forbids)."""
+    for t in COSMOS_TOKENS:
+        assert t not in graph_html
+    for t in ("sigma", "graphology", "Sigma(", "graphology-library"):
+        assert t not in graph_html, (
+            f"v4.6 removed the v4.5 renderer stack; this token must be "
+            f"absent from graph.html (incl. comments): {t!r}"
+        )
 
-# v4.5 pivot: graphology-library (the FA2/circlepack bundle) is GONE
-# -- the layout is server-side now, so the client only needs sigma +
-# graphology (sigma's Graph data model). No CDN, no Node build.
+
+# --- 2. The v4.6 custom renderer is vendored + loaded ----------------
+
+# v4.6: regl (the WebGL micro-framework) + our authored nebula-gl.js.
+# The v4.5 bundles were removed with the renderer swap.
 VENDOR_FILES = (
-    "sigma.min.js",
-    "graphology.umd.min.js",
+    "regl.min.js",
+    "nebula-gl.js",
 )
 
 
 def test_renderer_bundles_are_vendored_locally() -> None:
-    """Only sigma + graphology are vendored (graphology-library was
-    removed with the client-FA2 pivot) -- no CDN runtime dep, no Node
-    build (the stack rule)."""
-    for name in VENDOR_FILES:
-        f = VENDOR / name
-        assert f.is_file(), f"vendored renderer bundle missing: static/vendor/{name}"
-        assert f.stat().st_size > 50_000, (
-            f"static/vendor/{name} looks truncated ({f.stat().st_size} B) "
-            f"-- expected the full pinned bundle."
-        )
+    """Only regl + nebula-gl.js are vendored (the v4.5 bundles were
+    removed with the swap) -- no CDN runtime dep, no Node build."""
+    f = VENDOR / "regl.min.js"
+    assert f.is_file(), "vendored regl.min.js missing"
+    assert f.stat().st_size > 50_000, (
+        f"static/vendor/regl.min.js looks truncated "
+        f"({f.stat().st_size} B) -- expected the full pinned bundle."
+    )
+    assert (VENDOR / "nebula-gl.js").is_file(), (
+        "the authored renderer static/vendor/nebula-gl.js must exist."
+    )
+    assert not (VENDOR / "sigma.min.js").exists(), (
+        "the v4.5 2D renderer bundle must be removed (v4.6 swap)."
+    )
+    assert not (VENDOR / "graphology.umd.min.js").exists(), (
+        "the v4.5 graph-library data-model bundle must be removed."
+    )
     assert not (VENDOR / "graphology-library.min.js").exists(), (
-        "graphology-library.min.js must be removed -- the client does no "
-        "layout in v4.5 (server-side), so the FA2/circlepack bundle is dead."
+        "the v4.5 layout-library bundle must be removed."
     )
 
 
-def test_graph_loads_vendored_sigma_and_graphology(graph_html: str) -> None:
-    """The page loads only the vendored sigma + graphology (not a CDN,
-    not cosmos, and NOT graphology-library -- layout is server-side)."""
-    for name in VENDOR_FILES:
-        assert f"/static/vendor/{name}" in graph_html, (
-            f"graph.html must load the vendored /static/vendor/{name}."
-        )
-    assert "graphology-library" not in graph_html, (
-        "graph.html must NOT load graphology-library (client does no layout)."
+def test_renders_via_vendored_nebula_gl(graph_html: str) -> None:
+    """The page loads the vendored regl + nebula-gl.js and constructs
+    the renderer on the GL canvas via NebulaGL.create()."""
+    assert "/static/vendor/regl.min.js" in graph_html, (
+        "graph.html must load the vendored /static/vendor/regl.min.js."
+    )
+    assert "/static/vendor/nebula-gl.js" in graph_html, (
+        "graph.html must load the vendored /static/vendor/nebula-gl.js."
+    )
+    assert "NebulaGL.create(" in graph_html, (
+        "graph.html must instantiate the renderer via "
+        "window.NebulaGL.create(canvas, {nodes, edges, theme, labels})."
     )
 
 
-def test_graph_instantiates_sigma_on_a_graphology_graph(graph_html: str) -> None:
-    """sigma.js v3 renders a graphology Graph: the page must construct
-    a graphology graph and a Sigma renderer on the #cy-nebula mount."""
-    assert "new Sigma(" in graph_html, (
-        "graph.html must instantiate `new Sigma(graph, container, ...)` -- the v4.5 renderer."
-    )
-    assert "graphology" in graph_html, (
-        "graph.html must build a graphology Graph (sigma's data model)."
-    )
-
-
-def test_graph_has_reducer_based_highlight_scaffold(graph_html: str) -> None:
-    """Highlight is a sigma reducer (the exact capability cosmos
-    lacked): the renderer config must declare nodeReducer + edgeReducer
-    so a highlight is a pure data change, no renderer-state trap."""
-    assert "nodeReducer" in graph_html, (
-        "sigma config must set a nodeReducer (per-node display recompute "
-        "-- the real-highlight foundation that closes the gotcha-31 loop)."
-    )
-    assert "edgeReducer" in graph_html, (
-        "sigma config must set an edgeReducer (dim edges outside the "
-        "highlighted/selected set, same 'grey don't hide' intent)."
-    )
-
-
-# (v4.5 pivot: the old "client runs graphology forceatlas2" guard was
-# REMOVED -- layout is computed server-side now. The server contract
-# is locked by test_server_computes_and_caches_the_layout +
-# test_graph_layout_server.py; the client-does-no-layout guard below.)
-
-
-# --- 3. The reused shell is unchanged (minimal blast radius) ----------
+# --- 3. The reused shell is unchanged (minimal blast radius) ---------
 
 
 def test_shell_and_mount_unchanged(graph_html: str) -> None:
-    """The renderer swap is a layer swap: the #cy-nebula mount + the
-    .nebula-shell 3-panel grid are reused verbatim (the design's
-    'minimal blast radius')."""
+    """The renderer swap is a layer swap: the #cy-nebula node + the
+    .nebula-shell 3-panel grid are reused (the design's 'minimal
+    blast radius'). #cy-nebula is now an inert hidden legacy node --
+    kept so any external reference can't NPE; the renderer mounts on
+    the #nebula-gl canvas."""
     assert 'id="cy-nebula"' in graph_html, (
-        "the #cy-nebula mount must survive (sigma renders into it)."
+        "the #cy-nebula node must survive (legacy-reference safety)."
+    )
+    assert 'id="nebula-gl"' in graph_html, (
+        "the #nebula-gl WebGL canvas (the renderer's surface) must exist."
+    )
+    assert 'id="nebula-labels"' in graph_html, (
+        "the #nebula-labels overlay canvas (LabelProvider target) must exist."
     )
     assert "nebula-shell" in graph_html, ".nebula-shell 3-panel grid must survive."
     assert 'x-data="nebula()"' in graph_html, (
@@ -203,20 +216,7 @@ def test_v44_responsive_mpanel_survives(graph_html: str) -> None:
         )
 
 
-# --- 4. Carried-forward contract (still valid post-swap) --------------
-
-
-def test_dom_label_overlay_is_removed(graph_html: str) -> None:
-    """sigma renders labels natively; the cosmos-era DOM label overlay
-    (#nebula-labels + the per-frame spaceToScreenPosition pump) is
-    deleted -- a net simplification, not a feature loss."""
-    assert "nebula-labels" not in graph_html, (
-        "the #nebula-labels DOM overlay must be removed (sigma renders "
-        "labels natively -- the overlay is obsolete)."
-    )
-    assert "_scheduleLabels" not in graph_html, (
-        "the DOM-label rAF pump (_scheduleLabels) must be removed."
-    )
+# --- 4. Carried-forward contract (still valid post-swap) -------------
 
 
 def test_side_panel_body_streams_via_mnemo_render_body(graph_html: str) -> None:
@@ -259,18 +259,14 @@ def test_graph_page_still_renders(client: TestClient) -> None:
     assert "cy-nebula" in body
 
 
-# --- v4.5 ARCHITECTURE PIVOT: layout is computed SERVER-SIDE ----------
+# --- ARCHITECTURE PIVOT: layout is computed SERVER-SIDE --------------
 #
-# The first sigma cuts computed the layout in the browser (sync FA2,
-# then a Web Worker, with a circlepack seed). Across 3 measured
-# attempts on the real 11026-node / 2298-component scope that proved
-# non-deterministic + quality-fragile (sync converged, the worker
-# exploded the giant, circlepack alone = structureless confetti) --
-# the documented "3 failed fixes => question the architecture" rule.
-# With the user's approval the layout moved to the daemon: computed
-# ONCE per (scope, fingerprint), deterministic + fully converged,
-# cached; the browser is a PURE sigma renderer. These guards lock
-# that contract (the layout quality itself is unit-tested in
+# The layout is computed ONCE per (scope, fingerprint) on the daemon,
+# deterministic + fully converged, cached; the browser is a PURE
+# renderer. v4.6 swaps only the ALGORITHM (FA2/LinLog/Barnes-Hut) +
+# the renderer; the server-side + cached pipeline is unchanged. These
+# guards lock that contract (the layout quality itself -- the
+# community-separation de-blob gate -- is unit-tested in
 # test_graph_layout_server.py; the visual is verified live per
 # feedback_reproduce_user_exact_scenario).
 
@@ -279,9 +275,11 @@ _APP_CSS = (_UI / "static" / "app.css").read_text(encoding="utf-8")
 
 
 def test_client_does_no_layout_compute(graph_html: str) -> None:
-    """The browser must NOT compute layout: no client forceatlas2
-    (sync OR the FA2Layout worker), no circlepack, no component
-    detection, no PUT-back. That whole class was proven fragile."""
+    """The browser must NOT compute layout: no client force layout
+    (sync OR a worker), no circlepack, no component detection, no
+    PUT-back. That whole class was proven fragile. v4.6 keeps the
+    client a pure renderer of plain arrays -- no graph-library data
+    model at all."""
     forbidden = (
         "FA2Layout",
         "layoutForceAtlas2",
@@ -298,11 +296,13 @@ def test_client_does_no_layout_compute(graph_html: str) -> None:
     leaked = [t for t in forbidden if t in graph_html]
     assert not leaked, (
         f"graph.html must NOT do client-side layout (the proven-fragile "
-        f"path); found: {leaked}. Layout is server-side in v4.5."
+        f"path); found: {leaked}. Layout is server-side."
     )
-    assert "graphology.umd.min.js" in graph_html, (
-        "the graphology bundle is still needed (sigma's data model); "
-        "only the LAYOUT moved server-side, not the renderer."
+    # v4.6 contract evolution: there is no client graph-library data
+    # model anymore -- the renderer takes plain {nodes, edges} arrays.
+    assert "this._edges" in graph_html, (
+        "the client must build a plain render edge list (this._edges) "
+        "-- v4.6 has no graph-library data model."
     )
     assert "PUT" not in graph_html or "graph-layout" not in graph_html.split("PUT")[0][-200:], (
         "the client must not PUT layouts back -- the daemon owns the cache."
@@ -312,7 +312,7 @@ def test_client_does_no_layout_compute(graph_html: str) -> None:
 def test_client_polls_the_server_layout_then_renders(graph_html: str) -> None:
     """The browser GETs /ui/graph-layout and polls while the daemon
     computes (``computing``), then applies the cached positions and
-    mounts sigma -- a pure renderer."""
+    hands the plain arrays to the renderer -- a pure renderer."""
     assert "_awaitServerLayout" in graph_html, (
         "graph.html must have _awaitServerLayout() -- the poll loop that "
         "waits for the daemon's cached layout (the pure-renderer flow)."
@@ -323,7 +323,9 @@ def test_client_polls_the_server_layout_then_renders(graph_html: str) -> None:
     assert "/ui/graph-layout?scope_key=" in graph_html, (
         "the client must GET the server layout cache by scope+fingerprint."
     )
-    assert "new Sigma(" in graph_html, "sigma is still the renderer."
+    # v4.6 contract evolution: the renderer is NebulaGL, not the v4.5
+    # 2D renderer -- the page renders via NebulaGL.create after the poll.
+    assert "NebulaGL.create(" in graph_html, "NebulaGL is the v4.6 renderer."
 
 
 def test_server_computes_and_caches_the_layout() -> None:
@@ -345,156 +347,45 @@ def test_server_computes_and_caches_the_layout() -> None:
     )
 
 
-def test_sigma_render_is_dark_themed(graph_html: str) -> None:
-    """RC4/RC6/RC7: density perf kept (hideEdgesOnMove +
-    labelRenderedSizeThreshold), labels drawn DARK (not sigma's white
-    pill -- the reported "white label background"), and the canvas
-    has an opaque dark backdrop (the reported "white background")."""
-    assert "hideEdgesOnMove" in graph_html, (
-        "sigma must keep hideEdgesOnMove (15k edges; the reported lag)."
-    )
-    assert "labelRenderedSizeThreshold" in graph_html, (
-        "sigma must keep labelRenderedSizeThreshold (label declutter)."
-    )
-    assert "defaultDrawNodeLabel: nbDrawLabel" in graph_html, (
-        "labels must use the DARK nbDrawLabel drawer -- sigma's default "
-        "draws a WHITE pill (the reported 'white label background')."
-    )
-    assert "nbDrawHover" in graph_html, "hover label must also be dark-themed."
-    nc = _APP_CSS.index(".nebula-canvas {")
-    body = _APP_CSS[nc : _APP_CSS.index("}", nc)]
-    assert "background:" in body, (
-        ".nebula-canvas must carry an OPAQUE dark backdrop so sigma's "
-        "transparent WebGL canvases show the C1 nebula theme, not white."
-    )
-    assert "#07090f" in body, (
-        ".nebula-canvas backdrop must use the C1 dark base (#07090f) -- "
-        "the reported 'white background, colors too bright'."
+# --- 5. v4.6 surface: no CSS atmosphere + highlight/select preserved -
+
+
+def test_no_css_atmosphere() -> None:
+    """v4.6 deletes the v4.5.x CSS "atmosphere" (drift / twinkle /
+    parallax) AND the DOM-overlay pulse. The WebGL canvas is opaque
+    and self-contained -- the transparent-canvas + CSS-atmosphere
+    coupling was the documented failure source. .nebula-canvas is
+    now a plain opaque dark (#07090f) container."""
+    for k in (
+        "@keyframes nebula-drift",
+        "@keyframes nebula-twinkle",
+        "@keyframes nebula-parallax",
+        ".nebula-canvas::after",
+        ".nebula-canvas::before",
+        ".nebula-pulse-anchor",
+    ):
+        assert k not in _APP_CSS, f"v4.6 deleted the atmosphere/pulse: {k}"
+    nc = _APP_CSS[_APP_CSS.index(".nebula-canvas {") :]
+    assert "#07090f" in nc[: nc.index("}")], (
+        ".nebula-canvas must be a plain opaque dark (#07090f) container "
+        "-- the renderer clears its own GL canvas, no CSS atmosphere."
     )
 
 
-# --- v4.5.3 CRISP + ALIVE (user live-review of v4.5.2) ---------------
-#
-# v4.5.2 tried to make the nebula "alive" with a perpetual rAF loop
-# that every frame called cam.setState() (it FOUGHT user zoom/pan/
-# click -- stomped within 16 ms) and sig.refresh() (a full re-render
-# of ~11k star points + ~15.5k CURVED edges EVERY frame). The user
-# reported: "lag web, move lag, cannot zoom, click node does not zoom,
-# cannot drag, weird layout". That is the systematic-debugging
-# 3-failed-fixes wall (reducer-x ignored -> graph-mutation pegs ->
-# camera-float fights+lags) -> architecture question -> the user chose
-# "cosmic atmosphere + crisp graph". v4.5.3: the GRAPH renders strictly
-# ON DEMAND (sigma repaints only on a real interaction; an idle nebula
-# costs ZERO and every gesture is crisp); the "alive" moves entirely
-# OFF the renderer -- a pure-CSS GPU atmosphere BEHIND the canvas plus
-# one DOM-overlay pulse on the selected star, positioned from sigma's
-# own afterRender event (no rAF, no graph re-render). The de-mandala'd
-# server halo is covered by test_graph_layout_server.py.
-
-
-def test_nebula_has_no_camera_fight_or_perframe_rerender(graph_html: str) -> None:
-    """The v4.5.2 lag/dead-interaction class must be GONE: no loop may
-    own the camera (cam.setState in a tick) and nothing may force a
-    per-frame full-graph repaint. Idle == zero render."""
-    assert "cam.setState({" not in graph_html, (
-        "NO loop may drive cam.setState() -- a per-frame camera write "
-        "fought every user zoom/pan/click (stomped within 16ms). The "
-        "camera is the USER's now; the graph renders on demand."
-    )
-    assert "requestAnimationFrame(tick)" not in graph_html, (
-        "there must be NO perpetual rAF 'life' tick -- it forced a "
-        "continuous full re-render (~11k points + ~15.5k curved edges/"
-        "frame == the reported page lag + dead drag)."
-    )
-    assert "NB_RS.t" not in graph_html, (
-        "the per-frame twinkle CLOCK must be gone (it only mattered to "
-        "the deleted rAF loop; the reducer is a pure visual pass again)."
-    )
-    assert "'ph', (i * 2.39996323)" not in graph_html, (
-        "the per-node twinkle PHASE attribute must be gone (it only fed the deleted size twinkle)."
-    )
-    assert "updateEachNodeAttributes" not in graph_html, (
-        "still NO per-frame full-graph mutation (the earlier 1fps jank)."
-    )
-
-
-def test_nebula_is_alive_via_ondemand_pulse_and_css_atmosphere(
-    graph_html: str,
-) -> None:
-    """_startLife/_stopLife survive but now wire an ON-DEMAND pulse:
-    the selected star is tracked from sigma's afterRender event (fires
-    only on a real repaint -- zero idle cost), and the cosmic "alive"
-    is a pure-CSS GPU atmosphere behind the transparent WebGL canvas."""
-    assert "_startLife()" in graph_html, (
-        "graph.html must keep _startLife() (now the on-demand pulse wiring, not a rAF loop)."
-    )
-    assert "_stopLife()" in graph_html, (
-        "graph.html must keep _stopLife() (detaches the afterRender pulse)."
-    )
-    assert "this.sig.on('afterRender'" in graph_html, (
-        "the pulse must be driven by sigma's afterRender event -- it "
-        "fires ONLY when sigma actually repaints, so there is no rAF "
-        "of our own and an idle graph costs zero."
-    )
-    assert "_positionPulse()" in graph_html, (
-        "graph.html must have _positionPulse() -- parks the overlay on "
-        "the selected star (or hides it)."
-    )
-    assert "graphToViewport({ x: a.x, y: a.y })" in graph_html, (
-        "the pulse must track the node via sigma graphToViewport so it "
-        "stays glued through any camera state."
-    )
-    assert "removeListener('afterRender'" in graph_html, (
-        "_stopLife must detach the afterRender listener (reload/destroy)."
-    )
-    assert 'id="nebula-pulse"' in graph_html, (
-        "the template must carry the #nebula-pulse overlay element."
-    )
-    # the cosmic life is CSS, behind the canvas, zero JS / zero re-render
-    assert "@keyframes nebula-drift" in _APP_CSS, (
-        ".nebula-canvas must have a pure-CSS drifting nebula-gas layer "
-        "(GPU, behind the transparent WebGL canvas -- the 'alive')."
-    )
-    assert "@keyframes nebula-twinkle" in _APP_CSS, (
-        ".nebula-canvas must have a pure-CSS twinkling starfield layer."
-    )
-    assert "@keyframes nebula-parallax" in _APP_CSS, (
-        "the starfield must drift at its own rate (parallax depth)."
-    )
-    pulse = _APP_CSS.index("@keyframes nebula-drift")
-    assert "translate3d" in _APP_CSS[pulse : pulse + 200], (
-        "the atmosphere must animate via translate3d (compositor-only, "
-        "never a layout/paint thrash)."
-    )
-    assert "prefers-reduced-motion" in _APP_CSS, (
-        "the atmosphere + pulse must freeze under prefers-reduced-motion."
-    )
-
-
-def test_nebula_renders_stars_and_filaments_not_flat(graph_html: str) -> None:
-    """Soft star POINTS + gently CURVED luminous filaments -- not flat
-    circles + straight lines (the reported "only circle shape and
-    straight edges"). Both programs are bundled in vendored sigma."""
-    assert "NodePointProgram" in graph_html, (
-        "nodes must render via NodePointProgram (soft stars), not the hard flat default circle."
-    )
-    assert "EdgeCurveProgram" in graph_html, (
-        "edges must render via EdgeCurveProgram (curved filaments), not straight lines."
-    )
-    assert "curvature:" in graph_html, (
-        "edges need a per-edge curvature so the filaments actually arc."
-    )
-    assert "hideEdgesOnMove: false" in graph_html, (
-        "edges must STAY while dragging (the reported 'drag make all edge disappear')."
-    )
-
-
-def test_selected_node_ignites_its_filaments(graph_html: str) -> None:
-    """Highlight must read on EDGES too: a selected/hovered node's
-    incident filaments glow accent (the reported "highlight node only
-    node no edge")."""
-    assert "data._s === sel || data._t === sel" in graph_html, (
-        "nbEdgeReduce must accent-glow edges incident to the selected "
-        "node (ignite the constellation, not just the node)."
-    )
-    assert "rs.accent" in graph_html
+def test_highlight_select_contract_preserved(graph_html: str) -> None:
+    """The companion-driven highlight loop (the gotcha-31 / C3-honesty
+    arc) survives the swap: the document listeners still exist and now
+    drive the renderer handle (gl.setHighlight / gl.select) -- the
+    'highlight is a pure data change' property, structurally."""
+    for t in (
+        "mnemo-highlight-nodes",
+        "mnemo-select-node",
+        "setHighlight",
+        ".select(",
+        "_onHighlight",
+        "_onSelectNode",
+    ):
+        assert t in graph_html, (
+            f"the highlight/select contract token {t!r} must be present "
+            f"(the C3-honesty loop must survive the renderer swap)."
+        )
