@@ -194,6 +194,11 @@
 
     var cam = { x: 0, y: 0, zoom: 1 };
     var raf = 0, disposed = false, fitted = false;
+    var gA = 0;          // galactic rotation angle (radians)
+    var gT = 0;          // last animation timestamp
+    var GOMEGA = 0.013;  // rad/s -- a full turn ~8 min: a gentle,
+                         // never-distracting "the galaxy is alive"
+                         // drift (NOT the v4.5.2 camera-fight loop).
     var fitZoom = 1;     // the zoom fitCamera last produced (the
                          // whole-graph scale) -- select() must stay
                          // anchored to THIS, never a hard 0.5 floor
@@ -283,10 +288,18 @@
 
     function res(ctx) { return [ctx.drawingBufferWidth, ctx.drawingBufferHeight]; }
 
+    // uA = the slow galactic rotation angle (the disc "travels");
+    // applied in-shader about the galaxy centre (world origin) so it
+    // is a pure GPU transform -- ZERO per-frame CPU graph mutation
+    // (the v4.5.2 jank class). screenToWorld inverse-rotates so
+    // pick/drag stay exact.
     var EDGE_VERT =
       'precision highp float; attribute vec2 position;' +
-      'uniform vec2 cam,res; uniform float zoom;' +
-      'void main(){ vec2 p=(position-cam)*zoom;' +
+      'uniform vec2 cam,res; uniform float zoom; uniform float uA;' +
+      'void main(){ float s=sin(uA),c=cos(uA);' +
+      ' vec2 rp=vec2(position.x*c-position.y*s,' +
+      '              position.x*s+position.y*c);' +
+      ' vec2 p=(rp-cam)*zoom;' +
       ' gl_Position=vec4(p.x/(res.x*0.5),p.y/(res.y*0.5),0.0,1.0);}';
     var EDGE_FRAG =
       'precision highp float; uniform vec4 ec;' +
@@ -300,10 +313,11 @@
         cam: function () { return [cam.x, cam.y]; },
         zoom: function () { return cam.zoom; },
         res: function (c) { return res(c); },
+        uA: function () { return gA; },
         ec: function () {
-          // when a node is focused, fade the base web hard so the
-          // accent incident filaments (hiEdges) read clearly.
-          var a = edgeColor[3] * (hlActive ? 0.22 : 1.0);
+          // when a node is focused, fade the base web HARD so only the
+          // accent incident filaments read.
+          var a = edgeColor[3] * (hlActive ? 0.12 : 1.0);
           return [edgeColor[0], edgeColor[1], edgeColor[2], a];
         },
       },
@@ -321,25 +335,35 @@
         'precision highp float; attribute vec2 pos; attribute vec3 col;' +
         'attribute float siz; attribute float hl;' +
         'uniform vec2 cam,res; uniform float zoom; uniform float wr;' +
+        'uniform float uA;' +
         'varying vec3 vC; varying float vH; varying float vB;' +
         'varying float vR;' +
         'void main(){' +
-        // GALACTIC radial palette: warm white-gold luminous BULGE ->
-        // blue-white along the spiral arms -> faint cool steel in the
-        // outskirts. Node type is only a subtle hue tint (.18) so the
-        // galaxy reads as one body, not a type confetti.
         ' float rN=clamp(length(pos)/wr,0.0,1.0); vR=rN;' +
-        ' vec3 gold=vec3(1.0,0.90,0.70);' +
-        ' vec3 blu=vec3(0.78,0.88,1.0);' +
-        ' vec3 steel=vec3(0.50,0.62,0.86);' +
+        // STELLAR palette: a per-star stable hash picks a real
+        // stellar tint (mostly blue-white/white, some gold, a few
+        // warm orange -- a true star field, not one flat hue)...
+        ' float h=fract(sin(dot(pos,vec2(12.9898,78.233)))*43758.5453);' +
+        ' vec3 star = h<0.50 ? vec3(0.80,0.88,1.00)' +     // blue-white
+        '           : h<0.78 ? vec3(0.95,0.97,1.00)' +     // white
+        '           : h<0.92 ? vec3(1.00,0.92,0.78)' +     // gold
+        '                    : vec3(1.00,0.80,0.60);' +     // warm orange
+        // ...graded by a GALACTIC temperature: warm-gold luminous
+        // bulge -> blue-white arms -> faint cool steel outskirts.
+        ' vec3 gold=vec3(1.00,0.89,0.66);' +
+        ' vec3 blu=vec3(0.80,0.89,1.00);' +
+        ' vec3 steel=vec3(0.52,0.64,0.88);' +
         ' vec3 gal = rN<0.5 ? mix(gold,blu,rN/0.5)' +
         '                   : mix(blu,steel,(rN-0.5)/0.5);' +
-        ' vC = mix(gal, col, 0.18); vH=hl;' +
+        ' vC = mix(mix(star,gal,0.55), col, 0.13); vH=hl;' +
         // brightness falls hard with radius (bright bulge -> faint
-        // halo) with a mild hub boost; the dense bright core + bloom
-        // IS the galactic bulge (no separate pass).
-        ' vB=(1.30 - 0.92*rN) * (0.86+0.26*clamp(siz/8.0,0.0,1.0));' +
-        ' vec2 p=(pos-cam)*zoom;' +
+        // halo) + a per-star sparkle + a mild hub boost.
+        ' vB=(1.32 - 0.94*rN) * (0.80+0.42*h)' +
+        '   * (0.86+0.26*clamp(siz/8.0,0.0,1.0));' +
+        // slow galactic rotation about the centre (GPU-only).
+        ' float s=sin(uA),c=cos(uA);' +
+        ' vec2 rpos=vec2(pos.x*c-pos.y*s, pos.x*s+pos.y*c);' +
+        ' vec2 p=(rpos-cam)*zoom;' +
         ' gl_Position=vec4(p.x/(res.x*0.5),p.y/(res.y*0.5),0.0,1.0);' +
         // Point size is mostly SCREEN-space with a mild zoom response
         // -- NOT siz*zoom (the world is ~+/-5000 vs siz 3..12, so
@@ -366,13 +390,14 @@
         // outskirts -> the luminous galactic core emerges from the
         // dense bright centre (no separate fullscreen pass).
         ' float bloom=glow*(1.0-smoothstep(0.06,0.5,d))*0.42*(1.15-0.95*vR);' +
-        // FOCUS: vH=1 lit, vH=0 dimmed to faint dust (the spotlight/
-        // blur-others behaviour). Lit nodes also get the hub-brightness
-        // vB; dimmed nodes fade to ~10% alpha + darker so the selected
-        // constellation pops and the rest recedes.
-        ' float lit=0.16+0.84*vH;' +
-        ' vec3 c=vC*vB*(0.45+0.55*vH);' +
-        ' gl_FragColor=vec4(c, core*lit)+vec4(c*bloom*vH, 0.0);' +
+        // FOCUS: vH=1 = related (full colour + bloom, pops); vH=0 =
+        // unrelated -> tinted cool BLUE and dimmed but still VISIBLE
+        // as a blue backdrop field (the user: "blue all others if not
+        // related"), not faded to invisible dust.
+        ' vec3 blue=vec3(0.30,0.45,0.98);' +
+        ' vec3 c = mix(mix(vC,blue,0.80)*0.62, vC*vB, vH);' +
+        ' float lit = mix(0.34, 1.0, vH);' +
+        ' gl_FragColor=vec4(c, core*lit)+vec4(vC*bloom*vH, 0.0);' +
         ' if(gl_FragColor.a<0.008) discard;}',
       attributes: { pos: posBuf, col: colBuf, siz: sizBuf, hl: hlBuf },
       uniforms: {
@@ -381,6 +406,7 @@
         res: function (c) { return res(c); },
         glow: function () { return glow; },
         wr: function () { return worldR; },
+        uA: function () { return gA; },
       },
       count: nodes.length,
       primitive: 'points',
@@ -429,6 +455,39 @@
       depth: { enable: false },
     });
 
+    // --- background DUST: a huge, very faint cool radial wash behind
+    // everything -- deep-space cirrus that gives the galaxy depth and
+    // a sense of a vast surrounding universe. Same safe additive quad
+    // (no derivatives, no point cap), ~3x the core, intensity ~0.1.
+    var bgR = Math.max(worldR * 2.6, 1.0);
+    var drawBg = regl({
+      vert:
+        'precision highp float; attribute vec2 uv;' +
+        'uniform vec2 cam,res; uniform float zoom; uniform float cr;' +
+        'varying vec2 vUv;' +
+        'void main(){ vUv=uv; vec2 w=uv*cr - cam; vec2 p=w*zoom;' +
+        ' gl_Position=vec4(p.x/(res.x*0.5),p.y/(res.y*0.5),0.0,1.0);}',
+      frag:
+        'precision highp float; varying vec2 vUv;' +
+        'void main(){ float d=length(vUv);' +
+        // a broad soft elliptical cool wash (violet->blue), nearly
+        // gone by the edge -> faint cirrus, never a hard disc.
+        ' float g=exp(-d*d*1.7)*0.115;' +
+        ' vec3 col=mix(vec3(0.34,0.30,0.62), vec3(0.16,0.26,0.46), d);' +
+        ' gl_FragColor=vec4(col*g, g); }',
+      attributes: { uv: coreQuad },
+      uniforms: {
+        cam: function () { return [cam.x, cam.y]; },
+        zoom: function () { return cam.zoom; },
+        res: function (c) { return res(c); },
+        cr: function () { return bgR; },
+      },
+      count: 4,
+      primitive: 'triangle strip',
+      blend: { enable: true, func: { src: 'one', dst: 'one' } },
+      depth: { enable: false },
+    });
+
     // highlight pass: the selected/hovered node's incident edges,
     // accent + on top -- SAME robust non-instanced LINES pattern,
     // its own dynamic buffer (never instanced).
@@ -465,8 +524,16 @@
         cam: function () { return [cam.x, cam.y]; },
         zoom: function () { return cam.zoom; },
         res: function (c) { return res(c); },
+        uA: function () { return gA; },
         ec: function () {
-          return [accent[0], accent[1], accent[2], 0.55];
+          // bright, near-opaque accent so the related constellation's
+          // filaments are UNMISTAKABLE against the blue-dimmed rest.
+          return [
+            Math.min(1.0, accent[0] * 1.15 + 0.1),
+            Math.min(1.0, accent[1] * 1.15 + 0.1),
+            Math.min(1.0, accent[2] * 1.15 + 0.1),
+            0.95,
+          ];
         },
       },
       count: function () { return hiVerts; },
@@ -479,10 +546,15 @@
 
     function screenToWorld(px, py) {
       var vw = canvas.width, vh = canvas.height;
-      return {
-        x: cam.x + (px * dpr - vw / 2) / cam.zoom,
-        y: cam.y - (py * dpr - vh / 2) / cam.zoom,
-      };
+      // display-frame world point...
+      var dx = cam.x + (px * dpr - vw / 2) / cam.zoom;
+      var dy = cam.y - (py * dpr - vh / 2) / cam.zoom;
+      // ...inverse-rotate by the galactic angle so it lands in the
+      // STATIC frame the node coords + pick index live in (the shader
+      // applies +gA for display; pick/drag must use -gA). Keeps
+      // click + node-drag exact while the galaxy rotates.
+      var s = Math.sin(-gA), c = Math.cos(-gA);
+      return { x: dx * c - dy * s, y: dx * s + dy * c };
     }
 
     function resize() {
@@ -512,12 +584,18 @@
     function frame() {
       raf = 0;
       if (disposed) return;
+      // advance the slow galactic rotation from real elapsed time
+      // (frame-rate independent); paused while the tab is hidden.
+      var t = (global.performance || Date).now();
+      if (gT) gA = (gA + (t - gT) / 1000 * GOMEGA) % (Math.PI * 2);
+      gT = t;
       resize();
       regl.poll();
       regl.clear({ color: bg, depth: 1 });
       // wrap the draws so a regl/GL throw is REPORTED on the HUD
       // instead of silently rendering nothing (the exact mystery).
       try {
+        drawBg();                         // faint deep-space cirrus
         drawCore();                       // galactic bulge underglow
         if (edges.length) drawEdges();
         drawNodes();
@@ -555,10 +633,26 @@
           ' || reglDB ' + diag.dbg + ' | vp ' + diag.vp +
           ' | glErr ' + diag.err + ' | draw ' + diag.draw);
       }
+      // PERPETUAL loop -> the galaxy keeps rotating ("nodes travel").
+      // This is cheap (a few regl draws/frame at 11k -- NOT the v4.5
+      // per-element reducer that caused the v4.5.2 lag) and is paused
+      // while hidden (battery). The motion is a GPU vertex transform;
+      // it never fights the user's camera and pick/drag stay exact.
+      if (!global.document || !global.document.hidden) {
+        raf = global.requestAnimationFrame(frame);
+      } else {
+        raf = 0;
+        gT = 0;  // resume cleanly (no time jump) on visibilitychange
+      }
     }
     function invalidate() {
       if (disposed) return;
       if (!raf) raf = global.requestAnimationFrame(frame);
+    }
+    if (global.document) {
+      global.document.addEventListener('visibilitychange', function () {
+        if (!global.document.hidden) invalidate();
+      });
     }
 
     function easeTo(tx, ty, tz) {
