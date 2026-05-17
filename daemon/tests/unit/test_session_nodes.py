@@ -171,15 +171,18 @@ def test_chat_js_dispatches_highlight_nodes() -> None:
     assert "mnemo-highlight-nodes" in CHAT_JS
 
 
-def test_session_nodes_tool_works_without_touching_cosmos() -> None:
-    """CLOSED OUTCOME: the mnemo_session_nodes / mnemo_highlight_nodes
-    TOOLS stand (server-side, unaffected) + chat.js still dispatches
-    the highlight CustomEvent. But graph.html is reverted byte-pristine
-    -- it does NOT listen, because wiring the companion into cosmos
-    re-triggered the v2.6.8 hang. A visual session-highlight needs a
-    renderer swap (reference_cosmos_gl_nebula.md), not graph wiring."""
+def test_session_nodes_tool_drives_the_real_graph_highlight() -> None:
+    """CONTRACT EVOLUTION (v4.5): the tools always stood server-side +
+    chat.js always dispatched the highlight CustomEvent. v3.2 stopped
+    SHORT of listening on the graph (cosmos froze when wired). v4.5
+    swapped the renderer to sigma.js, so graph.html NOW listens for
+    mnemo-highlight-nodes and drives a real sigma highlight -- the
+    visual session-highlight the renderer swap unlocked."""
     assert "mnemo_session_nodes" in TOOLS
     assert "mnemo_highlight_nodes" in TOOLS
     assert "mnemo-highlight-nodes" in CHAT_JS  # dispatch still emitted
-    assert "addEventListener('mnemo-highlight-nodes'" not in GRAPH_HTML
+    # the loop is now CLOSED end to end: graph.html listens + highlights.
+    assert "addEventListener('mnemo-highlight-nodes'" in GRAPH_HTML
+    assert "this.highlight(" in GRAPH_HTML
+    # still no bespoke wiring shim (direct document listener -- YAGNI).
     assert "_wireCompanionActions" not in GRAPH_HTML
