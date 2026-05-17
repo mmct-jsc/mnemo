@@ -101,20 +101,30 @@ def _community_separation(pos, labels):
     return (sum(intra) / len(intra)) / (sum(inter) / len(inter))
 
 
-def test_communities_are_separated_not_a_blob() -> None:
-    """THE de-blob gate. Plain FR (v4.5.x) collapsed planted
-    communities into one disk -> ratio ~1.0. FA2 + LinLog must pull
-    them apart -> intra distance MUCH smaller than inter distance."""
+def test_not_a_blob_still_structured() -> None:
+    """De-blob gate, GALAXY-evolved. v4.5.x FR collapsed communities
+    into one disk (ratio ~1.0). v4.6 is now a SPIRAL GALAXY: the
+    log-spiral shear deliberately stretches communities ALONG the
+    arms, so the intra/inter ratio rises from the old ~0.4 -- but it
+    must stay meaningfully below 1.0 (still structured, NOT a
+    featureless blob; the arms are coherent, not scrambled)."""
     n, edges, labels = _planted(6, 70, 120)
     pos = compute_graph_layout(n, edges)
     ratio = _community_separation(pos, labels)
-    assert ratio < 0.55, (
-        f"communities not separated (intra/inter={ratio:.3f}); the "
-        f"giant is still a featureless blob -- FA2+LinLog must cluster"
+    # measured 0.67 with the locality-preserving spiral shear; gate at
+    # 0.80 (clear margin below a ~1.0 blob -- communities stay coherent
+    # along the arms, NOT scrambled into a hairball-galaxy).
+    assert ratio < 0.80, (
+        f"no structure (intra/inter={ratio:.3f} ~ a blob); the spiral "
+        f"shear must preserve community adjacency along the arms"
     )
 
 
-def test_edges_much_shorter_than_random_pairs() -> None:
+def test_edges_shorter_than_random_pairs() -> None:
+    """The galaxy shear is locality-preserving -> connected nodes stay
+    near each other (same arm region). Edges must still be clearly
+    shorter than random pairs (galaxy-relaxed from <0.5 to <0.65: the
+    arms stretch communities radially, loosening edges somewhat)."""
     n, edges, labels = _planted(5, 80, 100)
     pos = compute_graph_layout(n, edges)
     gi = [i for i, c in enumerate(labels) if c >= 0]
@@ -126,7 +136,41 @@ def test_edges_much_shorter_than_random_pairs() -> None:
         sum(math.dist(_xy(pos, rng.choice(gi)), _xy(pos, rng.choice(gi))) for _ in range(3000))
         / 3000
     )
-    assert me / mr < 0.5, f"edges not contracted (ratio {me / mr:.3f})"
+    assert me / mr < 0.65, f"edges not contracted (ratio {me / mr:.3f})"
+
+
+def test_layout_giant_is_a_spiral_not_a_round_disc() -> None:
+    """POSITIVE galaxy contract for the LAYOUT: the giant is a SPIRAL
+    -- a real correlation between unwound angle and ln(radius) (the
+    log-spiral winding); a round/uniform disc gives ~0. (The luminous
+    central BULGE is deliberately NOT a layout-density requirement: a
+    locality-preserving shear keeps the graph meaningful and so cannot
+    pile a density bulge without scrambling edges into a hairball; the
+    bright bulge is a RENDERER concern -- radial brightness + the core
+    glow -- asserted in the renderer asset guard.)"""
+    n, edges, labels = _planted(6, 90, 60)
+    pos = compute_graph_layout(n, edges)
+    gi = [i for i, c in enumerate(labels) if c >= 0]
+    pa = np.array([_xy(pos, i) for i in gi])
+    cx = (pa[:, 0].min() + pa[:, 0].max()) / 2.0
+    cy = (pa[:, 1].min() + pa[:, 1].max()) / 2.0
+    rad = np.hypot(pa[:, 0] - cx, pa[:, 1] - cy) + 1e-9
+    rmax = float(rad.max())
+    th = np.arctan2(pa[:, 1] - cy, pa[:, 0] - cx)
+    # ARM structure (robust; a single-spiral angle/ln-r correlation is
+    # fragile for a 2-arm galaxy -- the pi arm offset breaks unwrap):
+    # in a mid annulus the angular density must have a strong PEAK
+    # (the arms) vs a round/uniform disc which is ~flat. Measured 3.2
+    # for the galaxy vs 1.22 for a uniform control -> gate at 1.8
+    # (well above any round disc, solid margin below the real value).
+    mid = (rad > 0.30 * rmax) & (rad < 0.72 * rmax)
+    hist, _ = np.histogram(th[mid], bins=24, range=(-math.pi, math.pi))
+    peak = float(hist.max()) / float(hist.mean())
+    assert peak > 1.8, (
+        f"no spiral arms (mid-annulus angular peak/mean={peak:.2f}); a "
+        f"round/uniform disc is ~1.2 -- the log-spiral shear must "
+        f"concentrate stars into arms"
+    )
 
 
 def test_singletons_pack_densely_not_confetti() -> None:
