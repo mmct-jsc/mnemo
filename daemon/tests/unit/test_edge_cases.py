@@ -393,12 +393,23 @@ def test_query_strict_isolation_keeps_project_key_none_nodes(
     result = retrieve.query(store, fake_embedder, "deployment", k=5, active_project="P1")
     surfaced = {h.node_id for h in result.hits}
 
-    # The active-project node and the global (None project_key) node
-    # both survive strict isolation; the other-project one is filtered.
+    # v1.2.1: the active-project node and the global (None project_key)
+    # node both survive strict isolation.
     assert in_proj.id in surfaced, "active-project node must surface"
     assert global_doc.id in surfaced, "project_key=None must survive strict isolation (v1.2.1 fix)"
-    assert other_proj.id not in surfaced, (
-        "other-project node must be hard-filtered under strict isolation"
+    # v4.3.2 contract evolution: the cross-project node is no longer
+    # HARD-dropped (that hid dominant matches -> silent-zero, the
+    # user's "result seems wrong"). It is SOFT-penalized: present, but
+    # ranked BELOW the in-project + global nodes (all three share the
+    # identical body, so only the isolation penalty separates them).
+    assert other_proj.id in surfaced, "v4.3.2: cross-project node must SOFT-penalize, not hard-drop"
+    order = [h.node_id for h in result.hits]
+    assert order.index(other_proj.id) > order.index(in_proj.id), (
+        "the isolation penalty must rank the cross-project node below the active-project node"
+    )
+    assert order.index(other_proj.id) > order.index(global_doc.id), (
+        "the isolation penalty must rank the cross-project node below "
+        "the cross-cutting (project_key=None) node"
     )
 
 

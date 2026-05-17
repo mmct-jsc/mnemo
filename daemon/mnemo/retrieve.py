@@ -126,14 +126,22 @@ def query(
         # ``None != active_project`` is True. That made global memory
         # invisible whenever an active project was set -- one of the
         # dominant causes of "common query returns nothing" in v1.2.0.
-        if (
+        # v4.3.2: SOFT isolation. Pre-v4.3.2 this was a hard `continue`
+        # that ERASED cross/inactive-project non-BASE candidates -- so a
+        # dramatically stronger exact match (e.g. the v4 handover, sim
+        # 0.757) was invisible and a weaker BASE node (0.529) won: a
+        # strict-isolation silent-zero ("the result seems wrong"). Now
+        # the node is kept + scored but its final score is multiplied
+        # by cfg.project_isolation_penalty (default 0.7) below, so BASE
+        # + in-project still win for comparable relevance while a
+        # dominant cross-project match still surfaces.
+        out_of_scope = (
             isolation_mode == "strict"
             and active_project is not None
             and not node.base
             and node.project_key is not None
             and node.project_key != active_project
-        ):
-            continue  # hard-filter: in a *different* project, not BASE, not cross-cutting
+        )
         c_vector = vec_scores.get(nid, 0.0)
         c_graph = graph_scores.get(nid, 0.0)
         c_recency = _recency_score(node.updated_at, now, cfg.recency_half_life_days)
@@ -148,6 +156,9 @@ def query(
             + sw.epsilon * c_project
             + sw.zeta * c_lexical
         )
+        if out_of_scope:
+            # v4.3.2: deprioritize (don't erase) cross-project matches.
+            s *= getattr(cfg, "project_isolation_penalty", 0.85)
         components_by_node[nid] = {
             "vector": c_vector,
             "graph": c_graph,
