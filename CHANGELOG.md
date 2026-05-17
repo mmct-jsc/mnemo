@@ -2,6 +2,58 @@
 
 All notable changes to mnemo are documented here.
 
+## [4.5.1] - 2026-05-17
+
+**Nebula render fix: the v4.5.0 sigma layout was a mess; the layout
+now computes SERVER-SIDE.** User live-review of the shipped v4.5.0:
+overlapping mud, a detached cluster flung away, white background,
+white-pill labels, ~1fps jank. Root-caused via systematic-debugging.
+
+### Fixed
+- **RC1 (the user's "something off with re-reindex"):** the layout
+  cache was renderer-agnostic, so cosmos.gl's old force-sim
+  coordinates stayed a permanent cache HIT after the sigma swap and
+  the new layout never ran. A `LAYOUT_VERSION` token now participates
+  in the cache fingerprint, so a renderer/algorithm change self-
+  invalidates the cache.
+- **The layout itself.** Client-side ForceAtlas2 (synchronous, then
+  the graphology Web Worker, with a circlepack seed) was attempted
+  three times and proven non-deterministic + quality-fragile on the
+  real 11026-node / 2298-component scope (sync converged; the worker
+  exploded the giant component; circlepack alone = structureless
+  confetti). Per the systematic-debugging "3 failed fixes => question
+  the architecture" rule (user-approved), the layout moved off the
+  fragile client.
+- **RC6 white background / RC7 white-pill labels:** sigma's
+  transparent WebGL canvas now has a guaranteed opaque dark backdrop
+  (`.nebula-canvas`), and a dark-themed label/hover drawer replaces
+  sigma's default white label pill.
+
+### Added
+- `mnemo/ui/graph_layout.py` -- a **deterministic, server-side**
+  graph layout: `scipy.sparse.csgraph` components + a numpy/cKDTree
+  Fruchterman-Reingold for the giant component (fully converged with
+  a cooling schedule, fixed seed => byte-identical/cacheable) + a
+  compact bounded phyllotaxis halo for the small components /
+  singletons. No new dependency (scipy/numpy already present).
+- `/ui/graph-data` kicks a non-blocking background compute keyed by
+  `(scope, fingerprint)`; `GET /ui/graph-layout` reports a
+  `computing` status so the client polls.
+- `test_graph_layout_server.py` -- the server-layout contract.
+
+### Changed
+- The browser is now a **pure sigma renderer**: all client-side
+  forceatlas2 / Web Worker / circlepack / layout-PUT removed; it
+  polls the cache (a clean "computing on the server" state -- no
+  jank) then applies the positions and renders. The unused
+  graphology standard-library bundle was removed.
+- Verified live on the real scope: edges ~0.18x random-pair distance
+  (a tight readable network -- every client attempt was >=0.35, the
+  mess was >1.0), a core-dominant frame with a tidy bounded halo,
+  dark theme + dark labels, zero horizontal overflow at 375/1280,
+  the v4.4 responsive shell intact, highlight/select/hover/drag
+  working. Renderer guards evolved to the server-layout contract.
+
 ## [4.5.0] - 2026-05-17
 
 **Nebula renderer swap: cosmos.gl -> sigma.js v3 + graphology.**

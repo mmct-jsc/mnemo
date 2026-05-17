@@ -107,33 +107,42 @@ def test_base_html_no_cosmos_modulepreload(base_html: str) -> None:
 
 # --- 2. sigma.js v3 + graphology vendored + loaded --------------------
 
+# v4.5 pivot: graphology-library (the FA2/circlepack bundle) is GONE
+# -- the layout is server-side now, so the client only needs sigma +
+# graphology (sigma's Graph data model). No CDN, no Node build.
 VENDOR_FILES = (
     "sigma.min.js",
     "graphology.umd.min.js",
-    "graphology-library.min.js",
 )
 
 
 def test_renderer_bundles_are_vendored_locally() -> None:
-    """sigma + graphology + the graphology standard library (it bundles
-    forceatlas2) are vendored under static/vendor/ -- no CDN runtime
-    dependency, no Node build (the stack rule)."""
+    """Only sigma + graphology are vendored (graphology-library was
+    removed with the client-FA2 pivot) -- no CDN runtime dep, no Node
+    build (the stack rule)."""
     for name in VENDOR_FILES:
         f = VENDOR / name
         assert f.is_file(), f"vendored renderer bundle missing: static/vendor/{name}"
-        # real minified bundles, not stubs/placeholders.
         assert f.stat().st_size > 50_000, (
             f"static/vendor/{name} looks truncated ({f.stat().st_size} B) "
             f"-- expected the full pinned bundle."
         )
+    assert not (VENDOR / "graphology-library.min.js").exists(), (
+        "graphology-library.min.js must be removed -- the client does no "
+        "layout in v4.5 (server-side), so the FA2/circlepack bundle is dead."
+    )
 
 
 def test_graph_loads_vendored_sigma_and_graphology(graph_html: str) -> None:
-    """The page loads the vendored bundles (not a CDN, not cosmos)."""
+    """The page loads only the vendored sigma + graphology (not a CDN,
+    not cosmos, and NOT graphology-library -- layout is server-side)."""
     for name in VENDOR_FILES:
         assert f"/static/vendor/{name}" in graph_html, (
             f"graph.html must load the vendored /static/vendor/{name}."
         )
+    assert "graphology-library" not in graph_html, (
+        "graph.html must NOT load graphology-library (client does no layout)."
+    )
 
 
 def test_graph_instantiates_sigma_on_a_graphology_graph(graph_html: str) -> None:
@@ -161,14 +170,10 @@ def test_graph_has_reducer_based_highlight_scaffold(graph_html: str) -> None:
     )
 
 
-def test_graph_uses_forceatlas2_from_the_standard_library(graph_html: str) -> None:
-    """Layout-on-cache-miss runs graphology's forceatlas2 (bundled in
-    graphology-library) for a BOUNDED iteration count then freezes --
-    no perpetual sim (the cosmos converge-and-stop lesson, kept)."""
-    assert "layoutForceAtlas2" in graph_html, (
-        "graph.html must use graphologyLibrary.layoutForceAtlas2 for the "
-        "cache-miss layout (bounded iterations, then freeze)."
-    )
+# (v4.5 pivot: the old "client runs graphology forceatlas2" guard was
+# REMOVED -- layout is computed server-side now. The server contract
+# is locked by test_server_computes_and_caches_the_layout +
+# test_graph_layout_server.py; the client-does-no-layout guard below.)
 
 
 # --- 3. The reused shell is unchanged (minimal blast radius) ----------
@@ -252,3 +257,117 @@ def test_graph_page_still_renders(client: TestClient) -> None:
     body = r.text
     assert "nebula-shell" in body
     assert "cy-nebula" in body
+
+
+# --- v4.5 ARCHITECTURE PIVOT: layout is computed SERVER-SIDE ----------
+#
+# The first sigma cuts computed the layout in the browser (sync FA2,
+# then a Web Worker, with a circlepack seed). Across 3 measured
+# attempts on the real 11026-node / 2298-component scope that proved
+# non-deterministic + quality-fragile (sync converged, the worker
+# exploded the giant, circlepack alone = structureless confetti) --
+# the documented "3 failed fixes => question the architecture" rule.
+# With the user's approval the layout moved to the daemon: computed
+# ONCE per (scope, fingerprint), deterministic + fully converged,
+# cached; the browser is a PURE sigma renderer. These guards lock
+# that contract (the layout quality itself is unit-tested in
+# test_graph_layout_server.py; the visual is verified live per
+# feedback_reproduce_user_exact_scenario).
+
+_ROUTES = (_UI / "routes.py").read_text(encoding="utf-8")
+_APP_CSS = (_UI / "static" / "app.css").read_text(encoding="utf-8")
+
+
+def test_client_does_no_layout_compute(graph_html: str) -> None:
+    """The browser must NOT compute layout: no client forceatlas2
+    (sync OR the FA2Layout worker), no circlepack, no component
+    detection, no PUT-back. That whole class was proven fragile."""
+    forbidden = (
+        "FA2Layout",
+        "layoutForceAtlas2",
+        "circlepack",
+        "connectedComponents",
+        "linLogMode",
+        "_runForceLayout",
+        "_persistLayout",
+        "_killForceLayout",
+        "_seedLayout",
+        "graphologyLibrary",
+        "graphology-library.min.js",
+    )
+    leaked = [t for t in forbidden if t in graph_html]
+    assert not leaked, (
+        f"graph.html must NOT do client-side layout (the proven-fragile "
+        f"path); found: {leaked}. Layout is server-side in v4.5."
+    )
+    assert "graphology.umd.min.js" in graph_html, (
+        "the graphology bundle is still needed (sigma's data model); "
+        "only the LAYOUT moved server-side, not the renderer."
+    )
+    assert "PUT" not in graph_html or "graph-layout" not in graph_html.split("PUT")[0][-200:], (
+        "the client must not PUT layouts back -- the daemon owns the cache."
+    )
+
+
+def test_client_polls_the_server_layout_then_renders(graph_html: str) -> None:
+    """The browser GETs /ui/graph-layout and polls while the daemon
+    computes (``computing``), then applies the cached positions and
+    mounts sigma -- a pure renderer."""
+    assert "_awaitServerLayout" in graph_html, (
+        "graph.html must have _awaitServerLayout() -- the poll loop that "
+        "waits for the daemon's cached layout (the pure-renderer flow)."
+    )
+    assert "_applyCachedPositions" in graph_html, (
+        "graph.html must apply the server positions via _applyCachedPositions."
+    )
+    assert "/ui/graph-layout?scope_key=" in graph_html, (
+        "the client must GET the server layout cache by scope+fingerprint."
+    )
+    assert "new Sigma(" in graph_html, "sigma is still the renderer."
+
+
+def test_server_computes_and_caches_the_layout() -> None:
+    """The daemon computes the layout (mnemo.ui.graph_layout) and wires
+    it into the existing layout cache, kicked (non-blocking) by
+    /ui/graph-data, with a ``computing`` status on GET /ui/graph-layout."""
+    from mnemo.ui import graph_layout, routes
+
+    assert callable(graph_layout.compute_graph_layout)
+    assert "compute_graph_layout" in _ROUTES, "routes.py must use the server layout."
+    assert "_ensure_layout_async" in _ROUTES, (
+        "routes.py must kick a non-blocking background compute "
+        "(_ensure_layout_async) keyed by (scope, fingerprint)."
+    )
+    assert hasattr(routes, "LAYOUT_VERSION"), "the cache stays algorithm-versioned."
+    assert '"computing"' in _ROUTES, (
+        "GET /ui/graph-layout must report a 'computing' status so the "
+        "client polls instead of computing anything itself."
+    )
+
+
+def test_sigma_render_is_dark_themed(graph_html: str) -> None:
+    """RC4/RC6/RC7: density perf kept (hideEdgesOnMove +
+    labelRenderedSizeThreshold), labels drawn DARK (not sigma's white
+    pill -- the reported "white label background"), and the canvas
+    has an opaque dark backdrop (the reported "white background")."""
+    assert "hideEdgesOnMove" in graph_html, (
+        "sigma must keep hideEdgesOnMove (15k edges; the reported lag)."
+    )
+    assert "labelRenderedSizeThreshold" in graph_html, (
+        "sigma must keep labelRenderedSizeThreshold (label declutter)."
+    )
+    assert "defaultDrawNodeLabel: nbDrawLabel" in graph_html, (
+        "labels must use the DARK nbDrawLabel drawer -- sigma's default "
+        "draws a WHITE pill (the reported 'white label background')."
+    )
+    assert "nbDrawHover" in graph_html, "hover label must also be dark-themed."
+    nc = _APP_CSS.index(".nebula-canvas {")
+    body = _APP_CSS[nc : _APP_CSS.index("}", nc)]
+    assert "background:" in body, (
+        ".nebula-canvas must carry an OPAQUE dark backdrop so sigma's "
+        "transparent WebGL canvases show the C1 nebula theme, not white."
+    )
+    assert "#07090f" in body, (
+        ".nebula-canvas backdrop must use the C1 dark base (#07090f) -- "
+        "the reported 'white background, colors too bright'."
+    )
