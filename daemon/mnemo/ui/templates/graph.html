@@ -580,6 +580,9 @@ function nebula() {
     },
 
     destroy() {
+      // cancel any in-flight forceatlas2 worker (token + worker + timer).
+      this._layoutToken = {};
+      this._killForceLayout();
       if (this._eventSource) {
         try { this._eventSource.close(); } catch (_) {}
         this._eventSource = null;
@@ -776,35 +779,105 @@ function nebula() {
       this.stats = n + ' nodes / ' + linkCount + ' links';
     },
 
-    // Apply cached positions (hit) or run a BOUNDED forceatlas2 then
-    // freeze (miss). NO perpetual simulation -- sigma just paints; the
-    // layout is computed once and settled (the cosmos converge-and-
-    // stop lesson, kept: a livelier graph comes from interaction, not
-    // a never-cool sim).
-    _layout() {
+    // Cache HIT: stamp the settled positions onto the graph (instant,
+    // no layout runs at all).
+    _applyCachedPositions() {
       const cached = this._cachedPositions;
-      const useCache = cached && cached.length === this._order.length * 2;
-      if (useCache) {
-        for (let i = 0; i < this._order.length; i++) {
-          const id = this._order[i];
-          this.graph.setNodeAttribute(id, 'x', cached[i * 2]);
-          this.graph.setNodeAttribute(id, 'y', cached[i * 2 + 1]);
-        }
+      for (let i = 0; i < this._order.length; i++) {
+        const id = this._order[i];
+        this.graph.setNodeAttribute(id, 'x', cached[i * 2]);
+        this.graph.setNodeAttribute(id, 'y', cached[i * 2 + 1]);
+      }
+    },
+
+    // Cache MISS: a BOUNDED forceatlas2 run that NEVER blocks the main
+    // thread (a synchronous FA2.assign on an 11 k-node scope froze the
+    // tab ~56 s -- the documented renderer-freeze symptom; cosmos ran
+    // its cold-converge off the main thread on the GPU, so this must
+    // be off-thread too). sigma is mounted on the disc seed first
+    // (instant + interactive); the FA2 Web Worker then relaxes it
+    // off-thread and the user WATCHES the nebula form (the loved
+    // cold-converge feel), fully interactive throughout. After a
+    // bounded run the worker STOPS (freeze -- no perpetual sim) and
+    // the settled layout is PUT so the next visit is an instant cache
+    // hit. A reload / scope change invalidates _layoutToken + kills
+    // the worker so an in-flight run bails.
+    _runForceLayout() {
+      const lib = window.graphologyLibrary;
+      const FA2 = lib && lib.layoutForceAtlas2;
+      if (!FA2 || !FA2.assign) { this.booting = false; return; }
+      let settings;
+      try { settings = FA2.inferSettings(this.graph); }
+      catch (_) { settings = {}; }
+      const n = this._order.length;
+      const token = this._layoutToken;
+
+      // SMALL scope: a synchronous FA2 is fast (<~300ms) and gives an
+      // instant good layout -- no worker spin-up, no rAF-sync latency.
+      if (n <= 800) {
+        try {
+          FA2.assign(this.graph, { iterations: 320, settings });
+        } catch (_) { /* keep the disc seed */ }
+        this.booting = false;
+        this._persistLayout();  // FREEZE -- one fast pass, then static.
+        return;
+      }
+
+      // LARGE scope: graphology's JS FA2 is ~400ms/iteration at 11 k
+      // nodes -- a synchronous (or even rAF-chunked) run would freeze
+      // / jank the tab for ~a minute (the documented renderer-freeze
+      // symptom; cosmos ran its converge on the GPU, off the main
+      // thread). Run it in the FA2Layout WEB WORKER instead (the
+      // design's intent): the
+      // compute is entirely off the main thread, the page stays fully
+      // interactive on the disc seed and the user WATCHES it form
+      // (the loved cold-converge), and a BOUNDED run duration stops it
+      // (no perpetual sim) then the settled layout is PUT + frozen.
+      // The FA2 worker SUPERVISOR is a top-level graphology-library
+      // export (graphologyLibrary.FA2Layout), NOT a member of
+      // layoutForceAtlas2 (which only carries assign/inferSettings).
+      const FA2Layout = lib.FA2Layout || (lib.default && lib.default.FA2Layout);
+      if (typeof FA2Layout !== 'function') {
+        // no worker in the bundle -> don't block; keep the disc seed
+        // (a reload re-tries; far better than a 56 s main-thread jam).
         this.booting = false;
         return;
       }
-      // Cache miss: bounded forceatlas2 (iteration cap scales DOWN
-      // with node count so a huge scope can't peg the CPU), then
-      // freeze + persist so the next visit is an instant cache hit.
-      const FA2 = window.graphologyLibrary.layoutForceAtlas2;
-      const n = this._order.length;
-      const iterations = n > 6000 ? 90 : n > 2000 ? 160 : n > 500 ? 260 : 380;
+      let layout;
       try {
-        const settings = FA2.inferSettings(this.graph);
-        FA2.assign(this.graph, { iterations, settings });
-      } catch (_) { /* keep the disc seed if FA2 is unavailable */ }
-      this.booting = false;
-      this._persistLayout();
+        layout = new FA2Layout(this.graph, { settings });
+        layout.start();
+      } catch (_) {
+        this.booting = false;
+        this._fa2Worker = null;
+        return;
+      }
+      this._fa2Worker = layout;
+      // bounded run -> matches the cosmos ~7 s cold-converge feel, then
+      // STOP (freeze). Scales with node count.
+      const runMs = n > 6000 ? 9000 : n > 2000 ? 5500 : 3000;
+      this._fa2StopT = setTimeout(() => {
+        if (token !== this._layoutToken) return;  // superseded reload
+        try { layout.stop(); } catch (_) {}
+        try { layout.kill(); } catch (_) {}
+        this._fa2Worker = null;
+        this.booting = false;
+        this._persistLayout();  // FREEZE: bounded run done, settled.
+      }, runMs);
+    },
+
+    // Tear down an in-flight FA2 worker + its stop-timer (reload /
+    // scope change / destroy). Safe to call when none is running.
+    _killForceLayout() {
+      if (this._fa2StopT) {
+        try { clearTimeout(this._fa2StopT); } catch (_) {}
+        this._fa2StopT = null;
+      }
+      if (this._fa2Worker) {
+        try { this._fa2Worker.stop(); } catch (_) {}
+        try { this._fa2Worker.kill(); } catch (_) {}
+        this._fa2Worker = null;
+      }
     },
 
     // PUT the settled positions to the server cache, keyed by scope +
@@ -850,25 +923,27 @@ function nebula() {
 
     _nodeReducer(id, data) {
       const res = Object.assign({}, data);
-      const bright = this._brightSet();
       const isSel = id === this._selId;
       const isHover = id === this._hoverId;
-      if (bright && !bright.has(id)) {
+      const bright = this._brightSet();
+      // Selection / hover ALWAYS wins -- you must be able to hover-
+      // preview any node even while a set is focused. Only THEN does
+      // the bright-set dimming apply to the rest.
+      if (isSel || isHover) {
+        res.color = this._theme.accent;
+        res.size = (data.size || 4) * (isSel ? 1.7 : 1.35);
+        res.zIndex = 2;
+        res.forceLabel = true;
+        res.highlighted = true;  // sigma's hover-ring affordance
+      } else if (bright && !bright.has(id)) {
         // greyed (NOT hidden) -- the cosmos "blur the rest" intent.
         res.color = this._rgba(this._theme.dim, 0.5);
         res.label = '';
         res.zIndex = 0;
-      } else {
-        if (bright) res.zIndex = 1;
-        if (isSel || isHover) {
-          res.color = this._theme.accent;
-          res.size = (data.size || 4) * (isSel ? 1.7 : 1.35);
-          res.zIndex = 2;
-          res.forceLabel = true;
-          res.highlighted = true;  // sigma's hover-ring affordance
-        }
+      } else if (bright) {
+        res.zIndex = 1;
       }
-      if (!this.labelsVisible && !isSel) res.label = '';
+      if (!this.labelsVisible && !isSel && !isHover) res.label = '';
       return res;
     },
 
@@ -905,12 +980,22 @@ function nebula() {
         return;
       }
 
-      this.booting = !(this._cachedPositions &&
-        this._cachedPositions.length === this._order.length * 2);
-      this.bootMsg = this.booting
-        ? 'forming ' + this._order.length.toLocaleString() + ' nodes'
-        : '';
-      this._layout();
+      // Invalidate + tear down any in-flight forceatlas2 worker from a
+      // prior scope (the new token also makes its stop-timer a no-op).
+      this._layoutToken = {};
+      this._killForceLayout();
+      const useCache = this._cachedPositions &&
+        this._cachedPositions.length === this._order.length * 2;
+      if (useCache) {
+        this._applyCachedPositions();
+        this.booting = false;
+        this.bootMsg = '';
+      } else {
+        // mount sigma on the disc seed FIRST (interactive instantly,
+        // no freeze); _runForceLayout() relaxes it across frames.
+        this.booting = true;
+        this.bootMsg = 'forming ' + this._order.length.toLocaleString() + ' nodes';
+      }
 
       const Sigma = window.Sigma;
       try {
@@ -941,7 +1026,10 @@ function nebula() {
       }
 
       this._wireInteraction();
-      this.booting = false;
+      // Cache miss: relax the disc seed via the chunked, non-blocking
+      // forceatlas2 (it clears `booting` + PUTs the layout when the
+      // bounded run completes). Hit path already cleared `booting`.
+      if (!useCache) this._runForceLayout();
     },
 
     // --- full interaction (sigma first-class events) --------------
