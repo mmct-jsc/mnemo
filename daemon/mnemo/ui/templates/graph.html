@@ -324,6 +324,68 @@ const REL_COLORS = {
   co_occurs_with:       '#e879f9',
 };
 
+// --- HOT-PATH reducers (module scope -- NOT Alpine-proxied) ----------
+// sigma calls the node/edge reducer ONCE PER ELEMENT PER REFRESH
+// (~26 k calls on the live scope). Reading the Alpine reactive `this`
+// in that loop measured ~0.85 ms/node -> ~1.7 s per refresh (every
+// hover / select / highlight janked). These pure functions read a
+// PLAIN snapshot (NB_RS, refreshed only when focus/hover/toggles
+// change) so a refresh is a cheap data pass -- the design's "highlight
+// is a pure data change" only holds if the reducer itself is cheap.
+let NB_RS = {
+  sel: null, hover: null, bright: null,
+  accent: '#7ee7e0',
+  dim05: 'rgba(58,67,88,0.5)',     // greyed node (precomputed)
+  dimEdge: 'rgba(58,67,88,0.12)',  // greyed edge (precomputed)
+  labels: true, edges: true,
+};
+
+function nbNodeReduce(rs, id, data) {
+  const res = Object.assign({}, data);
+  const isSel = id === rs.sel;
+  const isHover = id === rs.hover;
+  const bright = rs.bright;
+  // selection / hover ALWAYS wins (hover-preview any node even while
+  // a set is focused); THEN the bright-set dimming applies to the rest.
+  if (isSel || isHover) {
+    res.color = rs.accent;
+    res.size = (data.size || 4) * (isSel ? 1.7 : 1.35);
+    res.zIndex = 2;
+    res.forceLabel = true;
+    res.highlighted = true;          // sigma's focus-ring affordance
+  } else if (bright && !bright.has(id)) {
+    res.color = rs.dim05;            // greyed, NOT hidden
+    res.label = '';
+    res.zIndex = 0;
+  } else if (bright) {
+    // spotlighted set: keep vivid TYPE color, force label + gentle
+    // size bump + on top so it reads against the greyed field.
+    res.size = (data.size || 4) * 1.3;
+    res.forceLabel = true;
+    res.zIndex = 1;
+  }
+  if (!rs.labels && !isSel && !isHover) res.label = '';
+  return res;
+}
+
+function nbEdgeReduce(rs, data) {
+  const res = Object.assign({}, data);
+  if (!rs.edges) { res.hidden = true; return res; }
+  const bright = rs.bright;
+  if (bright) {
+    if (bright.has(data._s) && bright.has(data._t)) {
+      res.color = data.cHi;         // in-set edge, precomputed strong
+      res.zIndex = 1;
+    } else {
+      res.color = rs.dimEdge;       // outside the set: faint
+      res.zIndex = 0;
+    }
+  } else {
+    res.color = data.cBase;         // resting soft connective tissue
+  }
+  return res;
+}
+
 function nebula() {
   return {
     // --- sigma.js v3 + graphology renderer state -------------------
@@ -339,6 +401,9 @@ function nebula() {
     _selId: null,                // selected node id (canvas focus)
     _hoverId: null,              // hovered node id
     _filterIds: null,            // Set of filter-matched ids (null = off)
+    _bright: null,               // MEMOIZED bright set (recomputed only
+                                 // on focus-state change; the reducer
+                                 // reads it O(1) per node).
     _dragId: null,               // node being dragged
     _theme: {},                  // resolved C1 tokens (no hardcoded color)
     booting: false,              // layout-compute shimmer
@@ -788,9 +853,18 @@ function nebula() {
       for (const k in bestPair) {
         const p = bestPair[k];
         if (graph.hasEdge(p.s, p.t)) continue;
+        const ec = REL_COLORS[p.rel] || '#8aa6c8';
+        const cBase = this._rgba(ec, 0.34);
         graph.addEdgeWithKey(k, p.s, p.t, {
-          color: this._rgba(REL_COLORS[p.rel] || '#8aa6c8', 0.5),
-          baseColor: REL_COLORS[p.rel] || '#8aa6c8',
+          // precomputed once so the per-refresh edge reducer does ZERO
+          // string work (~15.5 k edges). _s/_t let the reducer test
+          // membership without a graph.extremities() proxy hop.
+          color: cBase,
+          cBase: cBase,
+          cHi: this._rgba(ec, 0.85),
+          _s: p.s,
+          _t: p.t,
+          baseColor: ec,
           size: 1,
           rel: p.rel,
         });
@@ -930,74 +1004,51 @@ function nebula() {
     },
 
     // --- sigma reducers: highlight is a PURE DATA CHANGE ----------
-    // This is the capability cosmos.gl structurally lacked. The
-    // reducer recomputes per-node / per-edge display every frame from
-    // reactive state (_hl / _selId / _hoverId / _filterIds); greying
-    // the rest while spotlighting a set is a refresh(), no renderer-
-    // internal-state trap (gotcha 31 closed).
-    _brightSet() {
-      // The set rendered at full strength. Priority:
-      //   companion highlight > selection+neighbours > filter match.
-      if (this._hl && this._hl.size) return this._hl;
+    // This is the capability cosmos.gl structurally lacked. The actual
+    // per-element reducers are the module functions nbNodeReduce /
+    // nbEdgeReduce (NOT Alpine-proxied -- the per-node hot path). They
+    // read NB_RS, a PLAIN snapshot refreshed by _syncReducerState()
+    // only when focus / hover / toggles change (a refresh() is then a
+    // cheap data pass, no renderer-internal-state trap; gotcha 31
+    // closed). The bright set is memoized into this._bright.
+    _recomputeBright() {
+      // Priority: companion highlight > selection+neighbours > filter.
+      if (this._hl && this._hl.size) { this._bright = this._hl; return; }
       if (this._selId) {
         const s = new Set([this._selId]);
         for (const a of (this._adj[this._selId] || [])) s.add(a.id);
-        return s;
+        this._bright = s;
+        return;
       }
-      if (this._filterIds) return this._filterIds;
-      return null;  // nothing focused -> the whole bright cloud
+      this._bright = this._filterIds || null;
     },
-
+    // Snapshot the Alpine state into the plain NB_RS the hot-path
+    // reducers read. Touches the proxy ~8x per INTERACTION (not per
+    // node) -- negligible. Call before any sig.refresh() whose visual
+    // depends on focus / hover / label / edge state.
+    _syncReducerState() {
+      this._recomputeBright();
+      NB_RS.sel = this._selId;
+      NB_RS.hover = this._hoverId;
+      NB_RS.bright = this._bright;
+      NB_RS.accent = this._theme.accent;
+      NB_RS.dim05 = this._rgba(this._theme.dim, 0.5);
+      NB_RS.dimEdge = this._rgba(this._theme.dim, 0.12);
+      NB_RS.labels = this.labelsVisible;
+      NB_RS.edges = this.edgesVisible;
+    },
+    // O(1) read of the memoized set (null = the whole bright cloud).
+    _brightSet() {
+      return this._bright;
+    },
+    // Thin delegators -- kept ONLY for tests / debug evals; the live
+    // render path uses the module functions directly via the sigma
+    // config closure (no Alpine proxy).
     _nodeReducer(id, data) {
-      const res = Object.assign({}, data);
-      const isSel = id === this._selId;
-      const isHover = id === this._hoverId;
-      const bright = this._brightSet();
-      // Selection / hover ALWAYS wins -- you must be able to hover-
-      // preview any node even while a set is focused. Only THEN does
-      // the bright-set dimming apply to the rest.
-      if (isSel || isHover) {
-        res.color = this._theme.accent;
-        res.size = (data.size || 4) * (isSel ? 1.7 : 1.35);
-        res.zIndex = 2;
-        res.forceLabel = true;
-        res.highlighted = true;  // sigma's hover-ring affordance
-      } else if (bright && !bright.has(id)) {
-        // greyed (NOT hidden) -- the cosmos "blur the rest" intent.
-        res.color = this._rgba(this._theme.dim, 0.5);
-        res.label = '';
-        res.zIndex = 0;
-      } else if (bright) {
-        // in the spotlighted set: keep its vivid TYPE color (so the
-        // set's identity reads, not flattened to one accent), but
-        // force the label + a gentle size bump + draw on top so the
-        // highlighted set is clearly readable against the greyed field.
-        res.size = (data.size || 4) * 1.3;
-        res.forceLabel = true;
-        res.zIndex = 1;
-      }
-      if (!this.labelsVisible && !isSel && !isHover) res.label = '';
-      return res;
+      return nbNodeReduce(NB_RS, id, data);
     },
-
     _edgeReducer(key, data) {
-      const res = Object.assign({}, data);
-      if (!this.edgesVisible) { res.hidden = true; return res; }
-      const ext = this.graph.extremities(key);
-      const bright = this._brightSet();
-      if (bright) {
-        const bothIn = bright.has(ext[0]) && bright.has(ext[1]);
-        if (bothIn) {
-          res.color = this._rgba(data.baseColor || '#8aa6c8', 0.85);
-          res.zIndex = 1;
-        } else {
-          res.color = this._rgba(this._theme.dim, 0.12);
-          res.zIndex = 0;
-        }
-      } else {
-        res.color = this._rgba(data.baseColor || '#8aa6c8', 0.5);
-      }
-      return res;
+      return nbEdgeReduce(NB_RS, data);
     },
 
     renderCanvas() {
@@ -1030,6 +1081,8 @@ function nebula() {
         this.bootMsg = 'forming ' + this._order.length.toLocaleString() + ' nodes';
       }
 
+      // populate the plain hot-path snapshot before the first paint.
+      this._syncReducerState();
       const Sigma = window.Sigma;
       try {
         this.sig = new Sigma(this.graph, container, {
@@ -1045,12 +1098,12 @@ function nebula() {
           labelGridCellSize: 70,
           labelRenderedSizeThreshold: 8,
           defaultNodeColor: TYPE_COLOR_FALLBACK,
-          defaultEdgeColor: this._rgba('#8aa6c8', 0.5),
+          defaultEdgeColor: this._rgba('#8aa6c8', 0.34),
           minCameraRatio: 0.05,
           maxCameraRatio: 12,
           zIndex: true,
-          nodeReducer: (id, data) => this._nodeReducer(id, data),
-          edgeReducer: (key, data) => this._edgeReducer(key, data),
+          nodeReducer: (id, data) => nbNodeReduce(NB_RS, id, data),
+          edgeReducer: (key, data) => nbEdgeReduce(NB_RS, data),
         });
       } catch (e) {
         this.booting = false;
@@ -1076,11 +1129,13 @@ function nebula() {
 
       sig.on('enterNode', ({ node }) => {
         this._hoverId = node;
+        this._syncReducerState();
         if (cont) cont.style.cursor = 'pointer';
         sig.refresh({ skipIndexation: true });
       });
       sig.on('leaveNode', () => {
         this._hoverId = null;
+        this._syncReducerState();
         if (cont) cont.style.cursor = '';
         sig.refresh({ skipIndexation: true });
       });
@@ -1128,6 +1183,7 @@ function nebula() {
       const rec = this._byId[id];
       if (!rec) return;
       this._selId = id;
+      this._syncReducerState();
       this._centerOn(id);
       if (this.sig) this.sig.refresh({ skipIndexation: true });
 
@@ -1178,6 +1234,7 @@ function nebula() {
       this._hoverId = null;
       this.selected = null;
       this.neighbors = [];
+      this._syncReducerState();
       if (this.sig) {
         try {
           this.sig.getCamera().animatedReset({ duration: 420 });
@@ -1195,6 +1252,7 @@ function nebula() {
     highlight(nodeIds) {
       const ids = (nodeIds || []).filter((x) => this._byId[x]);
       this._hl = ids.length ? new Set(ids) : null;
+      this._syncReducerState();
       if (this.sig) this.sig.refresh({ skipIndexation: true });
       // frame the highlighted set so it's visible without manual pan.
       // Average the DISPLAY data (the coordinate space camera.animate
@@ -1217,6 +1275,7 @@ function nebula() {
     },
     clearHighlight() {
       this._hl = null;
+      this._syncReducerState();
       if (this.sig) this.sig.refresh({ skipIndexation: true });
     },
 
@@ -1230,6 +1289,7 @@ function nebula() {
       const filterActive = !!text || anyTypeOff;
       if (!filterActive) {
         this._filterIds = null;
+        this._syncReducerState();
         if (this.sig) this.sig.refresh({ skipIndexation: true });
         return;
       }
@@ -1243,16 +1303,19 @@ function nebula() {
         if (okType && okText) matched.add(id);
       }
       this._filterIds = matched;
+      this._syncReducerState();
       if (this.sig) this.sig.refresh({ skipIndexation: true });
     },
 
     toggleEdges() {
       this.edgesVisible = !this.edgesVisible;
+      this._syncReducerState();
       if (this.sig) this.sig.refresh({ skipIndexation: true });
       this._persistState();
     },
     toggleLabels() {
       this.labelsVisible = !this.labelsVisible;
+      this._syncReducerState();
       if (this.sig) {
         try { this.sig.setSetting('renderLabels', this.labelsVisible); } catch (_) {}
         this.sig.refresh({ skipIndexation: true });
