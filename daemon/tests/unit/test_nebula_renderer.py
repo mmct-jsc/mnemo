@@ -373,72 +373,101 @@ def test_sigma_render_is_dark_themed(graph_html: str) -> None:
     )
 
 
-# --- v4.5.2 LIVING NEBULA (user live-review of v4.5.1) ----------------
+# --- v4.5.3 CRISP + ALIVE (user live-review of v4.5.2) ---------------
 #
-# v4.5.1 fixed the layout (deterministic, server-side) but the render
-# was STATIC + flat: "only circle shape and straight edges", "no
-# moving like its actually living", "drag make all edge disappear",
-# "highlight node only node no edge". v4.5.2 makes it a LIVING nebula
-# WITHOUT touching the (correct) server layout: the structure is the
-# settled server position; the client adds bounded life + cosmic
-# rendering, purely in the cheap reducer hot path (no graph mutation,
-# no force sim -- the proven-fragile thing stays gone).
+# v4.5.2 tried to make the nebula "alive" with a perpetual rAF loop
+# that every frame called cam.setState() (it FOUGHT user zoom/pan/
+# click -- stomped within 16 ms) and sig.refresh() (a full re-render
+# of ~11k star points + ~15.5k CURVED edges EVERY frame). The user
+# reported: "lag web, move lag, cannot zoom, click node does not zoom,
+# cannot drag, weird layout". That is the systematic-debugging
+# 3-failed-fixes wall (reducer-x ignored -> graph-mutation pegs ->
+# camera-float fights+lags) -> architecture question -> the user chose
+# "cosmic atmosphere + crisp graph". v4.5.3: the GRAPH renders strictly
+# ON DEMAND (sigma repaints only on a real interaction; an idle nebula
+# costs ZERO and every gesture is crisp); the "alive" moves entirely
+# OFF the renderer -- a pure-CSS GPU atmosphere BEHIND the canvas plus
+# one DOM-overlay pulse on the selected star, positioned from sigma's
+# own afterRender event (no rAF, no graph re-render). The de-mandala'd
+# server halo is covered by test_graph_layout_server.py.
 
 
-def test_nebula_is_alive_camera_float_plus_star_twinkle(graph_html: str) -> None:
-    """The nebula must be ALIVE without a per-frame full-graph
-    position mutation. PROVEN constraints: sigma's nodeReducer does
-    NOT render an overridden x/y (verified live -- a +400 offset moved
-    nothing), and mutating 11k graph positions every frame pegs the
-    main thread (the "1fps" jank the user rejected). So the motion is
-    the CHEAP, GUARANTEED, smooth-at-any-scale pair: (1) a gentle
-    bounded CAMERA float (one GPU transform/frame) so the whole cosmos
-    drifts; (2) a per-star SIZE twinkle in the reducer (size IS the
-    one motion sigma's reducer honors -- no graph writes). NO
-    per-frame graph mutation."""
-    assert "cam.setState({" in graph_html, (
-        "_startLife must FLOAT the camera (cheap GPU transform) -- the "
-        "whole nebula gently drifts = alive at any node count."
+def test_nebula_has_no_camera_fight_or_perframe_rerender(graph_html: str) -> None:
+    """The v4.5.2 lag/dead-interaction class must be GONE: no loop may
+    own the camera (cam.setState in a tick) and nothing may force a
+    per-frame full-graph repaint. Idle == zero render."""
+    assert "cam.setState({" not in graph_html, (
+        "NO loop may drive cam.setState() -- a per-frame camera write "
+        "fought every user zoom/pan/click (stomped within 16ms). The "
+        "camera is the USER's now; the graph renders on demand."
     )
-    assert "home.x + 0.018" in graph_html, (
-        "the camera float must oscillate in a small BOUNDED range "
-        "around the auto-fit rest pose ('moving only in a predefined "
-        "area'), never a wander-off pan."
+    assert "requestAnimationFrame(tick)" not in graph_html, (
+        "there must be NO perpetual rAF 'life' tick -- it forced a "
+        "continuous full re-render (~11k points + ~15.5k curved edges/"
+        "frame == the reported page lag + dead drag)."
     )
-    assert "Math.sin(t * 0.21)" in graph_html, (
-        "the camera float is a slow Lissajous around the rest pose."
+    assert "NB_RS.t" not in graph_html, (
+        "the per-frame twinkle CLOCK must be gone (it only mattered to "
+        "the deleted rAF loop; the reducer is a pure visual pass again)."
     )
-    assert "res.size = base * (1 + 0.16 * Math.sin(rs.t" in graph_html, (
-        "nbNodeReduce must apply a per-star SIZE twinkle (size is the "
-        "ONLY motion sigma's reducer renders; the cheap no-graph-write "
-        "path -- a reducer x/y override is ignored, verified)."
-    )
-    assert "'ph', (i * 2.39996323)" in graph_html, (
-        "_applyCachedPositions must assign a STABLE golden-angle "
-        "per-node phase so stars twinkle on their own beat (not in unison)."
+    assert "'ph', (i * 2.39996323)" not in graph_html, (
+        "the per-node twinkle PHASE attribute must be gone (it only fed the deleted size twinkle)."
     )
     assert "updateEachNodeAttributes" not in graph_html, (
-        "there must be NO per-frame full-graph position mutation -- "
-        "11k graph writes/frame pegged the main thread (the 1fps jank)."
+        "still NO per-frame full-graph mutation (the earlier 1fps jank)."
     )
 
 
-def test_nebula_has_an_raf_life_loop(graph_html: str) -> None:
-    """A single rAF loop advances the clock + refreshes -- the breath.
-    It is paused when the tab is hidden and cancelled on reload /
-    destroy (token + _stopLife)."""
-    assert "_startLife()" in graph_html, "graph.html must have _startLife() -- the breathing loop."
+def test_nebula_is_alive_via_ondemand_pulse_and_css_atmosphere(
+    graph_html: str,
+) -> None:
+    """_startLife/_stopLife survive but now wire an ON-DEMAND pulse:
+    the selected star is tracked from sigma's afterRender event (fires
+    only on a real repaint -- zero idle cost), and the cosmic "alive"
+    is a pure-CSS GPU atmosphere behind the transparent WebGL canvas."""
+    assert "_startLife()" in graph_html, (
+        "graph.html must keep _startLife() (now the on-demand pulse wiring, not a rAF loop)."
+    )
     assert "_stopLife()" in graph_html, (
-        "graph.html must have _stopLife() -- cancels the breathing loop."
+        "graph.html must keep _stopLife() (detaches the afterRender pulse)."
     )
-    assert "requestAnimationFrame(tick)" in graph_html, (
-        "the life loop must drive on requestAnimationFrame."
+    assert "this.sig.on('afterRender'" in graph_html, (
+        "the pulse must be driven by sigma's afterRender event -- it "
+        "fires ONLY when sigma actually repaints, so there is no rAF "
+        "of our own and an idle graph costs zero."
     )
-    assert "document.hidden" in graph_html, (
-        "the life loop must pause when the tab is hidden (battery)."
+    assert "_positionPulse()" in graph_html, (
+        "graph.html must have _positionPulse() -- parks the overlay on "
+        "the selected star (or hides it)."
     )
-    assert "this._stopLife();" in graph_html, (
-        "reload (renderCanvas) + destroy must stop a prior life loop."
+    assert "graphToViewport({ x: a.x, y: a.y })" in graph_html, (
+        "the pulse must track the node via sigma graphToViewport so it "
+        "stays glued through any camera state."
+    )
+    assert "removeListener('afterRender'" in graph_html, (
+        "_stopLife must detach the afterRender listener (reload/destroy)."
+    )
+    assert 'id="nebula-pulse"' in graph_html, (
+        "the template must carry the #nebula-pulse overlay element."
+    )
+    # the cosmic life is CSS, behind the canvas, zero JS / zero re-render
+    assert "@keyframes nebula-drift" in _APP_CSS, (
+        ".nebula-canvas must have a pure-CSS drifting nebula-gas layer "
+        "(GPU, behind the transparent WebGL canvas -- the 'alive')."
+    )
+    assert "@keyframes nebula-twinkle" in _APP_CSS, (
+        ".nebula-canvas must have a pure-CSS twinkling starfield layer."
+    )
+    assert "@keyframes nebula-parallax" in _APP_CSS, (
+        "the starfield must drift at its own rate (parallax depth)."
+    )
+    pulse = _APP_CSS.index("@keyframes nebula-drift")
+    assert "translate3d" in _APP_CSS[pulse : pulse + 200], (
+        "the atmosphere must animate via translate3d (compositor-only, "
+        "never a layout/paint thrash)."
+    )
+    assert "prefers-reduced-motion" in _APP_CSS, (
+        "the atmosphere + pulse must freeze under prefers-reduced-motion."
     )
 
 

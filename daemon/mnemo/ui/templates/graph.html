@@ -138,6 +138,16 @@
            simplification. -->
       <div id="cy-nebula"></div>
 
+      <!-- v4.5.3: on-demand selected-star pulse. graph.html
+           _positionPulse() parks this over the selected node from
+           sigma's afterRender event (NO rAF, NO graph re-render). The
+           beat/ripple is pure CSS (.nebula-pulse-ring). Hidden until a
+           node is selected; the cosmic "alive" is the CSS atmosphere
+           on .nebula-canvas behind the transparent WebGL canvas. -->
+      <div id="nebula-pulse" class="nebula-pulse-anchor" aria-hidden="true">
+        <div class="nebula-pulse-ring"></div>
+      </div>
+
       <!-- Loading shimmer while the layout computes (cache miss runs a
            bounded forceatlas2; a cache hit clears this immediately). -->
       <div class="nebula-booting" x-show="booting" x-cloak>
@@ -344,13 +354,6 @@ let NB_RS = {
   dim05: 'rgba(58,67,88,0.5)',     // greyed node (precomputed)
   dimEdge: 'rgba(58,67,88,0.12)',  // greyed edge (precomputed)
   labels: true, edges: true,
-  // v4.5.2 LIVING NEBULA: a shared clock (seconds since mount,
-  // advanced by the rAF life loop). The whole field FLOATS via the
-  // camera (in _startLife) and every star TWINKLES via a cheap
-  // size pulse here in nbNodeReduce -- size is the one motion sigma's
-  // reducer DOES honor (x/y overrides are ignored; verified), and it
-  // needs no per-frame graph writes (those pegged the thread at 11k).
-  t: 0,
 };
 
 function nbNodeReduce(rs, id, data) {
@@ -378,16 +381,14 @@ function nbNodeReduce(rs, id, data) {
     res.zIndex = 1;
   }
   if (!rs.labels && !isSel && !isHover) res.label = '';
-  // v4.5.2 LIVING NEBULA: a gentle per-star SIZE twinkle on its own
-  // phase (the field never looks frozen even at rest). Size is the
-  // ONE motion sigma's reducer renders (x/y overrides are ignored --
-  // verified), and it's the cheap path (no graph writes). Skip the
-  // (position is graph-only, untouched by the reducer, so a drag
-  // stays crisp even while every star keeps twinkling.)
-  if (rs.t) {
-    const base = res.size || data.size || 4;
-    res.size = base * (1 + 0.16 * Math.sin(rs.t * 1.6 + (data.ph || 0)));
-  }
+  // v4.5.3: NO per-frame size twinkle. It required a perpetual
+  // sig.refresh() (full re-render of 11k points + 15.5k CURVED edges
+  // every frame) which lagged the whole page and starved drag/pan;
+  // the camera-float that paired with it FOUGHT zoom/pan/click. The
+  // nebula is "alive" via a pure-CSS cosmic atmosphere behind the
+  // canvas + an on-demand DOM-overlay pulse on the selected node --
+  // ZERO graph re-render, so the graph stays buttery + fully
+  // interactive (the reducer is a pure visual pass again).
   return res;
 }
 
@@ -999,11 +1000,6 @@ function nebula() {
         const id = this._order[i];
         this.graph.setNodeAttribute(id, 'x', cached[i * 2]);
         this.graph.setNodeAttribute(id, 'y', cached[i * 2 + 1]);
-        // v4.5.2 LIVING NEBULA: ph = a STABLE golden-angle phase so
-        // every star twinkles on its OWN beat (organic shimmer, never
-        // in unison). Position stays the settled server layout (the
-        // float is the camera; the per-star life is the size twinkle).
-        this.graph.setNodeAttribute(id, 'ph', (i * 2.39996323) % 6.2831853);
       }
     },
 
@@ -1173,7 +1169,7 @@ function nebula() {
       }
 
       this._wireInteraction();
-      this._startLife();   // the nebula BREATHES (rAF drift loop)
+      this._startLife();   // wire the on-demand selected-star pulse
     },
 
     // --- full interaction (sigma first-class events) --------------
@@ -1227,61 +1223,57 @@ function nebula() {
       sig.on('upStage', endDrag);
     },
 
-    // --- v4.5.2 the nebula BREATHES -------------------------------
-    // A single rAF loop advances the shared clock NB_RS.t and asks
-    // sigma to re-apply the (cheap) reducers + repaint. The drift is
-    // computed in nbNodeReduce -- the graph data is NEVER mutated, so
-    // there is no layout-state trap and the settled server positions
-    // stay the source of truth. skipIndexation keeps it light (the
-    // tiny bounded drift is well within hover tolerance). Paused when
-    // the tab is hidden (battery) and cancelled on reload/destroy via
-    // the layout token. This is decorative motion -- bounded, O(n),
-    // GPU-composited -- NOT a force sim (the proven-fragile thing).
+    // --- v4.5.3 on-demand pulse (NO perpetual loop) ---------------
+    // The v4.5.2 "life" was a rAF loop that every frame called
+    // cam.setState() (which FOUGHT user zoom/pan/click -- they were
+    // stomped within 16 ms) and sig.refresh() (a full re-render of
+    // ~11 k star points + ~15.5 k CURVED edges EVERY frame -- the
+    // reported page lag + dead drag). Root cause: continuous full
+    // re-render + a camera the loop owned. The fix is architectural:
+    // the GRAPH renders strictly ON DEMAND (sigma only repaints on a
+    // real interaction -- zoom/pan/drag/select), so an idle nebula
+    // costs ZERO and every gesture is crisp. The "alive" feeling now
+    // comes from a pure-CSS cosmic atmosphere BEHIND the canvas
+    // (graph_layout/app.css, zero JS, GPU-composited) plus a single
+    // DOM-overlay pulse that rides ON TOP of the selected star. The
+    // overlay is positioned from sigma's own `afterRender` event --
+    // which fires only when sigma actually repaints -- so the pulse
+    // tracks the star through a camera fly with no extra rendering
+    // and no rAF of our own.
     _startLife() {
       this._stopLife();
       if (!this.sig) return;
-      const token = this._layoutToken;
-      const cam = this.sig.getCamera();
-      // capture the auto-fit camera as the rest pose -- the drift is a
-      // small BOUNDED oscillation AROUND it ("moving only in a
-      // predefined area"), never a wander-off pan.
-      const home = cam.getState();
-      this._lifeT0 = performance.now();
-      const tick = () => {
-        if (token !== this._layoutToken || !this.sig) return;
-        // Paused when hidden (battery); in a focused tab the whole
-        // nebula gently FLOATS + the stars TWINKLE -> alive. Why this
-        // mechanism: sigma's nodeReducer does NOT render overridden
-        // x/y (verified), and mutating 11k graph positions per frame
-        // pegs the main thread. So the motion is the CAMERA (one
-        // cheap GPU transform/frame, smooth at any scale) + a per-node
-        // SIZE pulse in the reducer (size IS honored -- the cheap
-        // path). No per-frame graph writes => no jank.
-        if (!document.hidden) {
-          const t = (performance.now() - this._lifeT0) / 1000;
-          NB_RS.t = t;  // drives the per-star twinkle in nbNodeReduce
-          if (!this._dragId) {
-            // gentle Lissajous float + a slow breathing zoom, scaled
-            // by the current view so it's a subtle parallax sway.
-            const span = (home.ratio || 1);
-            cam.setState({
-              x: home.x + 0.018 * span * Math.sin(t * 0.21),
-              y: home.y + 0.018 * span * Math.cos(t * 0.17),
-              ratio: home.ratio * (1 + 0.012 * Math.sin(t * 0.13)),
-              angle: home.angle,
-            });
-          }
-          try { this.sig.refresh({ skipIndexation: true }); } catch (_) {}
-        }
-        this._lifeRAF = requestAnimationFrame(tick);
-      };
-      this._lifeRAF = requestAnimationFrame(tick);
+      this._pulseEl = document.getElementById('nebula-pulse');
+      this._afterRender = () => this._positionPulse();
+      this.sig.on('afterRender', this._afterRender);
+      this._positionPulse();
     },
     _stopLife() {
-      if (this._lifeRAF) {
-        try { cancelAnimationFrame(this._lifeRAF); } catch (_) {}
-        this._lifeRAF = null;
+      if (this.sig && this._afterRender) {
+        try { this.sig.removeListener('afterRender', this._afterRender); }
+        catch (_) {}
       }
+      this._afterRender = null;
+      if (this._pulseEl) this._pulseEl.style.display = 'none';
+    },
+    // Park the CSS pulse over the selected star (or hide it). Uses
+    // sigma's graphToViewport so the overlay stays glued to the node
+    // through any camera state -- pixel space, current camera applied.
+    _positionPulse() {
+      const el = this._pulseEl;
+      if (!el) return;
+      const id = this._selId;
+      if (!id || !this.sig || !this.graph || !this.graph.hasNode(id)) {
+        el.style.display = 'none';
+        return;
+      }
+      try {
+        const a = this.graph.getNodeAttributes(id);
+        const p = this.sig.graphToViewport({ x: a.x, y: a.y });
+        el.style.display = 'block';
+        el.style.transform =
+          'translate(-50%,-50%) translate(' + p.x + 'px,' + p.y + 'px)';
+      } catch (_) { el.style.display = 'none'; }
     },
 
     _centerOn(id) {
