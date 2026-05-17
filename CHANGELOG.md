@@ -2,6 +2,39 @@
 
 All notable changes to mnemo are documented here.
 
+## [4.3.2] - 2026-05-17
+
+**Patch: retrieval relevance -- a dominant cross-project match is no
+longer hidden behind a weaker BASE node.**
+
+### Fixed
+- Strict project-isolation HARD-`continue`d every cross/inactive-
+  project non-BASE candidate in `retrieve.query()`. A context-less
+  `/v1/query` resolves the active workspace's project; if that isn't
+  the queried doc's project, the genuinely-best match was *erased* --
+  a strict-isolation silent-zero ("the result seems wrong"). Repro:
+  `"v4.x contract refactor complete handover"` returned the BASE
+  `reference-mnemo-pipelines` (0.53) at #1 while the exact-match v4
+  handover (~0.71) was **absent**. Same failure family the v1.2.1 fix
+  softened for the symmetric `project_key=None` case.
+- Fix: new `Config.project_isolation_penalty` (default **0.85**,
+  persisted, auto-tuner-friendly). The hard filter becomes a
+  multiplicative score penalty: out-of-scope strict nodes are kept +
+  ranked but deprioritized. Tuned on the principle -- a *comparable*
+  cross-project node still loses to BASE/in-project, but a
+  *dramatically* stronger exact match still wins. Live-verified: the
+  v4 handover went **absent -> #1 (0.601)**; the BASE reference
+  correctly #2 (0.529).
+
+### Tests
+- `test_soft_isolation.py` (knob default + dominant cross-project
+  match surfaces #1). `test_edge_cases` isolation test evolved to the
+  v4.3.2 contract: v1.2.1 `project_key=None` survival PRESERVED;
+  cross-project now SOFT-penalized (present, ranked below in-project/
+  cross-cutting) instead of hard-dropped -- a stronger assertion than
+  the old "absent". Full suite 1098 unit + 100 integration, ruff
+  clean.
+
 ## [4.3.1] - 2026-05-17
 
 **Patch: audit hit rows no longer blow out the page width.**
