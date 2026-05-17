@@ -90,9 +90,9 @@ def _community_separation(pos, labels):
     inter: list[float] = []
     cs = list(pts)
     for c in cs:
-        P = pts[c]
+        pc = pts[c]
         for _ in range(400):
-            a, b = rng.choice(P), rng.choice(P)
+            a, b = rng.choice(pc), rng.choice(pc)
             intra.append(math.dist(a, b))
     for a, b in itertools.combinations(cs, 2):
         for _ in range(200):
@@ -123,10 +123,7 @@ def test_edges_much_shorter_than_random_pairs() -> None:
     me = sum(math.dist(_xy(pos, a), _xy(pos, b)) for a, b in ge) / len(ge)
     rng = random.Random(1)
     mr = (
-        sum(
-            math.dist(_xy(pos, rng.choice(gi)), _xy(pos, rng.choice(gi)))
-            for _ in range(3000)
-        )
+        sum(math.dist(_xy(pos, rng.choice(gi)), _xy(pos, rng.choice(gi))) for _ in range(3000))
         / 3000
     )
     assert me / mr < 0.5, f"edges not contracted (ratio {me / mr:.3f})"
@@ -142,8 +139,8 @@ def test_singletons_pack_densely_not_confetti() -> None:
     n, edges, labels = _planted(4, 80, 800)
     pos = compute_graph_layout(n, edges)
     sing = [i for i, c in enumerate(labels) if c < 0]
-    P = np.array([_xy(pos, i) for i in sing])
-    d, _ = cKDTree(P).query(P, k=2)
+    sp = np.array([_xy(pos, i) for i in sing])
+    d, _ = cKDTree(sp).query(sp, k=2)
     nn = float(np.median(d[:, 1]))
     allp = np.array([_xy(pos, i) for i in range(n)])
     extent = float(np.abs(allp).max())
@@ -156,6 +153,26 @@ def test_singletons_pack_densely_not_confetti() -> None:
 def test_bounded_no_fling() -> None:
     n, edges, _ = _planted(5, 60, 300)
     pos = compute_graph_layout(n, edges)
-    P = np.array([_xy(pos, i) for i in range(n)])
-    r = np.hypot(P[:, 0] - P[:, 0].mean(), P[:, 1] - P[:, 1].mean())
+    pa = np.array([_xy(pos, i) for i in range(n)])
+    r = np.hypot(pa[:, 0] - pa[:, 0].mean(), pa[:, 1] - pa[:, 1].mean())
     assert r.max() < float(np.median(r)) * 14 + 1, "a node was flung far out"
+
+
+def test_halo_is_bounded_relative_to_the_giant() -> None:
+    """Real-scope reality: ~2298 components, MOSTLY singletons. The
+    halo must stay a bounded band HUGGING the giant -- not grow
+    without limit so the giant becomes a tiny core in a vast ring
+    (the v4.5 failure that started this arc; the unbounded shelf-pack
+    regressed it -- caught live by the real-scope numeric verify, now
+    guarded). With many singletons the max radius must stay a small
+    multiple of the median (giant-dominant frame)."""
+    n, edges, _ = _planted(4, 90, 2500)  # giant + a big singleton halo
+    pos = compute_graph_layout(n, edges)
+    pa = np.array([_xy(pos, i) for i in range(n)])
+    cx, cy = pa[:, 0].mean(), pa[:, 1].mean()
+    r = np.hypot(pa[:, 0] - cx, pa[:, 1] - cy)
+    ratio = float(r.max()) / float(np.median(r))
+    assert ratio < 4.0, (
+        f"halo unbounded (maxR/medR={ratio:.2f}); the giant is a tiny "
+        f"core lost in a vast ring -- the halo must hug the giant"
+    )
