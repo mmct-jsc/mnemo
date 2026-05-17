@@ -402,6 +402,4 @@ def test_v441_drawer_and_segmented_control_contract(app_css: str) -> None:
     assert "var(--accent-soft)" in act, (
         "the active segment must be visibly filled (var(--accent-soft))."
     )
-    assert "var(--accent)" in act, (
-        "the active segment label must be var(--accent)."
-    )
+    assert "var(--accent)" in act, "the active segment label must be var(--accent)."
