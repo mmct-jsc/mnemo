@@ -4204,6 +4204,15 @@ dl.meta dd { margin: 0; color: var(--fg); min-width: 0; overflow-wrap: anywhere;
   grid-column: 3 / 4;
   position: relative;
   overflow: hidden;
+  /* v4.5 (RC6): an OPAQUE dark base so the C1 nebula backdrop is
+     guaranteed behind sigma's (transparent, alpha-context) WebGL
+     canvases -- the reported "white background, colors too bright".
+     The .nebula-canvas::before blooms + the shell starfield still
+     layer on top of this; #cy-nebula sits above, transparent. */
+  background:
+    radial-gradient(circle at 30% 18%, #0c1124 0%, transparent 60%),
+    radial-gradient(circle at 78% 82%, #06222a 0%, transparent 58%),
+    linear-gradient(180deg, #07090f 0%, #0a0e18 100%);
 }
 
 /* Extra atmospheric layer ON TOP of the shell starfield -- one

@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
+import threading
 import time
 from collections import Counter
 from pathlib import Path
@@ -24,6 +26,9 @@ from mnemo import config, retrieve
 from mnemo import workspaces as ws_mod
 from mnemo.embed import Embedder
 from mnemo.store import Node, Store
+from mnemo.ui.graph_layout import compute_graph_layout
+
+logger = logging.getLogger("mnemo.ui")
 
 UI_DIR = Path(__file__).parent
 
@@ -70,18 +75,89 @@ def _graph_scope_key(*, project: str | None, project_keys: str | None, base_only
     return "global"
 
 
+# v4.5: the cached layout is renderer/ALGORITHM specific. Bump this
+# token whenever the layout engine or its tuning changes so every
+# stale entry self-invalidates. RC1 of the v4.5 "messy nebula": the
+# pre-v4.5 cache key was (scope, node-set, edge-count) with no
+# algorithm dimension, so cosmos.gl's force-sim coordinates stayed a
+# permanent cache HIT after the sigma.js swap -- sigma rendered
+# cosmos's geometry forever and forceatlas2 never ran. Including this
+# in the fingerprint means a renderer/algo change busts the cache and
+# the client recomputes + re-caches a fresh, correct layout. (The
+# user's "something off with re-reindex": the cache now invalidates
+# on algorithm change too, not only on a node-set change.)
+LAYOUT_VERSION = "server-fr-3"
+
+
+# v4.5 architecture pivot: the layout is computed SERVER-SIDE (the
+# client FA2 -- sync then Web Worker -- was proven non-deterministic +
+# quality-fragile on the real 11k/2298-component scope across 3
+# attempts; user-approved pivot). The daemon computes it ONCE per
+# (scope, fingerprint) in a background thread (Store is RLock-thread-
+# safe) and caches it; the browser is a pure sigma renderer that GETs
+# the cache and polls while ``computing``. This registry de-dupes
+# concurrent computes for the same key.
+_LAYOUT_JOBS: set[str] = set()
+_LAYOUT_JOBS_LOCK = threading.Lock()
+
+
+def _ensure_layout_async(
+    store: Store,
+    scope_key: str,
+    fingerprint: str,
+    ordered_ids: list[str],
+    edge_pairs: list[tuple[int, int]],
+) -> None:
+    """Kick a background compute of the layout for this scope unless it
+    is already cached (fresh) or already in flight. Non-blocking; the
+    client polls GET /ui/graph-layout until the row appears. ``ordered
+    _ids`` is the /ui/graph-data element order so the cached flat
+    positions array is index-aligned with the client's node order."""
+    key = f"{scope_key}|{fingerprint}"
+    with _LAYOUT_JOBS_LOCK:
+        cached = store.get_graph_layout(scope_key)
+        if cached is not None and cached[0] == fingerprint:
+            return  # already computed + fresh
+        if key in _LAYOUT_JOBS:
+            return  # a compute for this exact graph is already running
+        _LAYOUT_JOBS.add(key)
+
+    def _work() -> None:
+        try:
+            positions = compute_graph_layout(len(ordered_ids), edge_pairs)
+            store.put_graph_layout(
+                scope_key=scope_key,
+                fingerprint=fingerprint,
+                positions_json=json.dumps(positions, separators=(",", ":")),
+            )
+        except Exception:
+            logger.exception("nebula layout compute failed for scope %s", scope_key)
+        finally:
+            with _LAYOUT_JOBS_LOCK:
+                _LAYOUT_JOBS.discard(key)
+
+    threading.Thread(target=_work, name=f"nebula-layout:{scope_key[:24]}", daemon=True).start()
+
+
+def _layout_is_computing(scope_key: str, fingerprint: str) -> bool:
+    with _LAYOUT_JOBS_LOCK:
+        return f"{scope_key}|{fingerprint}" in _LAYOUT_JOBS
+
+
 def _graph_fingerprint(node_ids: list[str], edge_count: int) -> str:
     """Content fingerprint of the in-scope graph. Changes iff the
-    node set or edge count changes -- which is exactly what a reindex
-    / node-write does. mnemo node ids are content hashes already, so
-    a hash of the sorted id set + edge count is a strong, cheap
-    invalidation key for the cached force layout.
+    node set / edge count changes (a reindex / node-write) OR the
+    layout algorithm version changes (a renderer swap / retune). Both
+    are exactly the events that must invalidate the cached layout.
+    mnemo node ids are content hashes already, so a hash of the sorted
+    id set + edge count + LAYOUT_VERSION is a strong, cheap key.
     """
     h = hashlib.sha1()
     for nid in sorted(node_ids):
         h.update(nid.encode("utf-8"))
         h.update(b"\x00")
     h.update(f"|edges={edge_count}".encode())
+    h.update(f"|layout={LAYOUT_VERSION}".encode())
     return h.hexdigest()
 
 
@@ -1039,6 +1115,21 @@ def mount_ui(
             project=project, project_keys=project_keys, base_only=base_only
         )
         fingerprint = _graph_fingerprint(list(node_ids), edge_count)
+
+        # v4.5 pivot: kick the SERVER-SIDE layout compute (non-blocking)
+        # keyed by (scope, fingerprint). ``nodes`` is the element order
+        # the client builds its node index from, so the cached flat
+        # positions array lines up 1:1 with no client coordination. The
+        # client GETs /ui/graph-layout and polls while it computes.
+        ordered_ids = [n.id for n in nodes]
+        _pos_of = {nid: i for i, nid in enumerate(ordered_ids)}
+        edge_pairs = [
+            (_pos_of[e.src_id], _pos_of[e.dst_id])
+            for e in edges_for_render
+            if e.src_id in _pos_of and e.dst_id in _pos_of
+        ]
+        _ensure_layout_async(s, scope_key, fingerprint, ordered_ids, edge_pairs)
+
         return JSONResponse(
             {
                 "elements": elements,
@@ -1074,15 +1165,23 @@ def mount_ui(
         the client applies them with ``setPointPositions`` directly.
         """
         cached = s.get_graph_layout(scope_key)
-        if cached is None:
-            return JSONResponse({"hit": False, "reason": "no_layout"})
-        stored_fp, positions_json = cached
-        if stored_fp != fingerprint:
-            return JSONResponse({"hit": False, "reason": "stale"})
+        if cached is None or cached[0] != fingerprint:
+            # v4.5: the layout is computed server-side (kicked by
+            # /ui/graph-data). ``computing`` tells the client to keep
+            # polling (show a "computing layout" state) rather than
+            # run anything itself -- the browser is a pure renderer.
+            reason = "no_layout" if cached is None else "stale"
+            return JSONResponse(
+                {
+                    "hit": False,
+                    "computing": _layout_is_computing(scope_key, fingerprint),
+                    "reason": reason,
+                }
+            )
         try:
-            positions = json.loads(positions_json)
+            positions = json.loads(cached[1])
         except (ValueError, TypeError):
-            return JSONResponse({"hit": False, "reason": "corrupt"})
+            return JSONResponse({"hit": False, "computing": False, "reason": "corrupt"})
         return JSONResponse({"hit": True, "positions": positions})
 
     @app.put("/ui/graph-layout")
