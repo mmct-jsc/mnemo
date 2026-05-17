@@ -1,6 +1,6 @@
 [project]
 name = "mnemo"
-version = "4.5.1"
+version = "4.5.2"
 description = "Local-first knowledge memory system for Claude Code"
 # README lives at repo root, not inside the daemon package; see
 # https://github.com/mmct-jsc/mnemo for the full docs.

@@ -2,6 +2,47 @@
 
 All notable changes to mnemo are documented here.
 
+## [4.5.2] - 2026-05-17
+
+**The Nebula comes alive.** User live-review of v4.5.1: the layout
+was correct but the render was static + flat -- "only circle shape
+and straight edges", "no moving like its actually living", "drag make
+all edge disappear", "highlight node only node no edge", "make it
+more NEBULA". v4.5.2 makes it a living deep-space nebula WITHOUT
+touching the (correct) deterministic server layout.
+
+### Added
+- **Living motion.** The whole field gently FLOATS via a bounded
+  camera Lissajous around the auto-fit pose (one cheap GPU transform
+  per frame -- smooth at any node count) and every star TWINKLES via
+  a per-node size pulse on its own golden-angle phase. Architecture
+  note: sigma's nodeReducer does NOT render an overridden x/y
+  (verified live -- a +400 offset moved nothing), and mutating 11k
+  graph positions per frame pegs the main thread (the "1fps" jank);
+  so motion is the camera + the one reducer attribute sigma honors
+  (size). A single rAF loop (`_startLife`/`_stopLife`), paused when
+  the tab is hidden, cancelled on reload/destroy.
+- **Cosmic rendering.** Nodes render as soft anti-aliased star
+  POINTS (`NodePointProgram`) and edges as gently curved luminous
+  FILAMENTS (`EdgeCurveProgram`, per-edge curvature) -- not flat
+  circles + straight lines. Both programs are already in the
+  vendored sigma bundle (no new dependency).
+
+### Fixed
+- **Edges stay while dragging** (`hideEdgesOnMove:false`) -- the
+  reported "drag make all edge disappear"; the camera float + twinkle
+  also keep the rest of the nebula lively during a drag.
+- **Highlight reads on edges too.** Selecting / hovering a node now
+  IGNITES its incident filaments (accent glow, thicker, on top) --
+  the reported "highlight node only node no edge"; the rest dims to
+  cosmic dust (never hidden).
+
+### Tests
+- `test_nebula_renderer.py` extended with the living-nebula contract
+  (camera float + bounded range, size twinkle, star/filament
+  programs, edges-stay-on-drag, edge-ignite, NO per-frame full-graph
+  mutation). Full suite green; ruff + format clean.
+
 ## [4.5.1] - 2026-05-17
 
 **Nebula render fix: the v4.5.0 sigma layout was a mess; the layout
