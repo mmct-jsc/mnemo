@@ -2,6 +2,62 @@
 
 All notable changes to mnemo are documented here.
 
+## [4.5.3] - 2026-05-17
+
+**Crisp + alive.** User live-review of v4.5.2: "lag web, move lag,
+cannot zoom, click node does not zoom, cannot drag, weird layout".
+Root-caused via systematic-debugging -- the v4.5.2 "life" was a
+perpetual rAF loop that every frame drove `cam.setState()` (it FOUGHT
+every user zoom/pan/click -- stomped within 16ms) and `sig.refresh()`
+(a full re-render of ~11k star points + ~15.5k curved edges EVERY
+frame == the page lag + dead drag). That was the third "living
+motion" mechanism to hit a wall (reducer-x ignored -> graph-mutation
+pegs -> camera-float fights+lags) -- the systematic-debugging
+3-failed-fixes architecture gate. With the user's chosen direction
+("cosmic atmosphere + crisp graph") the motion moves entirely OFF the
+renderer.
+
+### Fixed
+- **The graph renders strictly ON DEMAND.** The camera-float / per-
+  frame-refresh rAF loop is deleted: sigma repaints only on a real
+  interaction, so an idle nebula costs ZERO and zoom / pan / click-
+  center / drag are crisp (the camera is the user's again -- nothing
+  stomps it every 16ms).
+- **De-mandala'd layout.** The small-component / singleton halo was a
+  perfect phyllotaxis lattice that rendered as a too-regular geometric
+  "mandala" ring ("placement is not good and lively / weird layout").
+  It is now broken by a deterministic, independent-seed radial +
+  angular jitter into an irregular organic dust field -- still
+  byte-deterministic + bounded (`LAYOUT_VERSION` -> `server-fr-4`, so
+  the cache self-invalidates and recomputes once).
+
+### Added
+- **Living deep-space atmosphere -- pure CSS, GPU-composited, ZERO JS
+  and ZERO graph re-render.** Behind sigma's transparent canvas: a
+  slow drifting nebula-gas layer + a parallax starfield twinkling on
+  its own beat (`@keyframes nebula-drift` / `nebula-twinkle` /
+  `nebula-parallax`, all `translate3d`/opacity -- compositor only;
+  frozen under `prefers-reduced-motion`). The "alive" no longer
+  touches the renderer.
+- **On-demand selected-star pulse.** A single DOM overlay
+  (`#nebula-pulse`) parked on the selected node via sigma's own
+  `afterRender` event + `graphToViewport` (no rAF of our own); the
+  beat/ripple is pure CSS. It tracks the star through a camera fly
+  with zero extra rendering.
+
+### Tests
+- `test_nebula_renderer.py`: the v4.5.2 living-nebula guards EVOLVED
+  to the v4.5.3 contract -- `test_nebula_has_no_camera_fight_or_
+  perframe_rerender` (cam.setState / rAF-tick / twinkle clock / phase
+  all ABSENT) and `test_nebula_is_alive_via_ondemand_pulse_and_css_
+  atmosphere` (afterRender pulse + 3 CSS atmosphere keyframes). New
+  `test_halo_is_organic_not_a_phyllotaxis_mandala` in
+  `test_graph_layout_server.py` (radius-vs-order inversions prove the
+  lattice is broken). Full suite 1233 pass / 2 skip; ruff + format
+  clean. Verified end-to-end on the real 11057-node scope: the
+  `server-fr-4` cache miss recomputed to 22114 finite positions,
+  symmetric + bounded (maxR ~2.6x core, the analytic design bound).
+
 ## [4.5.2] - 2026-05-17
 
 **The Nebula comes alive.** User live-review of v4.5.1: the layout
