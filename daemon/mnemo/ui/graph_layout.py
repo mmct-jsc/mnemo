@@ -178,7 +178,11 @@ def _grid_pack(
     if n == 0:
         return []
     inner = max(anchor_r, 1.0)
-    outer = max(inner * 2.35, inner + 1.0)  # ~2.6x giant_r total
+    # TIGHT band hugging the giant (was *2.35 -> a wide scattered
+    # field of ~2000 dots that visually dominated the whole frame and
+    # read as "bad layout"). *1.55 -> a dense tidy dust halo; the
+    # giant component now dominates the view as intended.
+    outer = max(inner * 1.55, inner + 1.0)
     golden = math.pi * (3.0 - math.sqrt(5.0))
     placed: list[tuple[float, float]] = []
     for k in range(n):

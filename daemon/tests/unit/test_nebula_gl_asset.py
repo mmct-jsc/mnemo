@@ -28,7 +28,7 @@ def test_nebula_gl_surface() -> None:
         "hover",
         "destroy",
         "gl_FragColor",
-        "fwidth",  # SDF anti-aliasing
+        "smoothstep",  # extension-free SDF antialiasing
         "regl.clear",  # opaque dark themed clear every frame (gl.clearColor)
         "requestAnimationFrame",
         "cancelAnimationFrame",  # idle == zero cost
@@ -38,6 +38,23 @@ def test_nebula_gl_surface() -> None:
     low = src.lower()
     assert "sigma" not in low, "v4.6 renderer must not reference sigma"
     assert "graphology" not in low, "v4.6 renderer must not reference graphology"
+    # fwidth/dFdx need OES_standard_derivatives on a WebGL1 context;
+    # without it the shader fails to compile -> invalid program ->
+    # GL_INVALID_OPERATION every frame -> black canvas (the proven
+    # v4.6 "black" root cause). The SDF must stay extension-free.
+    assert "fwidth" not in src, (
+        "fwidth/derivatives must NOT be used (WebGL1 needs an "
+        "extension; its absence = invalid program = black render)"
+    )
+    assert "dFdx" not in src and "dFdy" not in src, (
+        "no screen-space derivatives -- extension-free SDF only"
+    )
+    # the instanced-edge GL_INVALID_OPERATION trap must not return:
+    # edges are a non-instanced LINES draw (no divisor on a buffer).
+    assert "divisor" not in src, (
+        "edges must be a non-instanced LINES draw (the instanced "
+        "t:[0,1]+divisor setup raised GL_INVALID_OPERATION every frame)"
+    )
 
 
 def test_nebula_gl_has_no_stub_placeholders() -> None:
