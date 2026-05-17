@@ -62,7 +62,7 @@
             <span class="name">{{ n.name }}</span>
             {% if n.project_key %}<span class="proj">{{ n.project_key }}</span>{% endif %}
           </a>
-          {% if n.description %}<p class="desc">{{ n.description }}</p>{% endif %}
+          {% if n.description %}<p class="desc u-clamp">{{ n.description }}</p>{% endif %}
         </li>
       {% endfor %}
     </ul>

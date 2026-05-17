@@ -20,7 +20,7 @@
         <span class="badge type-{{ h.type }}" style="--type-color: {{ type_colors.get(h.type, type_color_fallback) }};">{{ h.type | replace('memory_','') | replace('_',' ') }}</span>
         <span class="name">{{ h.name }}</span>
       </a>
-      {% if h.description %}<p class="desc">{{ h.description }}</p>{% endif %}
+      {% if h.description %}<p class="desc u-clamp">{{ h.description }}</p>{% endif %}
       {% if h.body %}
         {# Type-aware body preview. mnemoRenderBody picks Prism syntax
            highlighting for code_* nodes, marked markdown for memory_*
