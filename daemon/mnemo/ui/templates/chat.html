@@ -80,7 +80,21 @@
             </template>
 
             <template x-if="m.role === 'user'">
-              <div class="bubble-user" x-text="m.content.text"></div>
+              <div class="user-body">
+                <div class="bubble-user" x-text="m.content.text"></div>
+                <!-- v4.4.1: users can copy their OWN messages too
+                     (same copyText() + .msg-copy as the assistant). -->
+                <div class="msg-tools">
+                  <button class="msg-copy" type="button"
+                          @click="copyText(m.content.text || '')"
+                          title="Copy message" aria-label="Copy message">
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none"
+                         stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                         stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                    <span>Copy</span>
+                  </button>
+                </div>
+              </div>
             </template>
 
             <template x-if="m.role === 'assistant' && (m.content.text || (m.content.citations||[]).length)">
@@ -316,6 +330,12 @@
   @keyframes turn-in { from { opacity: 0; transform: translateY(8px); } }
 
   .turn-user { display: flex; justify-content: flex-end; }
+  /* v4.4.1: column wrapper so the copy affordance sits under the
+     user bubble, right-aligned + hover-revealed like the assistant. */
+  .user-body { display: flex; flex-direction: column; align-items: flex-end;
+    min-width: 0; max-width: 80%; }
+  .user-body .bubble-user { max-width: 100%; }
+  .user-body .msg-tools { justify-content: flex-end; }
   .bubble-user { background: var(--panel); border: 1px solid var(--border-soft);
     border-radius: 14px 14px 4px 14px; padding: .7rem 1rem; max-width: 80%;
     white-space: pre-wrap; line-height: 1.55; }
