@@ -85,8 +85,13 @@ def _layout_giant(
     eb = np.fromiter((e[1] for e in gedges), dtype=np.int64, count=len(gedges))
 
     # Scale-free tuning: the ideal edge length k grows with area/node.
+    # k*4 (was *2) => longer springs => the giant SPREADS into a
+    # readable nebula instead of collapsing into a hot central blob
+    # (the "too bright" core: ~944 node-centers were landing in a
+    # 60px box; FR was over-contracted -- ratio 0.15 is tighter than
+    # readable, ~0.35-0.5 is the sweet spot).
     area = _R_CORE * _R_CORE
-    k = math.sqrt(area / g) * 2.0
+    k = math.sqrt(area / g) * 4.0
     k2 = k * k
     kk = min(_KNN, g - 1)
 
@@ -110,9 +115,12 @@ def _layout_giant(
         np.add.at(disp, ea, -fa)
         np.add.at(disp, eb, fa)
 
-        # --- mild gravity toward the centroid (cohesion) ---
+        # --- very weak gravity toward the centroid (cohesion only) ---
+        # 0.004 (was 0.012): just enough to keep disconnected-within-
+        # giant stragglers from drifting, NOT enough to collapse the
+        # whole component onto its centroid (the over-bright knot).
         centroid = gpos.mean(axis=0)
-        disp += (centroid - gpos) * 0.012 * (np.linalg.norm(gpos - centroid, axis=1) / k)[:, None]
+        disp += (centroid - gpos) * 0.004 * (np.linalg.norm(gpos - centroid, axis=1) / k)[:, None]
 
         # --- cooling: bounded step, decaying over the run ---
         temp = _R_CORE * 0.10 * (1.0 - it / _GIANT_ITERS) + 1.0
@@ -120,10 +128,15 @@ def _layout_giant(
         step = np.minimum(dlen, temp)
         gpos += disp / dlen[:, None] * step[:, None]
 
-    # normalise: centre at origin, scale to ~_R_CORE radius.
+    # Normalise: centre at origin, then scale so the 95th-percentile
+    # radius == _R_CORE. Scaling by the MAX let a few outliers define
+    # the scale while the dense bulk stayed tiny (the blob); the p95
+    # makes the BULK of the giant fill the core disc -> nodes are
+    # individually resolvable, the structure reads.
     gpos -= gpos.mean(axis=0)
-    rmax = float(np.linalg.norm(gpos, axis=1).max()) or 1.0
-    gpos *= _R_CORE / rmax
+    radii = np.linalg.norm(gpos, axis=1)
+    r95 = float(np.percentile(radii, 95)) or 1.0
+    gpos *= _R_CORE / r95
     return gpos
 
 
