@@ -4299,6 +4299,11 @@ dl.meta dd { margin: 0; color: var(--fg); min-width: 0; overflow-wrap: anywhere;
 /* C1.R shared mobile-panel affordances (both full-window shells,
    single-source). The toggle bar + scrim only exist < --bp-md; the
    desktop 3-panel layouts never see them. */
+/* v4.4.1: a refined SEGMENTED CONTROL, not two floating bordered
+   pills with a stray inconsistent glyph (the v4.4.0 review found
+   "Chats / Cite" + "Tree / Detail" weird). One inset track, the
+   active segment filled with --accent-soft. C1-token, dark-theme,
+   single-source for BOTH shells (chat #6 + nebula #8). */
 .mpanel-bar {
   display: none;
 }
@@ -4306,30 +4311,29 @@ dl.meta dd { margin: 0; color: var(--fg); min-width: 0; overflow-wrap: anywhere;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 0.35rem;
-  min-height: 44px; /* C1.R polish: >= 44px touch target */
-  padding: 0.35rem 0.9rem;
-  background: var(--panel-2);
-  border: 1px solid var(--border);
+  min-height: 38px;
+  padding: 0 0.95rem;
+  background: transparent;
+  border: 0;
   border-radius: var(--radius-pill);
-  color: var(--fg);
+  color: var(--fg-muted);
   font: inherit;
-  font-size: 0.8rem;
+  font-size: 0.82rem;
+  font-weight: 500;
+  white-space: nowrap;
   cursor: pointer;
   transition: var(--transition);
 }
 .mpanel-toggle:hover {
-  border-color: var(--accent);
-  color: var(--accent);
+  color: var(--fg);
 }
 .mpanel-toggle:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 .mpanel-toggle.active {
-  border-color: var(--accent);
-  color: var(--accent);
   background: var(--accent-soft);
+  color: var(--accent);
 }
 .mpanel-scrim {
   position: fixed;
@@ -4345,10 +4349,17 @@ dl.meta dd { margin: 0; color: var(--fg); min-width: 0; overflow-wrap: anywhere;
   }
 }
 @media (max-width: 60rem) {
+  /* the inset segmented "track" -- compact, left-aligned, hugs its
+     two segments (not a full-width 2-button bar). */
   .mpanel-bar {
-    display: flex;
-    gap: 0.5rem;
-    align-items: center;
+    display: inline-flex;
+    align-self: flex-start;
+    gap: 2px;
+    margin: 0.55rem 0 0.3rem;
+    padding: 3px;
+    background: var(--panel-2);
+    border: 1px solid var(--border-soft);
+    border-radius: var(--radius-pill);
   }
 }
 
