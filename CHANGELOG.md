@@ -2,6 +2,32 @@
 
 All notable changes to mnemo are documented here.
 
+## [4.3.1] - 2026-05-17
+
+**Patch: audit hit rows no longer blow out the page width.**
+
+### Fixed
+- `/audit-page`: expanding a query's hits could extend the page width
+  horizontally instead of truncating. Root cause (not v4.x -- a
+  pre-existing latent bug, triggered by a long-description node
+  ranking in a logged query): `.query-log` and `.query details
+  ul.hits` used implicit `auto` grid columns, which size to
+  MAX-CONTENT; the deeply-nested `.hit-desc` has `white-space:nowrap`,
+  so a long node description propagated up the grid/flex chain and
+  forced the document ~5300px wide. The v2.6.0 `.hit-desc` ellipsis
+  never engaged because no ancestor imposed a constrained width. Fix:
+  `grid-template-columns: minmax(0, 1fr)` on both audit grids +
+  `min-width: 0` on the `.query` / `.hit-row` grid items, so the
+  tracks shrink below max-content and the existing
+  `overflow:hidden;text-overflow:ellipsis` truncates to fit.
+  Live-verified (docSW 5321 -> 1270 at a 1270 viewport; `.hit-desc`
+  4663 -> 313px, ellipsis engaged).
+
+### Tests
+- `test_design_system_contract.py::test_audit_grids_constrain_long_content`
+  -- a grep guard (mirrors the C1 contract-test style) so the
+  implicit-`auto`-grid blowout cannot be reintroduced silently.
+
 ## [4.3.0] - 2026-05-17
 
 **C3 Chat Surface contract + the feature backlog.** Final v4.x
