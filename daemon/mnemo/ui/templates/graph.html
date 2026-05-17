@@ -1,37 +1,31 @@
 {% extends "base.html" %}
 {% block title %} - Nebula{% endblock %}
 {% block head_extra %}
-<!-- v2.6.2: Nebula renders on Cosmograph -- a GPU force-simulation
-     graph engine. Cytoscape's canvas renderer physically could not
-     paint 10 k+ sharp nodes per frame (proven across 3 measured
-     tuning attempts in v2.6.1), forcing a 2 k degree cap that
-     misled the future v3 chat companion + broke tree navigation.
-     Cosmograph runs the many-body + link-spring simulation on the
-     GPU and holds 60 fps at 10 k-1 M nodes -- the organic drifting
-     point cloud IS the "nebula" the design asked for. Loaded as a
-     native ESM module from a CDN (no Node build step -- same
-     delivery model as the old cytoscape <script src>). The module
-     publishes the API on window + fires `cosmograph:ready` so the
-     classic Alpine factory below can await it. -->
-<script type="module">
-  // @cosmos.gl/graph is the lean GPU graph engine that powers
-  // Cosmograph. We use it directly (NOT the @cosmograph/cosmograph
-  // wrapper, which drags in duckdb-wasm + supabase + mosaic -- multi-
-  // MB and wrong for a local-first tool). This bundle is just
-  // luma.gl (WebGL) + d3 math. Low-level API: typed-array buffers,
-  // GPU force simulation, selection + camera helpers.
-  import { Graph }
-    from 'https://esm.sh/@cosmos.gl/graph@3.0.0-beta.8';
-  window.__CosmographAPI = { Graph };
-  window.dispatchEvent(new Event('cosmograph:ready'));
-</script>
+<!-- v4.5: Nebula renders on sigma.js v3 + graphology (vendored, no
+     CDN runtime dependency, no Node build). This REPLACES the prior
+     cosmos.gl GPU engine outright. That renderer had a documented
+     CLOSED ceiling (reference_cosmos_gl_nebula TOMBSTONE -- gotcha
+     31): it could not do stable layout + smooth camera + node-
+     highlight + full interaction at once, and every attempt to wire a
+     highlight listener re-triggered the documented converge-and-stop
+     freeze. Per the TOMBSTONE rule we do NOT re-attempt or re-tune
+     that engine -- we swap it. sigma's nodeReducer/edgeReducer make a
+     highlight a pure
+     data change (no renderer-internal-state trap), and click / hover /
+     drag / camera are first-class events. The bundles load as plain
+     classic <script> in <head> so window.Sigma / window.graphology /
+     window.graphologyLibrary are defined before Alpine's deferred
+     init() runs nebula(). -->
+<script src="/static/vendor/graphology.umd.min.js"></script>
+<script src="/static/vendor/graphology-library.min.js"></script>
+<script src="/static/vendor/sigma.min.js"></script>
 <!-- Prism is loaded site-wide from base.html; no per-page setup. -->
 {% endblock %}
 {% block layout %}
 <main class="full">
   <!-- Alpine auto-invokes init() when it lives on the x-data object,
        so no explicit x-init="init()" -- adding it would run init()
-       twice and force-render the fcose layout twice on first load. -->
+       twice (feedback_alpine_double_init). -->
   <section class="nebula-shell" x-data="nebula()"
            :class="{ 'mp-tree': mPanel === 'tree', 'mp-detail': mPanel === 'detail' }">
 
@@ -61,14 +55,8 @@
               x-text="contextProject"></span>
       </h3>
       {# v2.6.0 polish: context-aware empty-state copy + flat indented
-         tree renderer. The previous template only went 3 levels deep
-         which truncated trees like
-         D:/Repository/aibox-prod-all/backend/services/asset-service/src/...
-         to just the top three rungs. We now flatten the tree into
-         ``treeRows`` (each with a ``depth`` field) and let CSS pad-
-         left handle the visual indentation. Expansion state is
-         tracked in ``expandedPaths`` so any depth can collapse /
-         expand. #}
+         tree renderer. Expansion state in ``expandedPaths`` so any
+         depth can collapse / expand. #}
       <template x-if="treeRows && treeRows.length === 0 && contextBaseOnly">
         <p class="hint" style="padding:0.5rem;">
           BASE-only view -- code is never BASE-flagged.
@@ -139,30 +127,24 @@
 
     <!-- Center: canvas -->
     <div class="nebula-canvas">
-      <!-- Cosmograph mounts its WebGL canvas into this div. -->
+      <!-- sigma.js mounts its WebGL canvases into this div. sigma
+           renders node labels natively (themed), so the cosmos-era
+           absolutely-positioned DOM label overlay is GONE -- a net
+           simplification. -->
       <div id="cy-nebula"></div>
 
-      <!-- v2.6.3: DOM label overlay. cosmos.gl renders no text, so
-           we layer absolutely-positioned spans for the selected
-           node + its neighbours + the hovered node, tracked every
-           frame via spaceToScreenPosition. pointer-events:none so
-           it never blocks canvas drag / click. -->
-      <div id="nebula-labels" class="nebula-labels" aria-hidden="true"></div>
-
-      <!-- v2.6.2: loading shimmer while the GPU simulation warms
-           up (Cosmograph uploads buffers + runs the first force
-           ticks). Cleared the moment the first frame settles. -->
+      <!-- Loading shimmer while the layout computes (cache miss runs a
+           bounded forceatlas2; a cache hit clears this immediately). -->
       <div class="nebula-booting" x-show="booting" x-cloak>
         <span class="nebula-booting-orb"></span>
         <span x-text="bootMsg"></span>
       </div>
 
       <div class="nebula-hint">
-        scroll to zoom · drag to pan · click a node
+        scroll to zoom · drag to pan · drag a node · click a node
       </div>
 
-      <!-- v2.6.2: status chip -- the canvas now shows the FULL
-           graph (no cap), so this is an honest total. -->
+      <!-- Status chip -- the canvas shows the FULL graph (no cap). -->
       <div class="nebula-status">
         <span class="nebula-status-count"
               x-text="canvasTotal.toLocaleString() + ' nodes · ' + edgeTotal.toLocaleString() + ' links'"></span>
@@ -220,14 +202,10 @@
              x-text="selected.source_path"></p>
           <p class="ndesc" x-show="selected.description" x-cloak
              x-text="selected.description"></p>
-          <!-- v2.2.7: type-aware body preview via mnemoRenderBody.
-               Delegates to ``window.mnemoRenderBody`` which does the
-               three-branch decision (code_* -> Prism, commit ->
-               escaped pre, everything else -> marked markdown) AND
-               owns streaming + cancellation since v2.2.5. The
-               ``.is-code`` modifier mirrors node.html's affordance so
-               code bodies get the dark code chrome and markdown
-               bodies get the typographic md style. -->
+          <!-- type-aware body preview: renderSelectedBody() delegates
+               to window.mnemoRenderBody (code_* -> Prism, commit ->
+               escaped pre, else -> marked markdown); it owns streaming
+               + cancellation. -->
           <div x-show="selected.body" x-cloak
                class="nebula-body md-body"
                :class="{ 'is-code': bodyMode === 'code' }"
@@ -235,11 +213,8 @@
                x-effect="renderSelectedBody($refs.nebulaBody, selected.body, selected.type, selected.source_path)"></div>
 
           <h4 x-show="neighbors.length">Connections (<span x-text="neighbors.length"></span>)</h4>
-          <!-- v2.2 phase 4: neighbors render via mnemoStaggeredReveal
-               so items fade in paced (30ms between items, 180ms each)
-               instead of popping in together. The x-effect re-runs
-               when ``neighbors`` changes; renderNeighborsList cancels
-               any in-flight reveal before starting a new one. -->
+          <!-- neighbors render via mnemoStaggeredReveal so items fade
+               in paced instead of popping in together. -->
           <ul class="nlist" x-ref="nlist"
               x-effect="renderNeighborsList($refs.nlist, neighbors)"></ul>
 
@@ -295,13 +270,8 @@
                 x-show="minConfidence > 0" x-cloak
                 title="reset to 0">×</button>
       </label>
-      <!-- v2.6.2: no hops selector / layout switcher. Cosmograph
-           renders the full graph with one organic force layout;
-           clicking any node (canvas or tree) flies the camera to
-           it WITHOUT swapping to an ego-sub-graph, so there is no
-           "drill depth" to choose and no layout to pick. -->
-      <!-- Edge + label visibility toggles. Both default ON. They
-           flip Cosmograph render flags via setConfig. -->
+      <!-- Edge + label visibility toggles. Both default ON. They flip
+           sigma render flags (consumed by the reducers / setSetting). -->
       <div class="nebula-toggle-buttons">
         <button type="button"
                 class="nebula-toggle"
@@ -328,8 +298,8 @@
 <script>
 // Nebula palette: pulled from the site-wide single source
 // (daemon/mnemo/ui/palette.py, exposed via base.html as
-// window.MNEMO_TYPE_COLORS). Keeping the alias TYPE_COLORS for the
-// rest of this file so the existing call sites don't have to change.
+// window.MNEMO_TYPE_COLORS). Keeping the alias TYPE_COLORS so the
+// existing call sites don't have to change.
 const TYPE_COLORS = window.MNEMO_TYPE_COLORS || {};
 const TYPE_COLOR_FALLBACK = window.MNEMO_TYPE_COLOR_FALLBACK || '#7ee7e0';
 
@@ -356,18 +326,25 @@ const REL_COLORS = {
 
 function nebula() {
   return {
-    // --- Cosmograph + graph state ----------------------------------
-    cg: null,                    // Cosmograph instance
-    _points: [],                 // index-aligned point records
-    _idIndex: {},                // node id -> Cosmograph point index
-    _pointById: {},              // node id -> point record
+    // --- sigma.js v3 + graphology renderer state -------------------
+    sig: null,                   // Sigma instance
+    graph: null,                 // graphology Graph (sigma data model)
+    _order: [],                  // node id list in stable index order
+                                 // (the layout-cache array is index-aligned)
+    _byId: {},                   // node id -> light record
     _adj: {},                    // node id -> [{ id, rel, confidence }]
-    booting: false,              // GPU warm-up shimmer
+    _hl: null,                   // Set of companion-highlighted ids
+                                 // (null = inactive). Real graph
+                                 // highlight via the sigma nodeReducer.
+    _selId: null,                // selected node id (canvas focus)
+    _hoverId: null,              // hovered node id
+    _filterIds: null,            // Set of filter-matched ids (null = off)
+    _dragId: null,               // node being dragged
+    _theme: {},                  // resolved C1 tokens (no hardcoded color)
+    booting: false,              // layout-compute shimmer
     bootMsg: 'warming the nebula',
 
     // C1.R (v4.4): which side panel is open as a drawer < --bp-md.
-    // '' = none (canvas full-width); 'tree' | 'detail'. CSS owns the
-    // layout; this is the only state Alpine adds for the shell.
     mPanel: '',
     toggleMPanel(which) {
       this.mPanel = this.mPanel === which ? '' : which;
@@ -388,12 +365,13 @@ function nebula() {
     contextProjectKeys: null,    // active workspace.project_keys
     contextBaseOnly: false,      // true when no workspace is active
     contextWorkspaceName: null,
-    contextNodeId: null,         // ?node=<id> deep-link -> select in FULL graph
+    contextNodeId: null,         // ?node=<id> deep-link -> select
     canvasTotal: 0,              // node count (status chip)
     edgeTotal: 0,                // link count (status chip)
     _eventSource: null,
     stats: '',
     rawElements: [],
+    treeModules: [],
     edgesVisible: true,
     labelsVisible: true,
     bodyMode: 'markdown',
@@ -402,50 +380,40 @@ function nebula() {
       return TYPE_COLORS[t] || TYPE_COLOR_FALLBACK;
     },
 
-    // v2.6.4: toggle links by swapping the link-color buffer
-    // (alpha 0.78 <-> 0.0) via setLinkColors. This is a pure paint
-    // change -- it does NOT touch setConfig, which internally
-    // restarts the sim (the v2.6.3 "re-render forcely" + the
-    // measured ~480-unit re-flow on every toggle). No snapshot, no
-    // pause, no re-scatter, no blank canvas: the links just fade
-    // out / in while the nebula keeps drifting.
-    toggleEdges() {
-      this.edgesVisible = !this.edgesVisible;
-      if (this.cg && this.cg.setLinkColors && this._linkColors) {
-        try {
-          this.cg.setLinkColors(
-            this.edgesVisible ? this._linkColors : this._linkColorsOff);
-          // v2.6.6: setLinkColors only SETS isLinkColorUpdateNeeded;
-          // the perpetual sim's per-frame frame() loop does NOT
-          // consume that flag (verified: flag stays true across
-          // hundreds of frames). Only render() flushes the link
-          // colour buffer to the GPU -- without this the toggle did
-          // nothing until a full page refresh re-ran renderCanvas
-          // (which calls render()). render() "does not modify
-          // simulation state" per cosmos docs, so the never-cool
-          // sim + positions are untouched.
-          if (this.cg.render) this.cg.render();
-        } catch (_) {}
-      }
-      this._persistState();
-    },
-    // v2.6.3: labels are a DOM overlay (cosmos.gl low-level has no
-    // text). The toggle now actually drives that overlay.
-    toggleLabels() {
-      this.labelsVisible = !this.labelsVisible;
-      if (this.labelsVisible) {
-        this._scheduleLabels();
-      } else {
-        const host = document.getElementById('nebula-labels');
-        if (host) host.innerHTML = '';
-      }
-      this._persistState();
+    // Resolve the C1 design tokens once (never hardcode a color --
+    // feedback_single_source_palette). Every sigma visual derives
+    // from these + the per-type palette above.
+    _resolveTheme() {
+      const cs = getComputedStyle(document.documentElement);
+      const tok = (name, fb) => {
+        const v = (cs.getPropertyValue(name) || '').trim();
+        return v || fb;
+      };
+      this._theme = {
+        accent:     tok('--accent', '#7ee7e0'),
+        accentSoft: tok('--accent-soft', '#1f6f6a'),
+        fg:         tok('--fg', '#e6edf3'),
+        fgMuted:    tok('--fg-muted', '#9fb0c3'),
+        fgDim:      tok('--fg-dim', '#5a6b7e'),
+        borderSoft: tok('--border-soft', '#2a3340'),
+        dim:        '#3a4358',  // greyed (NOT hidden) -- the cosmos
+                                // "blur the rest" intent, kept.
+      };
     },
 
-    // v2.2.7: side-panel body render. Delegates to
-    // ``window.mnemoRenderBody`` (code_* -> Prism, commit -> escaped
-    // pre, everything else -> marked markdown). mnemoRenderBody owns
-    // streaming + cancellation since v2.2.5.
+    // '#rgb' / '#rrggbb' -> 'rgba(r,g,b,a)' (sigma takes CSS colors).
+    _rgba(hex, a) {
+      let h = (hex || '').replace('#', '').trim();
+      if (h.length === 3) h = h[0]+h[0]+h[1]+h[1]+h[2]+h[2];
+      const r = parseInt(h.slice(0, 2), 16);
+      const g = parseInt(h.slice(2, 4), 16);
+      const b = parseInt(h.slice(4, 6), 16);
+      if ([r, g, b].some(Number.isNaN)) return 'rgba(126,231,224,' + a + ')';
+      return 'rgba(' + r + ',' + g + ',' + b + ',' + a + ')';
+    },
+
+    // body render delegates to window.mnemoRenderBody (code -> Prism,
+    // commit -> escaped pre, else -> marked markdown).
     renderSelectedBody(el, body, type, sourcePath) {
       if (!el) return;
       if (!window.mnemoRenderBody) {
@@ -460,7 +428,6 @@ function nebula() {
       this.bodyMode = mode || 'markdown';
     },
 
-    // v2.2 phase 4: neighbors list staggered reveal.
     renderNeighborsList(ul, items) {
       if (!ul) return;
       if (this._neighborReveal && this._neighborReveal.cancel) {
@@ -508,22 +475,25 @@ function nebula() {
       return li;
     },
 
-    // --- Cosmograph readiness -------------------------------------
-    // The renderer is an ESM module loaded in <head>. It may resolve
-    // before OR after Alpine boots this factory, so init() awaits a
-    // promise that resolves either immediately (already on window)
-    // or on the `cosmograph:ready` event.
-    _whenCosmographReady() {
+    // --- renderer readiness ---------------------------------------
+    // The vendored bundles are classic <script> in <head> so they are
+    // parsed before Alpine's deferred bundle runs init(). Guard anyway
+    // (cheap poll) so a slow parse can't NPE the factory.
+    _whenRendererReady() {
       return new Promise((resolve, reject) => {
-        if (window.__CosmographAPI) { resolve(window.__CosmographAPI); return; }
-        const t = setTimeout(
-          () => reject(new Error('Cosmograph module failed to load')),
-          15000,
-        );
-        window.addEventListener('cosmograph:ready', () => {
-          clearTimeout(t);
-          resolve(window.__CosmographAPI);
-        }, { once: true });
+        let tries = 0;
+        const check = () => {
+          if (window.Sigma && window.graphology && window.graphologyLibrary) {
+            resolve();
+            return;
+          }
+          if (++tries > 150) {  // ~15s
+            reject(new Error('graph renderer assets not found'));
+            return;
+          }
+          setTimeout(check, 100);
+        };
+        check();
       });
     },
 
@@ -543,15 +513,16 @@ function nebula() {
       if (right && shell) shell.style.setProperty('--nebula-right', right);
 
       this._loadPersistedState();
+      this._resolveTheme();
 
       this.booting = true;
       try {
-        await this._whenCosmographReady();
+        await this._whenRendererReady();
       } catch (e) {
         this.booting = false;
         this.bootMsg = '';
         window.toast && window.toast(
-          'Graph engine failed to load (offline?). ' + e.message, 'error');
+          'Graph renderer assets not found. ' + e.message, 'error');
         return;
       }
       await this.reload();
@@ -598,6 +569,7 @@ function nebula() {
         const refresh = async () => {
           this.selected = null;
           this.neighbors = [];
+          this._selId = null;
           await this._loadWorkspaceScope();
           await this.reload();
         };
@@ -612,14 +584,12 @@ function nebula() {
         try { this._eventSource.close(); } catch (_) {}
         this._eventSource = null;
       }
-      if (this.cg) {
-        try { this.cg.destroy(); } catch (_) {}
-        this.cg = null;
+      if (this.sig) {
+        try { this.sig.kill(); } catch (_) {}
+        this.sig = null;
       }
     },
 
-    // v2.6.2: persistence is just filters + toggles now (no layout --
-    // there is only one layout).
     _loadPersistedState() {
       try {
         const minConf = parseFloat(localStorage.getItem('nebula.minConfidence'));
@@ -657,9 +627,6 @@ function nebula() {
       } else if (this.contextBaseOnly) {
         qs.set('base_only', '1');
       }
-      // v2.6.2: NO ?node=/hops. The full graph is always rendered;
-      // a ?node= deep-link is resolved client-side to a point index
-      // and the camera flies there -- we never fetch an ego-subgraph.
       let data;
       try {
         const r = await fetch('/ui/graph-data?' + qs.toString());
@@ -670,24 +637,21 @@ function nebula() {
         return;
       }
       this.rawElements = data.elements || [];
-      // tree_modules is the full module list (server-side, no cap);
-      // the canvas now also shows everything so they agree.
       this.treeModules = Array.isArray(data.tree_modules) ? data.tree_modules : [];
-      // v2.6.3: layout-cache coordination keys from the server.
+      // layout-cache coordination keys from the server (UNCHANGED
+      // contract -- the fingerprint self-invalidates on reindex).
       this._scopeKey = data.scope_key || 'global';
       this._fingerprint = data.fingerprint || '';
-      // New scope/fingerprint -> this layout hasn't been persisted yet.
       this._layoutPersisted = false;
 
       this._buildGraphModel();
 
-      // v2.6.3: try the server-side layout cache BEFORE we render.
-      // A hit means the settled force-layout for this exact graph
-      // (scope + fingerprint) is already on disk -- we apply those
-      // positions and SKIP the GPU simulation entirely (instant
-      // settled nebula, no warm-up wait). A miss / stale fingerprint
-      // (graph changed via reindex) falls back to running the sim,
-      // and we PUT the converged positions back on onSimulationEnd.
+      // Try the server-side layout cache BEFORE we render. A hit means
+      // the settled layout for this exact graph (scope + fingerprint)
+      // is on disk -- apply those positions and SKIP forceatlas2
+      // entirely (instant settled nebula). A miss / stale fingerprint
+      // (graph changed via reindex) runs a bounded forceatlas2 then
+      // PUTs the converged positions back.
       this._cachedPositions = null;
       if (this._fingerprint) {
         try {
@@ -697,28 +661,29 @@ function nebula() {
           if (lr.ok) {
             const lj = await lr.json();
             if (lj.hit && Array.isArray(lj.positions) &&
-                lj.positions.length === this._points.length * 2) {
-              this._cachedPositions = new Float32Array(lj.positions);
+                lj.positions.length === this._order.length * 2) {
+              this._cachedPositions = lj.positions;
             }
           }
-        } catch (_) { /* cache offline -- fall back to live sim */ }
+        } catch (_) { /* cache offline -- fall back to live layout */ }
       }
 
-      await this.renderCanvas();
+      this.renderCanvas();
       this.buildTree();
       this.buildTypeFilters();
       this.applyFilters();
 
-      // Deep-link: ?node=<id> selects that node WITHIN the full graph
-      // (camera fly + ring), never an ego swap.
-      if (this.contextNodeId && this._idIndex[this.contextNodeId] !== undefined) {
-        this.selectByIndex(this._idIndex[this.contextNodeId]);
+      // Deep-link: ?node=<id> selects that node WITHIN the full graph.
+      if (this.contextNodeId && this._byId[this.contextNodeId]) {
+        this.selectNode(this.contextNodeId);
       }
     },
 
-    // Split rawElements into Cosmograph point + link records and
-    // precompute the lookups the selection / neighbor paths need.
+    // Split rawElements into a graphology Graph + the lookups the
+    // selection / neighbor paths need. The data contract is unchanged;
+    // only the in-memory model differs from the cosmos build.
     _buildGraphModel() {
+      const Graph = window.graphology.Graph || window.graphology;
       const degree = {};
       for (const e of this.rawElements) {
         if (e.data.source) {
@@ -726,15 +691,14 @@ function nebula() {
           degree[e.data.target] = (degree[e.data.target] || 0) + 1;
         }
       }
-      const points = [];
-      const idIndex = {};
+      const order = [];
       const byId = {};
-      let idx = 0;
       for (const e of this.rawElements) {
-        if (e.data.id === undefined) continue;
+        if (e.data.id === undefined || e.data.source !== undefined) continue;
         const d = e.data;
+        if (byId[d.id]) continue;
         const deg = degree[d.id] || 0;
-        const rec = {
+        byId[d.id] = {
           id: d.id,
           name: d.name || d.id,
           type: d.type || 'unknown',
@@ -743,291 +707,116 @@ function nebula() {
           color: TYPE_COLORS[d.type] || TYPE_COLOR_FALLBACK,
           // gentle log-ish size ramp: hubs read bigger without
           // swamping the field.
-          size: 2 + Math.min(9, Math.sqrt(deg) * 1.4),
+          size: 3 + Math.min(14, Math.sqrt(deg) * 1.8),
           deg: deg,
         };
-        idIndex[d.id] = idx;
-        byId[d.id] = rec;
-        points.push(rec);
-        idx += 1;
+        order.push(d.id);
       }
-      const linkPairs = [];      // [srcIdx, tgtIdx, ...] for the GPU
-      const linkRels = [];       // relation per link (for per-edge color)
+
+      // Collapse parallel relations for the CANVAS (keep the strongest
+      // by confidence for the edge color); the side-panel neighbor
+      // list still uses the FULL adjacency below.
       const adj = {};
-      let linkCount = 0;
+      const bestPair = {};
       for (const e of this.rawElements) {
         if (e.data.source === undefined) continue;
         const s = e.data.source, t = e.data.target;
-        if (idIndex[s] === undefined || idIndex[t] === undefined) continue;
+        if (!byId[s] || !byId[t] || s === t) continue;
         const rel = e.data.relation || 'related';
         const conf = e.data.confidence ?? 1.0;
-        linkPairs.push(idIndex[s], idIndex[t]);
-        linkRels.push(rel);
-        linkCount += 1;
         (adj[s] = adj[s] || []).push({ id: t, rel, confidence: conf });
         (adj[t] = adj[t] || []).push({ id: s, rel, confidence: conf });
+        const key = s < t ? s + ' ' + t : t + ' ' + s;
+        const prev = bestPair[key];
+        if (!prev || conf > prev.conf) {
+          bestPair[key] = { s, t, rel, conf };
+        }
       }
-      // v2.6.3: per-edge RGBA so the relation palette (calls /
-      // routes_to / imports / ...) actually reads on the canvas.
-      // The old single faint teal default made edges "barely seen".
-      const linkColors = new Float32Array(linkCount * 4);
-      const linkColorsOff = new Float32Array(linkCount * 4);
-      for (let i = 0; i < linkCount; i++) {
-        const rgba = this._hexToRGBA(REL_COLORS[linkRels[i]] || '#8aa6c8');
-        linkColors[i * 4]     = rgba[0];
-        linkColors[i * 4 + 1] = rgba[1];
-        linkColors[i * 4 + 2] = rgba[2];
-        linkColors[i * 4 + 3] = 0.78;  // visible but not overpowering
-        // v2.6.4: the "edges off" state is the SAME buffer with
-        // alpha 0. toggleEdges swaps between these via
-        // setLinkColors -- a pure paint change, NO setConfig (which
-        // internally re-energises the sim and caused a ~480-unit
-        // re-flow on every toggle).
-        linkColorsOff[i * 4]     = rgba[0];
-        linkColorsOff[i * 4 + 1] = rgba[1];
-        linkColorsOff[i * 4 + 2] = rgba[2];
-        linkColorsOff[i * 4 + 3] = 0.0;
-      }
-      this._linkColors = linkColors;
-      this._linkColorsOff = linkColorsOff;
 
-      // --- GPU typed-array buffers (@cosmos.gl/graph) --------------
-      const n = points.length;
-      const positions = new Float32Array(n * 2);
-      const colors = new Float32Array(n * 4);
-      const sizes = new Float32Array(n);
-      // Seed positions in a disc so the force sim relaxes outward
-      // into the organic "nebula" cloud rather than from a point.
-      const R = Math.max(200, Math.sqrt(n) * 22);
+      // Seed positions in a disc so a forceatlas2 fallback relaxes
+      // outward into the organic "nebula" cloud (a cache hit overwrites
+      // these before the first paint).
+      const n = order.length;
+      const R = Math.max(200, Math.sqrt(Math.max(1, n)) * 22);
+      const graph = new Graph({ type: 'undirected' });
       for (let i = 0; i < n; i++) {
+        const id = order[i];
+        const rec = byId[id];
         const ang = Math.random() * Math.PI * 2;
         const rad = Math.sqrt(Math.random()) * R;
-        positions[i * 2]     = Math.cos(ang) * rad;
-        positions[i * 2 + 1] = Math.sin(ang) * rad;
-        const rgba = this._hexToRGBA(points[i].color);
-        colors[i * 4]     = rgba[0];
-        colors[i * 4 + 1] = rgba[1];
-        colors[i * 4 + 2] = rgba[2];
-        colors[i * 4 + 3] = rgba[3];
-        sizes[i] = points[i].size;
+        graph.addNode(id, {
+          x: Math.cos(ang) * rad,
+          y: Math.sin(ang) * rad,
+          size: rec.size,
+          label: rec.name,
+          color: rec.color,
+          ntype: rec.type,        // our category (sigma reserves `type`
+                                  // for the node program).
+        });
+      }
+      let linkCount = 0;
+      for (const k in bestPair) {
+        const p = bestPair[k];
+        if (graph.hasEdge(p.s, p.t)) continue;
+        graph.addEdgeWithKey(k, p.s, p.t, {
+          color: this._rgba(REL_COLORS[p.rel] || '#8aa6c8', 0.5),
+          baseColor: REL_COLORS[p.rel] || '#8aa6c8',
+          size: 1,
+          rel: p.rel,
+        });
+        linkCount += 1;
       }
 
-      this._points = points;
-      this._idIndex = idIndex;
-      this._pointById = byId;
+      this.graph = graph;
+      this._order = order;
+      this._byId = byId;
       this._adj = adj;
-      this._positions = positions;
-      this._colors = colors;
-      this._sizes = sizes;
-      this._linkArray = new Float32Array(linkPairs);
       this.canvasTotal = n;
       this.edgeTotal = linkCount;
       this.stats = n + ' nodes / ' + linkCount + ' links';
     },
 
-    // '#rrggbb' (or shorthand) -> [r, g, b, a] in 0..1 for the GPU.
-    _hexToRGBA(hex) {
-      let h = (hex || '').replace('#', '').trim();
-      if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
-      const r = parseInt(h.slice(0, 2), 16) / 255;
-      const g = parseInt(h.slice(2, 4), 16) / 255;
-      const b = parseInt(h.slice(4, 6), 16) / 255;
-      if (Number.isNaN(r) || Number.isNaN(g) || Number.isNaN(b)) {
-        return [0.49, 0.91, 0.88, 1];  // TYPE_COLOR_FALLBACK-ish
-      }
-      return [r, g, b, 1];
-    },
-
-    async renderCanvas() {
-      const { Graph } = window.__CosmographAPI;
-      const container = document.getElementById('cy-nebula');
-      if (!container) return;
-
-      if (this.cg) {
-        try { this.cg.destroy && this.cg.destroy(); } catch (_) {}
-        this.cg = null;
-      }
-      container.innerHTML = '';
-
-      if (this._points.length === 0) {
-        this.booting = false;
-        return;
-      }
-
-      // v2.6.3: cache HIT -> apply the persisted layout as the WARM
-      // START (skips the expensive cold convergence from random
-      // scatter). v2.6.4: a hit no longer FREEZES the graph -- the
-      // simulation stays perpetually alive at low energy so the
-      // nebula keeps gently drifting (user: "nodes persist moving")
-      // AND the render loop never halts (cosmos stops repainting a
-      // cooled graph, which is what made a later edge-toggle
-      // "disappear completely"). cache MISS -> full convergence,
-      // then PUT the layout so the NEXT visit is a warm start.
+    // Apply cached positions (hit) or run a BOUNDED forceatlas2 then
+    // freeze (miss). NO perpetual simulation -- sigma just paints; the
+    // layout is computed once and settled (the cosmos converge-and-
+    // stop lesson, kept: a livelier graph comes from interaction, not
+    // a never-cool sim).
+    _layout() {
       const cached = this._cachedPositions;
-      const useCache = cached && cached.length === this._points.length * 2;
-
-      this.booting = !useCache;
-      this.bootMsg = useCache
-        ? ''
-        : 'forming ' + this._points.length.toLocaleString() + ' nodes';
-
-      const config = {
-        // -- Nebula aesthetic: transparent so the .nebula-shell
-        //    starfield CSS shows through; glowing points greyed
-        //    (NOT hidden) on focus.
-        backgroundColor: [0, 0, 0, 0],
-        spaceSize: 8192,
-        // v2.6.3: 0.12 read as "everything else disappeared". 0.42
-        // keeps the rest of the nebula clearly visible but de-
-        // emphasised -- a blur, like the old cytoscape .dim.
-        pointGreyoutOpacity: 0.42,
-        pointGreyoutColor: '#3a4358',
-        pointOpacity: 0.95,
-        pointSizeScale: 1.0,
-        scalePointsOnZoom: true,
-        renderLinks: this.edgesVisible,
-        // v2.6.3: per-edge colors come from setLinkColors() below;
-        // these globals are the floor. Brighter + wider so the web
-        // is actually visible (the old 0.11-alpha hairline was
-        // "barely seen").
-        linkColor: 'rgba(150, 180, 220, 0.45)',
-        linkOpacity: 0.9,
-        linkWidth: 1.6,
-        linkWidthScale: 1.0,
-        linkArrows: false,
-        curvedLinks: true,
-        // v2.6.4 issue 3: cosmos fades links by camera distance --
-        // default linkVisibilityDistanceRange [50,150] +
-        // linkVisibilityMinTransparency 0.25 means edges drop to
-        // 25% opacity when you ZOOM IN (camera close), full only
-        // when zoomed out. That's exactly "edge barely seen when
-        // zoomed in". Widen the range to effectively-never-fade and
-        // raise the floor so edges read at EVERY zoom level; scale
-        // link width with zoom so they stay proportional to nodes.
-        linkVisibilityDistanceRange: [1, 1000000],
-        linkVisibilityMinTransparency: 0.9,
-        scaleLinksOnZoom: true,
-        renderHoveredPointRing: true,
-        hoveredPointRingColor: '#7ee7e0',
-        focusedPointRingColor: '#7ee7e0',
-        // -- Organic force simulation. v2.6.4: ALWAYS enabled (even
-        //    on a cache hit). cosmos halts its rAF render loop the
-        //    moment the sim is inactive -- a halted loop is why the
-        //    graph "stopped moving" AND why a subsequent toggle
-        //    "disappeared" (no live frame to repaint into). The
-        //    PERPETUAL-MOTION mechanism is the heartbeat below
-        //    (tiny periodic alpha), NOT a slow decay -- decay stays
-        //    moderate so the COLD convergence forms a good layout
-        //    fast enough to cache (the 7 s persist snapshot). Gentle
-        //    forces + heavy friction so the perpetual drift is calm,
-        //    not a re-scatter.
-        // v2.6.4: NEVER-COOL SIM + CACHED SEED (user-chosen).
-        // cosmos.gl is converge-and-stop: it halts its rAF render
-        // loop the instant the simulation cools, which is why the
-        // nebula "stopped moving" and a later toggle could "vanish"
-        // (no live frame). Energy-injecting a COOLED sim never
-        // worked (4 measured attempts). The fix is to never let it
-        // cool: simulationDecay ~= infinity keeps alpha hot for the
-        // whole session -> the loop stays alive -> perpetual gentle
-        // motion. The cached layout is fed as the SEED (not random
-        // scatter) so load is still fast AND we're already near
-        // equilibrium, so "hot" forces only produce a calm orbital
-        // drift around the cached arrangement -- not a re-scatter.
-        // Runs on BOTH hit + miss (always alive).
-        enableSimulation: true,
-        simulationGravity: 0.12,
-        simulationCenter: 0.45,
-        simulationRepulsion: 0.9,
-        simulationRepulsionTheta: 1.15,
-        simulationLinkSpring: 0.55,
-        simulationLinkDistance: 14,
-        // Heavier friction so the never-cooling sim is a slow calm
-        // drift, not a jitter.
-        simulationFriction: 0.9,
-        // ~1e9: alpha decays so slowly it's effectively constant
-        // for any realistic session -> the render loop never stops.
-        simulationDecay: 1000000000,
-        onClick: (index) => {
-          if (index === undefined || index === null) this.deselect();
-          else this.selectByIndex(index);
-        },
-        onPointMouseOver: (index) => {
-          this._hoverIdx = index;
-          this._scheduleLabels();
-        },
-        onPointMouseOut: () => {
-          this._hoverIdx = null;
-          this._scheduleLabels();
-        },
-        onSimulationEnd: () => {
-          // With ~infinite decay this effectively never fires; kept
-          // as a belt-and-braces persist path if cosmos ever does
-          // declare the sim ended.
-          this.booting = false;
-          this._persistLayout();
-          this._scheduleLabels();
-        },
-      };
-
-      try {
-        // cosmos.gl v3: the constructor IGNORES a config argument
-        // (verified -- passing it leaves every sim param at default,
-        // points collapse coincident at space-center where repulsion
-        // has no direction and never separate). Config MUST go
-        // through setConfig() after construction.
-        this.cg = new Graph(container);
-        this.cg.setConfig(config);
-        // dontRescale=true on the cached path so the persisted
-        // coordinate space is reproduced exactly (no re-fit jump).
-        this.cg.setPointPositions(useCache ? cached : this._positions, !!useCache);
-        this.cg.setPointColors(this._colors);
-        this.cg.setPointSizes(this._sizes);
-        if (this._linkArray.length) {
-          this.cg.setLinks(this._linkArray);
-          if (this._linkColors && this.cg.setLinkColors) {
-            this.cg.setLinkColors(this._linkColors);
-          }
+      const useCache = cached && cached.length === this._order.length * 2;
+      if (useCache) {
+        for (let i = 0; i < this._order.length; i++) {
+          const id = this._order[i];
+          this.graph.setNodeAttribute(id, 'x', cached[i * 2]);
+          this.graph.setNodeAttribute(id, 'y', cached[i * 2 + 1]);
         }
-        this.cg.render();
-        if (this.cg.start) {
-          // HIT: cached seed is near-equilibrium -> a low alpha is
-          // enough for perpetual gentle drift without re-scatter.
-          // MISS: full energy to converge from the random seed.
-          this.cg.start(useCache ? 0.35 : 1);
-        }
-        if (useCache) {
-          this.booting = false;
-          this._scheduleLabels();
-        }
-      } catch (e) {
         this.booting = false;
-        window.toast && window.toast('Graph render failed: ' + e, 'error');
         return;
       }
-
-      // MISS: ~7 s in, the cold convergence has shaped a good
-      // layout -- persist that snapshot as the warm seed for next
-      // time. We do NOT pause: the never-cool sim keeps the nebula
-      // alive perpetually after convergence too.
-      if (!useCache) {
-        setTimeout(() => {
-          if (!this.cg) return;
-          this.booting = false;
-          try { this.cg.fitView(700); } catch (_) {}
-          this._persistLayout();
-          this._scheduleLabels();
-        }, 7000);
-      }
+      // Cache miss: bounded forceatlas2 (iteration cap scales DOWN
+      // with node count so a huge scope can't peg the CPU), then
+      // freeze + persist so the next visit is an instant cache hit.
+      const FA2 = window.graphologyLibrary.layoutForceAtlas2;
+      const n = this._order.length;
+      const iterations = n > 6000 ? 90 : n > 2000 ? 160 : n > 500 ? 260 : 380;
+      try {
+        const settings = FA2.inferSettings(this.graph);
+        FA2.assign(this.graph, { iterations, settings });
+      } catch (_) { /* keep the disc seed if FA2 is unavailable */ }
+      this.booting = false;
+      this._persistLayout();
     },
 
-    // v2.6.3: PUT the current settled positions to the server cache,
-    // keyed by the scope + fingerprint the data feed gave us. Best-
-    // effort: a failure just means the next visit re-simulates.
+    // PUT the settled positions to the server cache, keyed by scope +
+    // fingerprint (UNCHANGED contract). Best-effort.
     _persistLayout() {
-      if (!this.cg || !this._fingerprint || this._layoutPersisted) return;
-      let pos;
-      try { pos = this.cg.getPointPositions(); } catch (_) { return; }
-      if (!pos || !pos.length) return;
+      if (!this.graph || !this._fingerprint || this._layoutPersisted) return;
+      const pos = new Array(this._order.length * 2);
+      for (let i = 0; i < this._order.length; i++) {
+        const a = this.graph.getNodeAttributes(this._order[i]);
+        pos[i * 2] = a.x;
+        pos[i * 2 + 1] = a.y;
+      }
       this._layoutPersisted = true;
       fetch('/ui/graph-layout', {
         method: 'PUT',
@@ -1035,40 +824,198 @@ function nebula() {
         body: JSON.stringify({
           scope_key: this._scopeKey,
           fingerprint: this._fingerprint,
-          positions: Array.from(pos),
+          positions: pos,
         }),
       }).catch(() => { this._layoutPersisted = false; });
     },
 
-    // --- Selection: highlight (NOT hide) + camera fly --------------
-    selectByIndex(index) {
-      if (!this.cg || index === undefined || index === null) return;
-      const rec = this._points[index];
-      if (!rec) return;
+    // --- sigma reducers: highlight is a PURE DATA CHANGE ----------
+    // This is the capability cosmos.gl structurally lacked. The
+    // reducer recomputes per-node / per-edge display every frame from
+    // reactive state (_hl / _selId / _hoverId / _filterIds); greying
+    // the rest while spotlighting a set is a refresh(), no renderer-
+    // internal-state trap (gotcha 31 closed).
+    _brightSet() {
+      // The set rendered at full strength. Priority:
+      //   companion highlight > selection+neighbours > filter match.
+      if (this._hl && this._hl.size) return this._hl;
+      if (this._selId) {
+        const s = new Set([this._selId]);
+        for (const a of (this._adj[this._selId] || [])) s.add(a.id);
+        return s;
+      }
+      if (this._filterIds) return this._filterIds;
+      return null;  // nothing focused -> the whole bright cloud
+    },
 
-      // cosmos.gl greys unrelated points by OPACITY (pointGreyout
-      // Opacity), never display:none -- the nebula stays whole, the
-      // user's "don't make others disappear" requirement. Select the
-      // node + its 1-hop neighbourhood so the local web stays bright.
-      try {
-        const adjIdx = (this.cg.getAdjacentIndices &&
-                        this.cg.getAdjacentIndices(index)) || [];
-        const focusSet = [index, ...adjIdx];
-        if (this.cg.selectPointsByIndices) {
-          this.cg.selectPointsByIndices(focusSet);
-        } else if (this.cg.selectPointByIndex) {
-          this.cg.selectPointByIndex(index);
+    _nodeReducer(id, data) {
+      const res = Object.assign({}, data);
+      const bright = this._brightSet();
+      const isSel = id === this._selId;
+      const isHover = id === this._hoverId;
+      if (bright && !bright.has(id)) {
+        // greyed (NOT hidden) -- the cosmos "blur the rest" intent.
+        res.color = this._rgba(this._theme.dim, 0.5);
+        res.label = '';
+        res.zIndex = 0;
+      } else {
+        if (bright) res.zIndex = 1;
+        if (isSel || isHover) {
+          res.color = this._theme.accent;
+          res.size = (data.size || 4) * (isSel ? 1.7 : 1.35);
+          res.zIndex = 2;
+          res.forceLabel = true;
+          res.highlighted = true;  // sigma's hover-ring affordance
         }
-        if (this.cg.setFocusedPointByIndex) this.cg.setFocusedPointByIndex(index);
-        if (this.cg.zoomToPointByIndex) this.cg.zoomToPointByIndex(index, 700, 5, false);
-      } catch (_) { /* engine mid-rebuild -- selection is best-effort */ }
+      }
+      if (!this.labelsVisible && !isSel) res.label = '';
+      return res;
+    },
+
+    _edgeReducer(key, data) {
+      const res = Object.assign({}, data);
+      if (!this.edgesVisible) { res.hidden = true; return res; }
+      const ext = this.graph.extremities(key);
+      const bright = this._brightSet();
+      if (bright) {
+        const bothIn = bright.has(ext[0]) && bright.has(ext[1]);
+        if (bothIn) {
+          res.color = this._rgba(data.baseColor || '#8aa6c8', 0.85);
+          res.zIndex = 1;
+        } else {
+          res.color = this._rgba(this._theme.dim, 0.12);
+          res.zIndex = 0;
+        }
+      } else {
+        res.color = this._rgba(data.baseColor || '#8aa6c8', 0.5);
+      }
+      return res;
+    },
+
+    renderCanvas() {
+      const container = document.getElementById('cy-nebula');
+      if (!container) return;
+      if (this.sig) {
+        try { this.sig.kill(); } catch (_) {}
+        this.sig = null;
+      }
+      container.innerHTML = '';
+      if (this._order.length === 0) {
+        this.booting = false;
+        return;
+      }
+
+      this.booting = !(this._cachedPositions &&
+        this._cachedPositions.length === this._order.length * 2);
+      this.bootMsg = this.booting
+        ? 'forming ' + this._order.length.toLocaleString() + ' nodes'
+        : '';
+      this._layout();
+
+      const Sigma = window.Sigma;
+      try {
+        this.sig = new Sigma(this.graph, container, {
+          // transparent canvas -> the .nebula-shell starfield CSS
+          // shows through (the loved nebula backdrop, kept).
+          allowInvalidContainer: true,
+          renderLabels: this.labelsVisible,
+          labelColor: { color: this._theme.fg },
+          labelSize: 12,
+          labelWeight: '600',
+          labelFont: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+          labelDensity: 0.6,
+          labelGridCellSize: 70,
+          labelRenderedSizeThreshold: 8,
+          defaultNodeColor: TYPE_COLOR_FALLBACK,
+          defaultEdgeColor: this._rgba('#8aa6c8', 0.5),
+          minCameraRatio: 0.05,
+          maxCameraRatio: 12,
+          zIndex: true,
+          nodeReducer: (id, data) => this._nodeReducer(id, data),
+          edgeReducer: (key, data) => this._edgeReducer(key, data),
+        });
+      } catch (e) {
+        this.booting = false;
+        window.toast && window.toast('Graph render failed: ' + e, 'error');
+        return;
+      }
+
+      this._wireInteraction();
+      this.booting = false;
+    },
+
+    // --- full interaction (sigma first-class events) --------------
+    _wireInteraction() {
+      const sig = this.sig;
+      if (!sig) return;
+      const cont = sig.getContainer();
+
+      sig.on('clickNode', ({ node }) => this.selectNode(node));
+      sig.on('clickStage', () => { if (this.selected) this.deselect(); });
+
+      sig.on('enterNode', ({ node }) => {
+        this._hoverId = node;
+        if (cont) cont.style.cursor = 'pointer';
+        sig.refresh({ skipIndexation: true });
+      });
+      sig.on('leaveNode', () => {
+        this._hoverId = null;
+        if (cont) cont.style.cursor = '';
+        sig.refresh({ skipIndexation: true });
+      });
+
+      // Drag a node to reposition it (ephemeral -- NOT persisted; the
+      // settled cache layout is the source of truth, YAGNI).
+      sig.on('downNode', ({ node }) => {
+        this._dragId = node;
+        this.graph.setNodeAttribute(node, 'highlighted', true);
+        if (!sig.getCustomBBox()) sig.setCustomBBox(sig.getBBox());
+      });
+      sig.on('moveBody', ({ event }) => {
+        if (!this._dragId) return;
+        const pos = sig.viewportToGraph(event);
+        this.graph.setNodeAttribute(this._dragId, 'x', pos.x);
+        this.graph.setNodeAttribute(this._dragId, 'y', pos.y);
+        event.preventSigmaDefault();
+        event.original.preventDefault();
+        event.original.stopPropagation();
+      });
+      const endDrag = () => {
+        if (this._dragId) {
+          this.graph.removeNodeAttribute(this._dragId, 'highlighted');
+        }
+        this._dragId = null;
+      };
+      sig.on('upNode', endDrag);
+      sig.on('upStage', endDrag);
+    },
+
+    _centerOn(id) {
+      if (!this.sig) return;
+      try {
+        const d = this.sig.getNodeDisplayData(id);
+        if (d) {
+          this.sig.getCamera().animate(
+            { x: d.x, y: d.y, ratio: 0.6 },
+            { duration: 480 });
+        }
+      } catch (_) { /* camera busy -- best-effort */ }
+    },
+
+    // --- selection: highlight (NOT hide) + camera fly -------------
+    selectNode(id) {
+      const rec = this._byId[id];
+      if (!rec) return;
+      this._selId = id;
+      this._centerOn(id);
+      if (this.sig) this.sig.refresh({ skipIndexation: true });
 
       this.selected = { ...rec };
-      // Neighbors: full real adjacency from the precomputed map
-      // (every connection, dedup by best confidence).
+      // Neighbors: full real adjacency (every relation, dedup by best
+      // confidence) -- renderer-independent, from the precomputed map.
       const seen = {};
       for (const a of (this._adj[rec.id] || [])) {
-        const od = this._pointById[a.id];
+        const od = this._byId[a.id];
         if (!od) continue;
         if (!seen[a.id] || a.confidence > seen[a.id].confidence) {
           seen[a.id] = {
@@ -1078,10 +1025,9 @@ function nebula() {
         }
       }
       this.neighbors = Object.values(seen);
-      this._scheduleLabels();
 
-      // Hydrate body/description from /v1/nodes/<id> a frame later
-      // so the click feels instant.
+      // Hydrate body/description from /v1/nodes/<id> a frame later so
+      // the click feels instant.
       const wantId = rec.id;
       requestAnimationFrame(() => {
         fetch('/v1/nodes/' + wantId)
@@ -1095,140 +1041,105 @@ function nebula() {
       });
     },
 
-    // File-tree + neighbor-list entry point. Every node is always
-    // in the full graph now, so this NEVER reloads / ego-fetches /
-    // collapses the tree -- it just flies to the node.
+    // File-tree + neighbor-list entry point. Every node is always in
+    // the full graph, so this NEVER reloads / ego-fetches / collapses
+    // the tree -- it just selects + flies the camera.
     focusNode(id) {
-      const idx = this._idIndex[id];
-      if (idx === undefined) {
+      if (!this._byId[id]) {
         window.toast && window.toast('Node not in current scope', 'info');
         return;
       }
-      this.selectByIndex(idx);
+      this.selectNode(id);
     },
 
     deselect() {
-      if (this.cg) {
-        try {
-          if (this.cg.unselectPoints) this.cg.unselectPoints();
-          if (this.cg.setFocusedPointByIndex) this.cg.setFocusedPointByIndex(undefined);
-          if (this.cg.fitView) this.cg.fitView(500);
-        } catch (_) {}
-      }
+      this._selId = null;
+      this._hoverId = null;
       this.selected = null;
       this.neighbors = [];
-      this._hoverIdx = null;
-      this._scheduleLabels();
-      // Re-assert any active filter highlight after a plain deselect.
+      if (this.sig) {
+        try {
+          this.sig.getCamera().animatedReset({ duration: 420 });
+          this.sig.refresh({ skipIndexation: true });
+        } catch (_) {}
+      }
       this.applyFilters();
     },
 
-    // --- v2.6.3 DOM label overlay ---------------------------------
-    // cosmos.gl (low-level) renders no text. We layer absolutely-
-    // positioned spans over the canvas for the SELECTED node, its
-    // (capped) neighbours, and the hovered node -- updated every
-    // frame via spaceToScreenPosition so they track pan / zoom /
-    // residual sim motion. Showing all 10 k labels would be an
-    // unreadable smear (and the old cytoscape build only showed
-    // labels on zoom-in too), so the set is intentionally bounded.
-    _labelSet() {
-      if (!this.labelsVisible || !this.cg) return [];
-      const idxs = new Set();
-      if (this.selected && this._idIndex[this.selected.id] !== undefined) {
-        idxs.add(this._idIndex[this.selected.id]);
-        let added = 0;
-        for (const nb of this.neighbors) {
-          const ni = this._idIndex[nb.id];
-          if (ni !== undefined) { idxs.add(ni); if (++added >= 40) break; }
-        }
-      }
-      if (this._hoverIdx !== null && this._hoverIdx !== undefined) {
-        idxs.add(this._hoverIdx);
-      }
-      return [...idxs];
-    },
-
-    _scheduleLabels() {
-      if (this._labelRAF) return;  // already pumping
-      const tick = () => {
-        this._labelRAF = null;
-        this._renderLabels();
-        // Keep tracking while there's something to label (camera /
-        // residual sim drift moves the anchors every frame).
-        if (this._labelSet().length) {
-          this._labelRAF = requestAnimationFrame(tick);
-        }
-      };
-      this._labelRAF = requestAnimationFrame(tick);
-    },
-
-    _renderLabels() {
-      const host = document.getElementById('nebula-labels');
-      if (!host || !this.cg) return;
-      const set = this._labelSet();
-      if (!set.length) { host.innerHTML = ''; return; }
-      let posAll;
-      try { posAll = this.cg.getPointPositions(); } catch (_) { return; }
-      if (!posAll) return;
-      const selId = this.selected ? this.selected.id : null;
-      const frag = document.createDocumentFragment();
-      for (const i of set) {
-        const rec = this._points[i];
-        if (!rec) continue;
-        let screen;
+    // --- real graph node-highlight (the gotcha-31 / C3 loop) ------
+    // A reactive Set consumed by the nodeReducer: in-set nodes glow at
+    // full strength, the rest grey out (never hidden). The companion's
+    // mnemo_highlight_nodes _ui sentinel drives THIS in v4.5 (wired in
+    // a later phase) -- the graph itself now delivers the highlight.
+    highlight(nodeIds) {
+      const ids = (nodeIds || []).filter((x) => this._byId[x]);
+      this._hl = ids.length ? new Set(ids) : null;
+      if (this.sig) this.sig.refresh({ skipIndexation: true });
+      // frame the highlighted set so it's visible without manual pan.
+      // Average the DISPLAY data (the coordinate space camera.animate
+      // expects -- the documented sigma pattern), not raw graph attrs.
+      if (this._hl && this.sig) {
         try {
-          screen = this.cg.spaceToScreenPosition([posAll[i * 2], posAll[i * 2 + 1]]);
-        } catch (_) { continue; }
-        if (!screen) continue;
-        const span = document.createElement('span');
-        span.className = 'nebula-label' + (rec.id === selId ? ' is-selected' : '');
-        span.style.left = Math.round(screen[0]) + 'px';
-        span.style.top = Math.round(screen[1]) + 'px';
-        span.style.setProperty('--label-color', rec.color);
-        span.textContent = rec.name.length > 42
-          ? rec.name.slice(0, 41) + '…' : rec.name;
-        frag.appendChild(span);
+          let sx = 0, sy = 0, k = 0;
+          for (const i of this._hl) {
+            const d = this.sig.getNodeDisplayData(i);
+            if (!d) continue;
+            sx += d.x; sy += d.y; k += 1;
+          }
+          if (k) {
+            this.sig.getCamera().animate(
+              { x: sx / k, y: sy / k, ratio: k === 1 ? 0.55 : 0.85 },
+              { duration: 520 });
+          }
+        } catch (_) {}
       }
-      host.innerHTML = '';
-      host.appendChild(frag);
+    },
+    clearHighlight() {
+      this._hl = null;
+      if (this.sig) this.sig.refresh({ skipIndexation: true });
     },
 
-    // --- Filters: type chips + text + min-confidence --------------
-    // Implemented as a Cosmograph point selection so non-matching
-    // points GREY OUT (still visible -- consistent with the "don't
-    // disappear" rule) without re-simulating the layout. An empty
-    // filter clears the selection so the full bright cloud returns.
+    // --- filters: type chips + text + min-confidence -------------
+    // Drives the _filterIds set the nodeReducer consumes so non-
+    // matching nodes GREY OUT (still visible -- the "don't disappear"
+    // rule), no layout recompute. Empty filter -> full bright cloud.
     applyFilters() {
-      if (!this.cg) return;
       const text = this.filterText.trim().toLowerCase();
       const anyTypeOff = this.nodeTypes.some(t => this.typeFilters[t] === false);
       const filterActive = !!text || anyTypeOff;
       if (!filterActive) {
-        // Nothing to filter -- but don't stomp a click-selection.
-        if (!this.selected) {
-          try { this.cg.unselectPoints && this.cg.unselectPoints(); } catch (_) {}
-        }
+        this._filterIds = null;
+        if (this.sig) this.sig.refresh({ skipIndexation: true });
         return;
       }
-      const matched = [];
-      for (let i = 0; i < this._points.length; i++) {
-        const p = this._points[i];
+      const matched = new Set();
+      for (const id of this._order) {
+        const p = this._byId[id];
         const okType = this.typeFilters[p.type] !== false;
         const okText = !text ||
           (p.name || '').toLowerCase().includes(text) ||
           (p.type || '').toLowerCase().includes(text);
-        if (okType && okText) matched.push(i);
+        if (okType && okText) matched.add(id);
       }
-      try {
-        if (matched.length && this.cg.selectPointsByIndices) {
-          this.cg.selectPointsByIndices(matched);
-        } else if (this.cg.unselectPoints) {
-          this.cg.unselectPoints();
-        }
-      } catch (_) {}
+      this._filterIds = matched;
+      if (this.sig) this.sig.refresh({ skipIndexation: true });
     },
 
-    // --- File tree (unchanged structure; always full now) ---------
+    toggleEdges() {
+      this.edgesVisible = !this.edgesVisible;
+      if (this.sig) this.sig.refresh({ skipIndexation: true });
+      this._persistState();
+    },
+    toggleLabels() {
+      this.labelsVisible = !this.labelsVisible;
+      if (this.sig) {
+        try { this.sig.setSetting('renderLabels', this.labelsVisible); } catch (_) {}
+        this.sig.refresh({ skipIndexation: true });
+      }
+      this._persistState();
+    },
+
+    // --- file tree (renderer-independent; always full) ------------
     buildTree() {
       const renderedNodes = this.rawElements.filter(
         e => e.data.source === undefined && e.data.source_path,
@@ -1385,11 +1296,7 @@ function nebula() {
       return m ? m[1] : 'unknown';
     },
 
-    // v2.6.2: VS Code-style, language-specific file icons. Each known
-    // extension gets a distinct rounded-tile glyph with a language
-    // brand color + a short mono label, so the tree reads like the
-    // VS Code explorer at a glance. Unknown extensions fall back to a
-    // neutral page glyph; non-file nodes get a small "memory" dot.
+    // VS Code-style, language-specific file icons.
     fileIcon(name) {
       const ext = this.fileExt(name);
       const SPEC = {
@@ -1414,7 +1321,6 @@ function nebula() {
       };
       const spec = SPEC[ext];
       if (!spec) {
-        // Unknown / non-file node: neutral page with a soft dot.
         return (
           '<svg viewBox="0 0 16 16" class="vscode-icon" aria-hidden="true">' +
           '<rect x="2.5" y="1.5" width="11" height="13" rx="2" fill="#2a3340"/>' +
@@ -1423,8 +1329,6 @@ function nebula() {
         );
       }
       const [color, glyph] = spec;
-      // Rounded tile in the language color + the mono glyph in dark
-      // ink -- the VS Code Seti vibe without a webfont dependency.
       return (
         '<svg viewBox="0 0 16 16" class="vscode-icon" aria-hidden="true">' +
         '<rect x="1.5" y="1.5" width="13" height="13" rx="3" fill="' + color + '"/>' +
@@ -1464,7 +1368,7 @@ function nebula() {
       }).catch(e => window.toast('Copy failed: ' + e, 'error'));
     },
 
-    // --- Resizer logic --------------------------------------------
+    // --- resizer logic -------------------------------------------
     startResize(evt, side) {
       this.dragging = side;
       evt.preventDefault();
@@ -1484,6 +1388,7 @@ function nebula() {
           shell.style.setProperty('--nebula-right', w + 'px');
           localStorage.setItem('nebula.right', w + 'px');
         }
+        if (this.sig) this.sig.scheduleRefresh ? this.sig.scheduleRefresh() : this.sig.refresh();
       };
       const onUp = () => {
         this.dragging = null;

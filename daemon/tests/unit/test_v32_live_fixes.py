@@ -81,40 +81,43 @@ def test_default_system_prefers_in_page_actions_over_navigate() -> None:
 # --- 3. nebula links: soft but visible, no zoom-in hairball ------------
 
 
-def test_nebula_is_the_documented_kept_good_v266_renderer() -> None:
-    """CLOSED OUTCOME (revert-over-perfectionize, FINAL + root-caused).
+def test_nebula_renderer_swap_superseded_the_cosmos_ceiling() -> None:
+    """CONTRACT EVOLUTION (v4.5 TOMBSTONE -- the documented next step).
 
-    The nebula "stuck" was NEVER my v3.2 graph edits per se -- it was
-    that ``main`` itself carries the BROKEN v2.6.8 perfectionize
-    renderer: the documented v2.6.6 revert (``a341c89``, restoring
-    ``graph.html @ 8caf257``) NEVER merged to main (PR #53 was an empty
-    no-op), and release/3.0.0 was cut from that main. So every
-    "revert to main / a002b34 / P4" reverted graph.html *to the broken
-    v2.6.8*. The fix is `git checkout 8caf257 -- graph.html` --
-    the kept-good v2.6.6 (reference_cosmos_gl_nebula.md). Live-verified
-    over 15s: all 11010 nodes in perpetual motion, growing deltas,
-    healthy spread, NO freeze (the v2.6.8 froze hard at ~8s).
+    The v3.2 closed outcome was: pin graph.html to the kept-good
+    v2.6.6 cosmos renderer because "a livelier/agentic nebula needs a
+    renderer SWAP, never cosmos config/wiring (the closed ceiling)".
+    v4.5 IS that swap: cosmos.gl is replaced outright by sigma.js v3
+    + graphology (reference_cosmos_gl_nebula TOMBSTONE -- the only
+    sanctioned path past the ceiling). The full surface contract now
+    lives in test_nebula_renderer.py; this guard keeps the two things
+    that must STILL hold post-swap:
 
-    This guard pins graph.html to the v2.6.6 kept-good: NO v3.2 wiring,
-    NO v2.6.8 perfectionize artefacts. A livelier/agentic nebula needs
-    a renderer swap, never cosmos config/wiring (the closed ceiling)."""
-    # v2.6.6 kept-good anchors (the never-cool perpetual sim)
-    assert "NEVER-COOL SIM + CACHED SEED" in GRAPH_HTML
-    assert "this.cg.start(useCache ? 0.35 : 1)" in GRAPH_HTML
-    assert "simulationDecay: 1000000000" in GRAPH_HTML
-    # ZERO v2.6.8 perfectionize artefacts (the regression on main)
-    for m in ("_pinAll", "_flyTo", "setPinnedPoints", "SUPERSEDES", "v2.6.8", "_fitToView"):
+      1. the cosmos never-cool perpetual sim is GONE (the swap, not a
+         re-tune) -- and so is every v2.6.8 perfectionize artefact;
+      2. the renderer is sigma (the documented replacement).
+
+    The v3.2 'do NOT wire the companion into the renderer' clause is
+    INTENTIONALLY no longer asserted here: closing the C3-honesty loop
+    (mnemo_highlight_nodes lighting the real graph) is the whole point
+    of v4.5 -- it is covered, with its now-true wording, by
+    test_nebula_highlight_honesty.py."""
+    # the cosmos never-cool sim is gone (replaced, not tuned)
+    assert "NEVER-COOL SIM" not in GRAPH_HTML
+    assert "this.cg." not in GRAPH_HTML
+    assert "simulationDecay" not in GRAPH_HTML
+    # the documented replacement renderer is in place
+    assert "new Sigma(" in GRAPH_HTML, (
+        "v4.5 must render on sigma.js v3 (the sanctioned renderer swap)."
+    )
+    # ZERO v2.6.8 perfectionize artefacts may ever return
+    for m in ("_pinAll", "setPinnedPoints", "SUPERSEDES", "v2.6.8", "_fitToView"):
         assert m not in GRAPH_HTML, f"v2.6.8 perfectionize re-crept onto nebula: {m}"
-    # ZERO v3.2 artefacts on the nebula page
-    for m in (
-        "LINK_ALPHA",
-        "scaleLinksOnZoom: false",
-        "_wireCompanionActions",
-        "mnemo-highlight-nodes",
-        "mnemo-select-node",
-        "window.mnemoPageContext",
-    ):
-        assert m not in GRAPH_HTML, f"v3.2 re-crept onto nebula: {m}"
+    # no bespoke page-context override / wiring layer on the graph
+    # (YAGNI -- the design keeps the base.html default; the highlight
+    # is a direct document listener, not a _wireCompanionActions shim).
+    for m in ("_wireCompanionActions", "window.mnemoPageContext"):
+        assert m not in GRAPH_HTML, f"unwanted wiring layer re-crept onto nebula: {m}"
 
 
 # --- chat-UX completion (live review #N: copy / scroll / error+retry) --

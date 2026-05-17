@@ -28,15 +28,16 @@
        results popover. The autoloader plugin lazy-fetches per-language
        grammars so we don't ship every grammar upfront. -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
-  {# v2.6.3 prewarm: warm the Nebula GPU graph engine on EVERY page
-     so opening /graph doesn't pay the (multi-hundred-KB, transitive
-     luma.gl + d3) module download cold. modulepreload fetches +
-     parses the ESM graph eagerly but doesn't execute it; combined
-     with the server-side layout cache (settled positions, no re-
-     simulation) the Nebula page renders effectively instantly on a
-     warm visit. Safe + cheap on non-graph pages: it's just a cached
-     fetch the browser may even deprioritise. #}
-  <link rel="modulepreload" href="https://esm.sh/@cosmos.gl/graph@3.0.0-beta.8">
+  {# v4.5 prewarm: the Nebula graph renders on the vendored sigma.js
+     v3 + graphology bundles (no CDN runtime dep, no Node build).
+     Prefetch them site-wide so opening /graph is instant on a warm
+     visit; combined with the server-side layout cache (settled
+     positions, no re-simulation) the page renders effectively
+     instantly. Cheap + safe on non-graph pages -- a cached local
+     fetch the browser may deprioritise; only /graph executes them. #}
+  <link rel="prefetch" href="/static/vendor/sigma.min.js">
+  <link rel="prefetch" href="/static/vendor/graphology.umd.min.js">
+  <link rel="prefetch" href="/static/vendor/graphology-library.min.js">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js" defer></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
   <script>
