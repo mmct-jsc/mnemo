@@ -147,6 +147,54 @@ def test_truncation_primitives_can_shrink(app_css: str) -> None:
     )
 
 
+# Every list rendered as a CSS grid: an implicit `auto` track sizes to
+# MAX-CONTENT, so one long nowrap child (a node .name, a query .prompt)
+# blows the list -> the page width, and any ellipsis never engages.
+# This is the v4.3.1 .query-log bug class; it recurred on .node-list
+# and .query-mini (C1.R Task 6 -- 3rd & 4th instances). The rule is
+# now systematized: EVERY grid-list declares an explicit minmax(0,...)
+# track so it can shrink below max-content. New grid lists must join.
+GRID_LIST_SELECTORS = (
+    "\n.query-log {",
+    "\n.node-list {",
+    "\n.query-mini {",
+    "\n.query details ul.hits {",
+    "\ndl.meta {",
+)
+
+
+def test_all_grid_lists_constrain_long_content(app_css: str) -> None:
+    for sel in GRID_LIST_SELECTORS:
+        start = app_css.index(sel)
+        body = app_css[start : app_css.index("}", start)]
+        assert "minmax(0" in body, (
+            f"{sel.strip()} is display:grid; it MUST set "
+            f"grid-template-columns: minmax(0, ...) -- an implicit auto "
+            f"track sizes to max-content and a long nowrap child blows "
+            f"the page width (the v4.3.1 bug class, systematized C1.R)."
+        )
+
+
+def test_table_scroll_primitive_single_sourced(app_css: str) -> None:
+    """A wide data <table> is non-responsive; it must scroll WITHIN a
+    .table-scroll box (overflow-x:auto), never force a document
+    scrollbar. The primitive is single-sourced in app.css and the
+    sources table references it (the canonical responsive-table fix)."""
+    assert app_css.count(".table-scroll {") == 1, (
+        ".table-scroll must have one canonical definition in app.css."
+    )
+    start = app_css.index(".table-scroll {")
+    body = app_css[start : app_css.index("}", start)]
+    assert "overflow-x: auto" in body, (
+        ".table-scroll must set overflow-x:auto (the table scrolls in its own box, not the page)."
+    )
+    sources = (TPL / "sources.html").read_text(encoding="utf-8")
+    assert 'class="table-scroll"' in sources, (
+        "sources.html must wrap its <table> in .table-scroll (a wide "
+        "table otherwise forces a document scrollbar < --bp-md)."
+    )
+
+
 def test_overflow_prone_surfaces_reference_the_primitives() -> None:
     """The long-text surfaces (node list, search/cite popover, audit
     row) reference the shared primitives instead of carrying their own
@@ -239,19 +287,24 @@ def test_nav_drawer_css_desktop_parity_and_collapse(app_css: str) -> None:
     assert ".nav-scrim" in app_css, ".nav-scrim must be styled (the drawer backdrop)."
 
 
-def test_chat_shell_breakpoint_is_single_sourced() -> None:
-    """The chat .mn 3-panel shell collapses at the C1.R token
-    breakpoint (60rem == --bp-md), not a stray 1100px literal -- the
-    full-window shell breakpoint is part of the contract too (the
-    inline page <style> must obey it, not just app.css)."""
-    chat = (TPL / "chat.html").read_text(encoding="utf-8")
-    for prelude in re.findall(r"@media([^{]+)\{", chat):
-        for value in re.findall(r"(?:min|max)-width:\s*([0-9.]+(?:px|rem|em))", prelude):
-            assert value in ALLOWED_BP_LITERALS, (
-                f"chat.html shell @media uses {value}; the shell "
-                f"breakpoint must be a C1.R token (60rem == --bp-md), "
-                f"not a raw px literal."
-            )
+def test_no_template_inline_style_has_raw_px_breakpoint() -> None:
+    """The breakpoint contract binds inline page <style> too, not just
+    app.css. NO template may carry a width @media with a raw px literal
+    outside the 3-token set (chat.html's old 1100px shell breakpoint
+    and settings.html's 700px .weight-row were the last two; this guard
+    makes a stray per-page breakpoint impossible to reintroduce)."""
+    offenders: list[str] = []
+    for tpl in sorted(TPL.glob("*.html")):
+        text = tpl.read_text(encoding="utf-8")
+        for prelude in re.findall(r"@media([^{]+)\{", text):
+            for value in re.findall(r"(?:min|max)-width:\s*([0-9.]+(?:px|rem|em))", prelude):
+                if value not in ALLOWED_BP_LITERALS:
+                    offenders.append(f"{tpl.name}: @media({prelude.strip()}) -> {value}")
+    assert not offenders, (
+        "Inline <style> width media queries must use only the C1.R "
+        f"breakpoint tokens {sorted(ALLOWED_BP_LITERALS)} (single-source, "
+        "like app.css). Offending rules:\n  " + "\n  ".join(offenders)
+    )
 
 
 def test_full_window_shells_collapse_and_keep_panels_reachable(

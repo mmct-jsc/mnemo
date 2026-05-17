@@ -185,8 +185,8 @@ body {
   display: none;
   align-items: center;
   justify-content: center;
-  width: 38px;
-  height: 38px;
+  width: 44px; /* C1.R polish: >= 44px touch target */
+  height: 44px;
   padding: 0;
   background: var(--panel-2);
   border: 1px solid var(--border);
@@ -468,6 +468,13 @@ a:hover { color: var(--accent-hover); }
   min-width: 0;
   overflow: hidden;
 }
+/* Wide non-responsive content (a data <table>) scrolls WITHIN its own
+   box instead of forcing a document scrollbar. Wrap any table that
+   can exceed the viewport in <div class="table-scroll">. */
+.table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+}
 
 /* --- C1 shared chat primitives (v4.0) ------------------------------
    Single canonical home. Pre-v4.0 these were duplicated + divergent
@@ -606,6 +613,7 @@ a:hover { color: var(--accent-hover); }
   align-items: center;
   gap: 0.45rem;
   width: 100%;
+  min-height: 44px; /* C1.R polish: >= 44px touch target */
   padding: 0.4rem 0.55rem;
   background: none;
   border: 0;
@@ -619,6 +627,10 @@ a:hover { color: var(--accent-hover); }
 .rail-collapse:hover {
   color: var(--fg);
   background: var(--panel-2);
+}
+.rail-collapse:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 .rail-collapse-caret {
   display: inline-block;
@@ -1041,17 +1053,23 @@ tr:hover td { background: var(--panel); }
 }
 .section-head h2 { margin: 0; }
 
-.node-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 0.5rem; }
+.node-list { list-style: none; padding: 0; margin: 0; display: grid;
+  /* explicit minmax(0,1fr): an implicit `auto` grid track sizes to
+     max-content, so a long nowrap node .name blows the list (and the
+     page) width and the .u-truncate ellipsis never engages -- the
+     exact v4.3.1 .query-log bug class, systematized (C1.R). */
+  grid-template-columns: minmax(0, 1fr); gap: 0.5rem; }
 .node-list li {
   background: var(--panel);
   border: 1px solid var(--border-soft);
   border-radius: var(--radius);
   padding: 0.75rem 1rem;
   transition: var(--transition);
+  min-width: 0; /* grid item shrinks into the minmax(0,1fr) cell (v4.3.1) */
 }
 .node-list li:hover { border-color: var(--border); background: var(--panel-2); }
-.node-list a { display: flex; align-items: center; gap: 0.75rem; color: var(--fg); }
-.node-list .name { font-weight: 500; }
+.node-list a { display: flex; align-items: center; gap: 0.75rem; color: var(--fg); min-width: 0; }
+.node-list .name { font-weight: 500; min-width: 0; }
 .node-list .proj { color: var(--fg-dim); font-size: 0.78rem; margin-left: auto; }
 .node-list .desc { font-size: 0.85rem; color: var(--fg-muted); margin: 0.25rem 0 0; }
 
@@ -1150,13 +1168,16 @@ tr:hover td { background: var(--panel); }
 }
 
 dl.meta {
-  display: grid; grid-template-columns: 110px 1fr; gap: 0.4rem 1rem;
+  /* minmax(0,1fr): a long nowrap <code> id/path in <dd> otherwise
+     forces the value column to max-content and blows the page width
+     (v4.3.1 bug class, systematized C1.R). */
+  display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 0.4rem 1rem;
   background: var(--panel); border: 1px solid var(--border-soft);
   border-radius: var(--radius); padding: 1rem; margin: 1rem 0;
   font-size: 0.85rem;
 }
 dl.meta dt { color: var(--fg-dim); font-weight: 500; }
-dl.meta dd { margin: 0; color: var(--fg); }
+dl.meta dd { margin: 0; color: var(--fg); min-width: 0; overflow-wrap: anywhere; }
 
 .node-edit form label {
   display: block; margin: 1.25rem 0 0.45rem;
@@ -1433,17 +1454,21 @@ dl.meta dd { margin: 0; color: var(--fg); }
 
 .dash-row {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  /* minmax(0,...) so a long nowrap child (node .name) can't force the
+     track to max-content and blow the page width (v4.3.1 rule,
+     systematized -- C1.R). */
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 1rem;
   margin: 1rem 0;
 }
-@media (max-width: 60rem) { /* --bp-md (was 800px) */ .dash-row { grid-template-columns: 1fr; } }
+@media (max-width: 60rem) { /* --bp-md (was 800px) */ .dash-row { grid-template-columns: minmax(0, 1fr); } }
 .dash-card {
   background: var(--panel);
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-lg);
   padding: 1.25rem;
   margin: 1rem 0;
+  min-width: 0; /* grid item must shrink below max-content (v4.3.1) */
 }
 .dash-card-head {
   display: flex; justify-content: space-between; align-items: baseline;
@@ -1487,8 +1512,13 @@ dl.meta dd { margin: 0; color: var(--fg); }
 .node-list.compact li { padding: 0.5rem 0.75rem; }
 .node-list.compact .name { font-size: 0.88rem; }
 
-.query-mini { list-style: none; padding: 0; margin: 0; display: grid; gap: 0.5rem; }
+.query-mini { list-style: none; padding: 0; margin: 0; display: grid;
+  /* minmax(0,1fr): implicit `auto` track = max-content; the .prompt's
+     own nowrap+ellipsis never engages and the page overflows -- the
+     v4.3.1 .query-log bug class, 3rd instance, systematized (C1.R). */
+  grid-template-columns: minmax(0, 1fr); gap: 0.5rem; }
 .query-mini li {
+  min-width: 0; /* grid item shrinks into the minmax(0,1fr) cell */
   background: var(--bg);
   border: 1px solid var(--border-soft);
   border-radius: var(--radius);
@@ -2591,16 +2621,16 @@ dl.meta dd { margin: 0; color: var(--fg); }
 
 /* --- Wider 2-column dash layout for big content pages ------------- */
 .dash-row.split-2 {
-  grid-template-columns: 2fr 1fr;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
 }
 @media (max-width: 60rem) { /* --bp-md (was 980px) */
-  .dash-row.split-2 { grid-template-columns: 1fr; }
+  .dash-row.split-2 { grid-template-columns: minmax(0, 1fr); }
 }
 .dash-row.split-3 {
-  grid-template-columns: 1.5fr 1fr 1fr;
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr) minmax(0, 1fr);
 }
 @media (max-width: 60rem) { /* --bp-md (was 1080px) */
-  .dash-row.split-3 { grid-template-columns: 1fr; }
+  .dash-row.split-3 { grid-template-columns: minmax(0, 1fr); }
 }
 
 /* Stat-card variant when used as compact pill (no link, no hover lift). */
@@ -2883,8 +2913,12 @@ dl.meta dd { margin: 0; color: var(--fg); }
   display: grid;
   /* auto-fit so a single project card expands to fill the row.
      auto-fill leaves phantom tracks at 360px and pins the card to
-     that width; auto-fit collapses empty tracks. */
-  grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+     that width; auto-fit collapses empty tracks. min(420px,100%) so
+     the 420px floor can't exceed a narrow viewport (< --bp-md the
+     card would otherwise force a horizontal scrollbar) -- the
+     canonical responsive-grid clamp, single-source, no media query
+     (C1.R). */
+  grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr));
   gap: 1rem;
   margin-bottom: 2rem;
 }
@@ -3090,6 +3124,7 @@ dl.meta dd { margin: 0; color: var(--fg); }
   align-items: baseline;
   gap: 0.75rem;
   margin-bottom: 0.4rem;
+  flex-wrap: wrap; /* C1.R: filter wraps to its own line < --bp-md */
 }
 
 .endpoint-section-head h3 {
@@ -3208,7 +3243,14 @@ dl.meta dd { margin: 0; color: var(--fg); }
   color: var(--fg);
   font-size: 0.8rem;
   font-family: var(--mono);
-  min-width: 220px;
+  /* C1.R: a hard min-width:220 made this input force a horizontal
+     scrollbar < --bp-md (margin-left:auto in a non-wrapping flex
+     header). width gives the desktop size; min-width:0 + max-width
+     lets it shrink, and .endpoint-section-head now wraps it to its
+     own full-width line on narrow. */
+  width: 14rem;
+  min-width: 0;
+  max-width: 100%;
   transition: border-color 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
@@ -4217,8 +4259,10 @@ dl.meta dd { margin: 0; color: var(--fg); }
 .mpanel-toggle {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 0.35rem;
-  padding: 0.35rem 0.7rem;
+  min-height: 44px; /* C1.R polish: >= 44px touch target */
+  padding: 0.35rem 0.9rem;
   background: var(--panel-2);
   border: 1px solid var(--border);
   border-radius: var(--radius-pill);
@@ -4231,6 +4275,10 @@ dl.meta dd { margin: 0; color: var(--fg); }
 .mpanel-toggle:hover {
   border-color: var(--accent);
   color: var(--accent);
+}
+.mpanel-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 .mpanel-toggle.active {
   border-color: var(--accent);

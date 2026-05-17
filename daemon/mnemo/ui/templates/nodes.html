@@ -59,8 +59,8 @@
           <a href="/node/{{ n.id }}">
             <span class="badge type-{{ n.type }}" style="--type-color: {{ type_colors.get(n.type, type_color_fallback) }};">{{ n.type | replace('memory_','') | replace('_',' ') }}</span>
             {% if n.base %}<span class="badge base-badge" title="BASE knowledge — applies to every project">base</span>{% endif %}
-            <span class="name">{{ n.name }}</span>
-            {% if n.project_key %}<span class="proj">{{ n.project_key }}</span>{% endif %}
+            <span class="name u-truncate">{{ n.name }}</span>
+            {% if n.project_key %}<span class="proj u-truncate">{{ n.project_key }}</span>{% endif %}
           </a>
           {% if n.description %}<p class="desc u-clamp">{{ n.description }}</p>{% endif %}
         </li>
