@@ -86,7 +86,7 @@ def _graph_scope_key(*, project: str | None, project_keys: str | None, base_only
 # the client recomputes + re-caches a fresh, correct layout. (The
 # user's "something off with re-reindex": the cache now invalidates
 # on algorithm change too, not only on a node-set change.)
-LAYOUT_VERSION = "fa2-galaxy-4"
+LAYOUT_VERSION = "fa2-galaxy-5"
 
 
 # v4.5 architecture pivot: the layout is computed SERVER-SIDE (the
