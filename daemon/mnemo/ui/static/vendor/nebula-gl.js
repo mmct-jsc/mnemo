@@ -353,10 +353,11 @@
         // stellar tint (mostly blue-white/white, some gold, a few
         // warm orange -- a true star field, not one flat hue)...
         ' float h=fract(sin(dot(pos,vec2(12.9898,78.233)))*43758.5453);' +
-        ' vec3 star = h<0.50 ? vec3(0.80,0.88,1.00)' +     // blue-white
-        '           : h<0.78 ? vec3(0.95,0.97,1.00)' +     // white
-        '           : h<0.92 ? vec3(1.00,0.92,0.78)' +     // gold
-        '                    : vec3(1.00,0.80,0.60);' +     // warm orange
+        ' vec3 star = h<0.46 ? vec3(0.80,0.88,1.00)' +     // blue-white
+        '           : h<0.72 ? vec3(0.95,0.97,1.00)' +     // white
+        '           : h<0.84 ? vec3(1.00,0.92,0.78)' +     // gold
+        '           : h<0.92 ? vec3(1.00,0.78,0.58)' +     // warm orange
+        '                    : vec3(1.00,0.43,0.74);' +     // pink HII knot
         // ...graded by a GALACTIC temperature: warm-gold luminous
         // bulge -> blue-white arms -> faint cool steel outskirts.
         ' vec3 gold=vec3(1.00,0.89,0.66);' +
@@ -377,12 +378,11 @@
         ' vec2 rpos=vec2(pos.x*c-pos.y*s, pos.x*s+pos.y*c);' +
         ' vec2 p=(rpos-cam)*zoom;' +
         ' gl_Position=vec4(p.x/(res.x*0.5),p.y/(res.y*0.5),0.0,1.0);' +
-        // Point size is mostly SCREEN-space with a mild zoom response
-        // -- NOT siz*zoom (the world is ~+/-5000 vs siz 3..12, so
-        // siz*zoom collapses every node to the 2px floor at fit zoom:
-        // the "black, one line" report). This keeps nodes a crisp
-        // 3..64 px: clearly visible at fit, growing when zoomed in.
-        ' gl_PointSize=clamp(siz*(0.7+26.0*zoom),3.0,64.0);}',
+        // SMALL crisp star points: at fit the world-space size must
+        // stay <= the layout no-overlap spacing or distinct stars
+        // visually merge again. Low zoom-growth -> tiny at fit (the
+        // reference is countless tiny stars), grows when zoomed in.
+        ' gl_PointSize=clamp(siz*(0.35+4.0*zoom),1.5,15.0);}',
       // NO screen-space-derivative call: on a WebGL1 context (regl's
       // default) those need the OES_standard_derivatives extension +
       // an #extension pragma; without it the fragment shader FAILS TO
@@ -451,10 +451,19 @@
         ' gl_Position=vec4(p.x/(res.x*0.5),p.y/(res.y*0.5),0.0,1.0);}',
       frag:
         'precision highp float; varying vec2 vUv; uniform float inten;' +
-        'void main(){ float d=length(vUv);' +
-        // soft gaussian-ish falloff; warm white-gold core fading out.
-        ' float g=exp(-d*d*3.1)*inten;' +
-        ' vec3 col=mix(vec3(1.0,0.93,0.74), vec3(0.96,0.82,0.95), d);' +
+        'void main(){' +
+        // THE BAR: rotate into the bar frame (~-34 deg, like the
+        // reference's slanted bar) and measure an ELLIPTICAL distance
+        // (long axis = the bar). A broad elongated warm glow + a
+        // tighter brighter central bulge -> a golden barred core.
+        ' float s=-0.555,c=0.832;' +  // sin/cos of ~-0.585 rad
+        ' vec2 rv=vec2(vUv.x*c-vUv.y*s, vUv.x*s+vUv.y*c);' +
+        ' vec2 ev=vec2(rv.x*0.52, rv.y*1.55);' +     // bar elongation
+        ' float bar=exp(-dot(ev,ev)*2.7);' +          // the bar
+        ' float bulge=exp(-dot(rv,rv)*8.5)*1.25;' +   // bright bulge
+        ' float g=(bar+bulge)*inten;' +
+        ' vec3 col=mix(vec3(1.0,0.90,0.66), vec3(0.98,0.80,0.92),' +
+        '              clamp(length(rv),0.0,1.0));' +
         ' gl_FragColor=vec4(col*g, g); }',
       attributes: { uv: coreQuad },
       uniforms: {

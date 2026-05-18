@@ -173,6 +173,35 @@ def test_layout_giant_is_a_spiral_not_a_round_disc() -> None:
     )
 
 
+def test_no_node_overlap() -> None:
+    """The user's HARD requirement: no two nodes overlap. The
+    deterministic relaxation pushes every pair to a spacing scaled
+    to the field extent + count; the minimum nearest-neighbour
+    distance must be a real fraction of that spacing (no piles), on
+    a real-shaped graph (giant + a big singleton field)."""
+    from scipy.spatial import cKDTree  # noqa: PLC0415
+
+    from mnemo.ui.graph_layout import _WORLD  # noqa: PLC0415
+
+    n, edges, _ = _planted(6, 80, 1500)
+    pos = compute_graph_layout(n, edges)
+    pa = np.array([(pos[2 * i], pos[2 * i + 1]) for i in range(n)])
+    dmin = _WORLD / 70.0
+    d, _ = cKDTree(pa).query(pa, k=2)
+    nn = float(d[:, 1].min())
+    assert nn > 0.55 * dmin, (
+        f"nodes overlap/pile (min NN {nn:.1f} vs target spacing "
+        f"{dmin:.1f}); the anti-overlap relaxation must separate them"
+    )
+
+
+# NOTE: the central BAR is a RENDER feature (an elliptical tilted
+# core glow), NOT a layout-density requirement -- the no-overlap
+# relaxation is isotropic and would erode a dense elongated bar in
+# the layout. The same principled split as the bulge; the bar render
+# is asserted in the renderer asset guard. No layout bar test.
+
+
 def test_singletons_pack_densely_not_confetti() -> None:
     """The 2298-component reality: singletons must form a DENSE band,
     not one sparse dot per component on a thin ring. Measure local
