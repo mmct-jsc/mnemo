@@ -173,6 +173,32 @@ def test_layout_giant_is_a_spiral_not_a_round_disc() -> None:
     )
 
 
+def test_separate_splits_coincident_nodes() -> None:
+    """Root-cause guard: the spectral embedding maps structurally-
+    equivalent nodes to IDENTICAL coords (real-11k minNN was 0.00 --
+    the synthetic _planted graphs never produced exact duplicates so
+    missed it). _separate's d/dist push is a ZERO direction for a
+    coincident pair; the deterministic fallback must still split
+    them so the no-overlap invariant holds on degenerate input."""
+    from mnemo.ui.graph_layout import _separate  # noqa: PLC0415
+
+    # 200 EXACTLY-coincident nodes + a few scattered.
+    pos = np.zeros((220, 2), dtype=np.float64)
+    pos[200:] = np.random.default_rng(0).uniform(-50, 50, (20, 2))
+    out = _separate(pos.copy(), dmin=10.0)
+    from scipy.spatial import cKDTree  # noqa: PLC0415
+
+    d, _ = cKDTree(out).query(out, k=2)
+    nn = float(d[:, 1].min())
+    assert nn > 10.0 * 0.55, (
+        f"coincident nodes not separated (min NN {nn:.2f}); the "
+        f"zero-direction push must fall back to a deterministic split"
+    )
+    # determinism preserved
+    out2 = _separate(pos.copy(), dmin=10.0)
+    assert np.array_equal(out, out2), "_separate must be deterministic"
+
+
 def test_no_node_overlap() -> None:
     """The user's HARD requirement: no two nodes overlap. The
     deterministic relaxation pushes every pair to a spacing scaled
