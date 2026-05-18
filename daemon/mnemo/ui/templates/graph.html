@@ -943,6 +943,9 @@ function nebula() {
       this.gl.on('hoverNode', (i) => {
         this._hoverId = (i == null) ? null : this._order[i];
       });
+      // apply the persisted edge/label toggle state to the renderer.
+      this.gl.setEdgesVisible(this.edgesVisible);
+      this.gl.setLabelsVisible(this.labelsVisible);
     },
 
     // World-space label items for the NebulaGL LabelProvider: the
@@ -1117,20 +1120,14 @@ function nebula() {
 
     toggleEdges() {
       this.edgesVisible = !this.edgesVisible;
-      // edge visibility is a renderer concern; NebulaGL draws the
-      // density edge field always (it is the structure signal). The
-      // toggle is kept for state/persistence parity; a future handle
-      // setting can consume edgesVisible with no call-site change.
+      if (this.gl) this.gl.setEdgesVisible(this.edgesVisible);
       this._persistState();
     },
     toggleLabels() {
       this.labelsVisible = !this.labelsVisible;
-      // labels are the overlay LabelProvider's job; when off, clear it
-      // (re-populated on the next select/highlight if turned back on).
-      if (!this.labelsVisible && this.labels) {
-        this.labels.clear();
-      } else if (this.labelsVisible && this._selId) {
-        if (this.labels) this.labels.setLabels(this._labelItems(this._selId));
+      if (this.gl) this.gl.setLabelsVisible(this.labelsVisible);
+      if (this.labelsVisible && this._selId && this.labels) {
+        this.labels.setLabels(this._labelItems(this._selId));
       }
       this._persistState();
     },
