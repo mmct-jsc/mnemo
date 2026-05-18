@@ -894,11 +894,11 @@ function nebula() {
       const xy = this._xy;
       const nodes = this._order.map((id, i) => {
         const r = this._byId[id];
-        // FINER size ramp (2..8): the dense code core was a mud of
-        // big overlapping beads. Smaller points -> the core reads as
-        // a fine nebula, hubs still a touch bigger.
+        // TINY star points (1.2..4): at fit the on-screen size must
+        // stay within the layout's no-overlap spacing or distinct
+        // stars merge visually. The galaxy is countless small stars.
         const sz = Math.max(
-          2, Math.min(8, 1.6 + Math.sqrt((r && r.deg) || 1) * 1.05));
+          1.2, Math.min(4, 1.0 + Math.sqrt((r && r.deg) || 1) * 0.7));
         return {
           x: xy[2 * i],
           y: xy[2 * i + 1],
