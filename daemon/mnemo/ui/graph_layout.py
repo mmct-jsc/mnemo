@@ -220,24 +220,39 @@ def _galaxy_transform(gp: np.ndarray) -> np.ndarray:
     return out
 
 
-def _separate(pos: np.ndarray, dmin: float, iters: int = 60) -> np.ndarray:
+def _separate(pos: np.ndarray, dmin: float, iters: int = 90) -> np.ndarray:
     """Deterministic anti-overlap relaxation: iteratively push apart
     any pair closer than ``dmin`` (cKDTree pair query -> vectorised
-    half-overlap push). Local-only, so the spiral-arm + bar structure
-    is preserved while NO two nodes overlap (the user's hard
-    requirement; numerically gated). No RNG -> byte-stable."""
+    half-overlap push). Local-only, so the spiral-arm structure is
+    preserved while NO two nodes overlap (the user's hard requirement;
+    numerically gated). No RNG -> byte-stable.
+
+    COINCIDENT-pair fix: the spectral embedding maps structurally-
+    equivalent nodes to IDENTICAL coords (verified on the real 11k:
+    minNN was 0.00). For those, ``d/dist`` is a zero direction so a
+    naive push never splits them. Use a deterministic per-pair
+    fallback direction (golden-angle of the lower index) whenever the
+    pair is (near-)coincident, so even degenerate input separates."""
     from scipy.spatial import cKDTree
 
     if pos.shape[0] < 2 or dmin <= 0:
         return pos
+    golden = math.pi * (3.0 - math.sqrt(5.0))
     for _ in range(iters):
         pairs = cKDTree(pos).query_pairs(r=dmin, output_type="ndarray")
         if pairs.size == 0:
             break
         a, b = pairs[:, 0], pairs[:, 1]
         d = pos[a] - pos[b]
-        dist = np.sqrt(np.einsum("ij,ij->i", d, d)) + 1e-9
-        push = ((dmin - dist) * 0.5)[:, None] * (d / dist[:, None])
+        dist = np.sqrt(np.einsum("ij,ij->i", d, d))
+        coincident = dist < 1e-6
+        # deterministic fallback unit vector for coincident pairs
+        fa = a.astype(np.float64) * golden
+        ux = np.where(coincident, np.cos(fa), d[:, 0] / (dist + 1e-9))
+        uy = np.where(coincident, np.sin(fa), d[:, 1] / (dist + 1e-9))
+        # coincident -> push a full dmin apart; else close the gap
+        amt = np.where(coincident, dmin * 0.5, (dmin - dist) * 0.5)
+        push = np.column_stack([ux * amt, uy * amt])
         np.add.at(pos, a, push)
         np.add.at(pos, b, -push)
     return pos
