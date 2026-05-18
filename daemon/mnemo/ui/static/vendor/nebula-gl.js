@@ -102,21 +102,28 @@
     var api = {
       setLabels: function (list) { items = list || []; },
       clear: function () { items = []; },
-      // called by the renderer each frame with the live camera.
-      _render: function (cam, vw, vh, dpr) {
+      // called by the renderer each frame with the live camera + the
+      // galactic rotation angle ``ga``. The label point MUST be
+      // rotated by +ga exactly like the node vertex shader, or the
+      // pill detaches from its (rotating) node -- the reported
+      // "labels not working" after rotation landed.
+      _render: function (cam, ga, vw, vh, dpr, on) {
         var ctx = canvasEl.getContext('2d');
         if (canvasEl.width !== vw || canvasEl.height !== vh) {
           canvasEl.width = vw;
           canvasEl.height = vh;
         }
         ctx.clearRect(0, 0, vw, vh);
-        if (!items.length) return;
+        if (!on || !items.length) return;
         ctx.font = (12 * dpr) + 'px ui-sans-serif,system-ui,sans-serif';
         ctx.textBaseline = 'middle';
+        var gs = Math.sin(ga), gc = Math.cos(ga);
         for (var i = 0; i < items.length; i++) {
           var it = items[i];
-          var sx = (it.x - cam.x) * cam.zoom + vw / 2;
-          var sy = -(it.y - cam.y) * cam.zoom + vh / 2;
+          var wx = it.x * gc - it.y * gs;  // same +ga the shader applies
+          var wy = it.x * gs + it.y * gc;
+          var sx = (wx - cam.x) * cam.zoom + vw / 2;
+          var sy = -(wy - cam.y) * cam.zoom + vh / 2;
           if (sx < -200 || sx > vw + 200 || sy < -50 || sy > vh + 50) continue;
           var pad = 5 * dpr;
           var tw = ctx.measureText(it.text).width;
@@ -196,6 +203,8 @@
     var raf = 0, disposed = false, fitted = false;
     var gA = 0;          // galactic rotation angle (radians)
     var gT = 0;          // last animation timestamp
+    var edgesOn = true;  // edge/label visibility toggles (the
+    var labelsOn = true; // reported dead toggle controls)
     var GOMEGA = 0.013;  // rad/s -- a full turn ~8 min: a gentle,
                          // never-distracting "the galaxy is alive"
                          // drift (NOT the v4.5.2 camera-fight loop).
@@ -358,7 +367,10 @@
         ' vC = mix(mix(star,gal,0.55), col, 0.13); vH=hl;' +
         // brightness falls hard with radius (bright bulge -> faint
         // halo) + a per-star sparkle + a mild hub boost.
-        ' vB=(1.32 - 0.94*rN) * (0.80+0.42*h)' +
+        // gentler core brightness (was 1.32-0.94*rN -> the dense core
+        // additively blew out to a featureless white blob; nodes must
+        // stay individually resolvable in dense regions).
+        ' vB=(1.00 - 0.58*rN) * (0.80+0.42*h)' +
         '   * (0.86+0.26*clamp(siz/8.0,0.0,1.0));' +
         // slow galactic rotation about the centre (GPU-only).
         ' float s=sin(uA),c=cos(uA);' +
@@ -389,7 +401,10 @@
         // bloom is STRONG in the bulge, fades to almost nothing in the
         // outskirts -> the luminous galactic core emerges from the
         // dense bright centre (no separate fullscreen pass).
-        ' float bloom=glow*(1.0-smoothstep(0.06,0.5,d))*0.42*(1.15-0.95*vR);' +
+        // MUCH gentler bloom (was *0.42*(1.15-..) -> additively
+        // stacked to a white-out in the dense core). ~3x less so
+        // dense stars stay discrete, faint halo only.
+        ' float bloom=glow*(1.0-smoothstep(0.06,0.5,d))*0.15*(1.0-0.8*vR);' +
         // FOCUS: vH=1 = related (full colour + bloom, pops); vH=0 =
         // unrelated -> tinted cool BLUE and dimmed but still VISIBLE
         // as a blue backdrop field (the user: "blue all others if not
@@ -447,7 +462,10 @@
         zoom: function () { return cam.zoom; },
         res: function (c) { return res(c); },
         cr: function () { return coreR; },
-        inten: function () { return 0.55; },
+        // restrained -- a gentle warm halo, NOT a white-out (the core
+        // glow + dense node bloom were additively saturating to a
+        // featureless white blob; nodes must stay resolvable there).
+        inten: function () { return 0.16; },
       },
       count: 4,
       primitive: 'triangle strip',
@@ -597,9 +615,9 @@
       try {
         drawBg();                         // faint deep-space cirrus
         drawCore();                       // galactic bulge underglow
-        if (edges.length) drawEdges();
+        if (edgesOn && edges.length) drawEdges();
         drawNodes();
-        if (hiVerts) hiEdges();
+        if (edgesOn && hiVerts) hiEdges();
         diag.draw = 'ok';
       } catch (e) {
         diag.draw = (e && e.message ? e.message : String(e)).slice(0, 70);
@@ -612,7 +630,7 @@
         diag.err = rawgl.getError();
       }
       if (labels && labels._render) {
-        labels._render(cam, canvas.width, canvas.height, dpr);
+        labels._render(cam, gA, canvas.width, canvas.height, dpr, labelsOn);
       }
       // Ground-truth diagnostic to the CONSOLE (NOT an on-canvas
       // overlay -- the HUD obstructed the view). Logged ~once/sec so
@@ -776,6 +794,8 @@
         invalidate();
       },
       highlightSet: function () { return hl; },
+      setEdgesVisible: function (b) { edgesOn = !!b; invalidate(); },
+      setLabelsVisible: function (b) { labelsOn = !!b; invalidate(); },
       fit: function () {
         fitCamera(cam, nodes, canvas.width, canvas.height);
         fitZoom = cam.zoom;
