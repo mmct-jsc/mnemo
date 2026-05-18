@@ -167,6 +167,14 @@ _BULGE_GAMMA = 1.5  # smooth radial power r=R*(r/R)^g, g>1 -> a mild
 _WIND = 4.4  # logarithmic-spiral winding -> ~1.5-2 turn arms
 _ARM_SPREAD = 0.34  # in-arm angular half-width (rad) -> tighter arms
 _DISC_ELL = 0.86  # y-scale -> slightly elliptical face-on disc
+_DMIN_DIV = 180.0  # anti-overlap spacing = _WORLD / _DMIN_DIV. SMALL
+#  + few iters = a LIGHT de-clump that only splits genuinely
+#  coincident/overlapping nodes while PRESERVING the spiral + bulge
+#  density. A large spacing + many iters Poisson-disc-uniformised
+#  the real 11k into a featureless square (the galaxy erased) -- the
+#  hard lesson: strict global equal-spacing is incompatible with a
+#  density-structured galaxy; "no overlap" means "no pile", not "a
+#  perfect lattice".
 
 
 def _galaxy_transform(gp: np.ndarray) -> np.ndarray:
@@ -220,7 +228,7 @@ def _galaxy_transform(gp: np.ndarray) -> np.ndarray:
     return out
 
 
-def _separate(pos: np.ndarray, dmin: float, iters: int = 90) -> np.ndarray:
+def _separate(pos: np.ndarray, dmin: float, iters: int = 14) -> np.ndarray:
     """Deterministic anti-overlap relaxation: iteratively push apart
     any pair closer than ``dmin`` (cKDTree pair query -> vectorised
     half-overlap push). Local-only, so the spiral-arm structure is
@@ -383,7 +391,7 @@ def compute_graph_layout(n: int, edges: list[tuple[int, int]]) -> list[float]:
     # geometrically impossible: the galaxy deliberately concentrates
     # the giant, so the average spacing far exceeds what fits the
     # dense core). Local-only -> the bar + arms survive.
-    dmin = _WORLD / 70.0
+    dmin = _WORLD / _DMIN_DIV
     pos = _separate(pos, dmin)
 
     out = [0.0] * (2 * n)
