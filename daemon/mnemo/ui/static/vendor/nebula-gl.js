@@ -571,6 +571,21 @@
 
     var pick = buildPickIndex(nodes);
 
+    // The display frame is the static layout rotated by +gA (exactly
+    // what the node vertex shader applies). A camera fly onto a node
+    // MUST aim at that rotated point, not the raw layout coord. While
+    // a node is focused the rotation is frozen (frame() gates the gA
+    // advance on selId<0), so this single rotated target stays locked
+    // under the eased camera -- fixing the reported "zoom only knows
+    // the node's original position, not where it travelled to".
+    function focusTarget(i) {
+      var s = Math.sin(gA), c = Math.cos(gA);
+      return {
+        x: nodes[i].x * c - nodes[i].y * s,
+        y: nodes[i].x * s + nodes[i].y * c,
+      };
+    }
+
     function screenToWorld(px, py) {
       var vw = canvas.width, vh = canvas.height;
       // display-frame world point...
@@ -612,9 +627,14 @@
       raf = 0;
       if (disposed) return;
       // advance the slow galactic rotation from real elapsed time
-      // (frame-rate independent); paused while the tab is hidden.
+      // (frame-rate independent); paused while the tab is hidden AND
+      // while a node is focused (selId>=0) -- a frozen frame keeps the
+      // eased camera locked exactly on the selected node (else the
+      // perpetual spin carries it off the static camera every frame).
       var t = (global.performance || Date).now();
-      if (gT) gA = (gA + (t - gT) / 1000 * GOMEGA) % (Math.PI * 2);
+      if (gT && selId < 0) {
+        gA = (gA + (t - gT) / 1000 * GOMEGA) % (Math.PI * 2);
+      }
       gT = t;
       resize();
       regl.poll();
@@ -792,7 +812,10 @@
           // the surrounding nebula vanished = the "black" report).
           var tz = Math.min(Math.max(cam.zoom, fitZoom * 3.0),
             fitZoom * 6.0);
-          easeTo(nodes[selId].x, nodes[selId].y, tz);
+          // rotation is now frozen (selId>=0); aim at the node's
+          // CURRENT on-screen (rotated) position so the fly is exact.
+          var ft = focusTarget(selId);
+          easeTo(ft.x, ft.y, tz);
         } else {
           invalidate();
         }
