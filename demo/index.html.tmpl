@@ -3,153 +3,123 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>mnemo - live demo</title>
-<meta name="description" content="mnemo: local-first knowledge memory + code intelligence + agentic companion for Claude Code. Interactive Nebula galaxy on seeded synthetic data.">
-<link rel="icon" href="brain.svg">
+<title>mnemo - live Nebula demo</title>
+<meta name="description" content="The real mnemo Nebula: 3-panel shell, file tree, filter, node detail + connections, hover/select/highlight -- on a seeded synthetic graph of mnemo's own architecture. Static, no backend.">
+<link rel="icon" type="image/svg+xml" href="mark.svg">
+<link rel="stylesheet" href="app.css">
 <style>
-  :root{
-    --bg:#07090f; --panel:#0d1018; --line:#1c2230;
-    --fg:#e6edf3; --dim:#8b95a7; --accent:#7ee7e0;
-    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
-    --sans:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+  /* the demo supplies only its own topbar; everything below is the
+     REAL app.css (the .nebula-shell / panels / detail / tree). */
+  body{margin:0;background:#07090f;color:#e6edf3;
+    font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+  .demo-top{
+    height:var(--topbar-h,56px);box-sizing:border-box;display:flex;
+    align-items:center;gap:12px;padding:0 18px;
+    border-bottom:1px solid rgba(126,231,224,.12);
+    background:rgba(8,11,19,.92)
   }
-  *{box-sizing:border-box;margin:0;padding:0}
-  html,body{background:var(--bg);color:var(--fg);font-family:var(--sans)}
-  a{color:var(--accent);text-decoration:none}
-  a:hover{text-decoration:underline}
-  header{
-    display:flex;align-items:center;gap:14px;
-    padding:22px 26px;border-bottom:1px solid var(--line)
-  }
-  header img{width:34px;height:34px;filter:drop-shadow(0 0 6px var(--accent))}
-  header h1{font-size:22px;letter-spacing:.5px;font-weight:650}
-  .pill{
-    font:600 11px/1 var(--mono);color:var(--bg);background:var(--accent);
-    padding:5px 9px;border-radius:999px;margin-left:4px
-  }
-  header .sub{color:var(--dim);font-size:13px;margin-left:auto;text-align:right}
-  .stage{position:relative;width:100%;height:72vh;min-height:420px;background:var(--bg)}
-  #nebula-gl,#nebula-labels{position:absolute;inset:0;width:100%;height:100%}
-  #nebula-labels{pointer-events:none}
-  .hud{
-    position:absolute;left:16px;top:14px;display:flex;gap:8px;
-    flex-wrap:wrap;align-items:center;z-index:5
-  }
-  .hud button{
-    font:600 12px/1 var(--sans);color:var(--fg);background:rgba(13,16,24,.82);
-    border:1px solid var(--line);border-radius:999px;padding:7px 12px;cursor:pointer
-  }
-  .hud button.off{color:var(--dim);opacity:.65}
-  .hud .tag{
-    font:600 11px/1 var(--mono);color:var(--dim);
-    background:rgba(13,16,24,.82);border:1px solid var(--line);
-    border-radius:999px;padding:7px 11px
-  }
-  .cap{
-    position:absolute;left:16px;bottom:14px;right:16px;color:var(--dim);
-    font-size:12.5px;z-index:5;pointer-events:none
-  }
-  .cap b{color:var(--accent)}
-  .boot{
-    position:absolute;inset:0;display:flex;align-items:center;
-    justify-content:center;color:var(--dim);font:600 13px var(--mono)
-  }
-  section.feat{max-width:1080px;margin:0 auto;padding:42px 22px 8px}
-  section.feat h2{
-    font-size:13px;letter-spacing:2px;text-transform:uppercase;
-    color:var(--dim);font-weight:700;margin-bottom:18px
-  }
-  .grid{display:grid;gap:16px;grid-template-columns:repeat(2,1fr)}
-  @media (max-width:760px){ .grid{grid-template-columns:1fr} }
-  .card{
-    background:var(--panel);border:1px solid var(--line);
-    border-radius:14px;padding:18px 18px 16px
-  }
-  .card h3{font-size:15px;margin-bottom:6px}
-  .card p{color:var(--dim);font-size:13px;margin-bottom:12px}
-  .card pre{
-    background:#05070c;border:1px solid var(--line);border-radius:9px;
-    padding:12px;overflow:auto;font:12px/1.5 var(--mono);color:#cdd6e3;
-    white-space:pre-wrap;word-break:break-word
-  }
-  footer{
-    max-width:1080px;margin:30px auto 0;padding:24px 22px 48px;
-    border-top:1px solid var(--line);color:var(--dim);font-size:13px
-  }
-  footer pre{
-    background:#05070c;border:1px solid var(--line);border-radius:9px;
-    padding:12px;margin:12px 0;font:12.5px/1.6 var(--mono);color:#cdd6e3
-  }
-  footer .note{font-size:12px;opacity:.8}
+  .demo-top img{width:22px;height:22px}
+  .demo-top b{font-size:16px;letter-spacing:.4px}
+  .demo-top .v{font:600 11px/1 ui-monospace,monospace;color:#07090f;
+    background:#7ee7e0;padding:4px 8px;border-radius:999px}
+  .demo-top .sp{margin-left:auto;color:#8b95a7;font-size:12.5px}
+  .demo-top a{color:#7ee7e0;text-decoration:none}
+  .demo-empty{color:#8b95a7;font-size:13px;line-height:1.6}
+  .demo-chips{display:flex;flex-wrap:wrap;gap:6px;margin:.5rem 0 .75rem}
+  .demo-chip{font:600 11px/1 ui-sans-serif,system-ui,sans-serif;
+    color:#cdd6e3;background:rgba(126,231,224,.08);
+    border:1px solid rgba(126,231,224,.18);border-radius:999px;
+    padding:6px 10px;cursor:pointer}
+  .demo-chip.off{opacity:.4}
+  .demo-find{width:100%;box-sizing:border-box;margin:.25rem 0 .5rem;
+    background:#05070c;color:#e6edf3;border:1px solid rgba(126,231,224,.18);
+    border-radius:8px;padding:8px 10px;font:13px ui-sans-serif,system-ui}
+  .nb-body{background:#05070c;border:1px solid rgba(126,231,224,.14);
+    border-radius:9px;padding:11px;margin:.5rem 0;overflow:auto;
+    font:12px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    color:#cdd6e3;white-space:pre-wrap;word-break:break-word}
+  .nb-conn{list-style:none;margin:.4rem 0 0;padding:0}
+  .nb-conn li{display:flex;justify-content:space-between;gap:8px;
+    padding:7px 9px;border:1px solid rgba(126,231,224,.10);
+    border-radius:8px;margin-bottom:6px;cursor:pointer;font-size:12.5px}
+  .nb-conn li:hover{background:rgba(126,231,224,.07)}
+  .nb-conn .r{color:#8b95a7;font:11px ui-monospace,monospace}
+  .tree-group{cursor:pointer;color:#cdd6e3;font-weight:650;
+    padding:6px 4px;display:flex;gap:6px;align-items:center}
+  .tree-group .n{margin-left:auto;color:#8b95a7;font:11px ui-monospace,monospace}
+  .tree-file{display:block;color:#aeb8c7;text-decoration:none;
+    padding:4px 6px 4px 20px;border-radius:6px;font-size:12.5px;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .tree-file:hover{background:rgba(126,231,224,.07);color:#e6edf3}
+  .tree-file.active{background:rgba(126,231,224,.14);color:#7ee7e0}
+  .demo-close{float:right;background:none;border:0;color:#8b95a7;
+    font-size:20px;cursor:pointer;line-height:1}
+  .demo-close:hover{color:#e6edf3}
+  .ntype{display:inline-block;font:600 10.5px/1 ui-monospace,monospace;
+    color:var(--type-color,#7ee7e0);border:1px solid var(--type-color,#7ee7e0);
+    border-radius:999px;padding:5px 9px;margin-bottom:8px}
+  .nsource{color:#8b95a7;font:11.5px ui-monospace,monospace;
+    word-break:break-all;margin:.25rem 0}
+  .ndesc{color:#c7d0de;font-size:13px;line-height:1.55;margin:.4rem 0}
+  .demo-status{position:absolute;left:14px;bottom:12px;z-index:6;
+    color:#8b95a7;font:12px ui-sans-serif,system-ui;pointer-events:none}
+  .demo-hud{position:absolute;left:14px;top:12px;z-index:6;display:flex;gap:8px}
+  .demo-hud button{font:600 12px ui-sans-serif,system-ui;color:#e6edf3;
+    background:rgba(13,16,24,.85);border:1px solid rgba(126,231,224,.18);
+    border-radius:999px;padding:7px 12px;cursor:pointer}
+  .demo-hud button.off{color:#8b95a7;opacity:.6}
+  .nebula-booting{position:absolute;inset:0;display:flex;align-items:center;
+    justify-content:center;color:#8b95a7;font:600 13px ui-monospace,monospace;z-index:7}
 </style>
 </head>
 <body>
-<header>
-  <img src="brain.svg" alt="mnemo">
-  <h1>mnemo<span class="pill">v%%VERSION%%</span></h1>
-  <div class="sub">
-    local-first knowledge memory + code intelligence + agentic companion<br>
-    <a href="%%REPO_URL%%">github.com/mmct-jsc/mnemo</a>
-  </div>
+<header class="demo-top">
+  <img src="mark.svg" alt="mnemo">
+  <b>mnemo</b><span class="v">v%%VERSION%%</span>
+  <span class="sp">live Nebula on a seeded synthetic graph of mnemo's own architecture &middot;
+    <a href="%%REPO_URL%%">source</a> &middot;
+    run it locally: <code>./install.sh &amp;&amp; mnemo ui</code></span>
 </header>
 
-<div class="stage" id="stage">
-  <canvas id="nebula-gl"></canvas>
-  <canvas id="nebula-labels"></canvas>
-  <div class="hud">
-    <button id="t-edges">edges</button>
-    <button id="t-labels">labels</button>
-    <span class="tag" id="tag">the live Nebula renderer &middot; seeded synthetic mnemo graph</span>
-  </div>
-  <div class="boot" id="boot">warming the nebula&hellip;</div>
-  <div class="cap" id="cap">
-    drag to pan &middot; scroll to zoom &middot; click a star to focus it &middot;
-    <b id="sel">nothing selected</b>
-  </div>
-</div>
+<section class="nebula-shell">
+  <aside class="nebula-tree">
+    <h3 class="tree-title">mnemo &mdash; synthetic graph</h3>
+    <input class="demo-find" id="find" placeholder="filter nodes (name / type)&hellip;" autocomplete="off">
+    <div class="demo-chips" id="chips"></div>
+    <div id="tree"></div>
+  </aside>
 
-<section class="feat">
-  <h2>what mnemo does (server-side features &mdash; shown from the same seed)</h2>
-  <div class="grid">
-    <div class="card">
-      <h3>Graph-RAG retrieval</h3>
-      <p>Every prompt gets &le; 800 tokens of typed, cited memory + code structure injected by hooks.</p>
-      <pre>%%RAG_EXAMPLE%%</pre>
+  <div class="nebula-canvas">
+    <canvas id="nebula-gl"></canvas>
+    <canvas id="nebula-labels"></canvas>
+    <div id="cy-nebula"></div>
+    <div class="demo-hud">
+      <button id="t-edges">edges</button>
+      <button id="t-labels">labels</button>
     </div>
-    <div class="card">
-      <h3>Code intelligence</h3>
-      <p>A typed code graph (modules / functions / classes / routes) with a Tier-2 call resolver.</p>
-      <pre>%%CODE_EXAMPLE%%</pre>
-    </div>
-    <div class="card">
-      <h3>Mnem &mdash; agentic companion</h3>
-      <p>A tool-using agent over your own memory + code graph (BYO key; also an MCP server).</p>
-      <pre>%%CHAT_EXAMPLE%%</pre>
-    </div>
-    <div class="card">
-      <h3>Plugin hooks</h3>
-      <p>SessionStart injects a memory map; UserPromptSubmit injects budget-capped cited context; PostToolUse re-embeds edits in the background. No config.</p>
-      <pre>SessionStart  -&gt; memory map
-UserPromptSubmit -&gt; &le;800 tok cited context
-PostToolUse(Edit|Write) -&gt; background re-embed</pre>
-    </div>
+    <div class="demo-status" id="status">loading&hellip;</div>
+    <div class="nebula-booting" id="boot">warming the nebula&hellip;</div>
   </div>
+
+  <aside class="nebula-detail" id="detail">
+    <div class="demo-empty" id="empty">
+      Click a star on the canvas (or a file in the tree) to see its
+      type, source, description, body, and its connections &mdash;
+      exactly like the local <code>/graph</code>. Drag to pan, scroll
+      to zoom, click empty space or press <kbd>Esc</kbd> to deselect.
+    </div>
+    <div id="card" style="display:none">
+      <button class="demo-close" id="close" title="Deselect (Esc)">&times;</button>
+      <span class="ntype" id="d-type"></span>
+      <h3 id="d-name" style="margin:.2rem 0;font-size:16px"></h3>
+      <p class="nsource" id="d-src"></p>
+      <p class="ndesc" id="d-desc"></p>
+      <div class="nb-body" id="d-body"></div>
+      <h4 id="d-conn-h" style="font-size:13px;color:#8b95a7;margin:.9rem 0 .2rem"></h4>
+      <ul class="nb-conn" id="d-conn"></ul>
+    </div>
+  </aside>
 </section>
-
-<footer>
-  <strong>This is a static demo</strong> &mdash; the Nebula above is the real
-  WebGL renderer on a fixed synthetic graph that depicts mnemo's own
-  architecture (no private data). The retrieval / code / chat panels are
-  examples generated from the same seed. Run the real, full system locally:
-  <pre>git clone %%REPO_URL%%
-cd mnemo &amp;&amp; ./install.sh        # or .\install.ps1 on Windows
-mnemo daemon start &amp;&amp; mnemo ui   # opens the local UI</pre>
-  <div class="note">
-    <a href="%%REPO_URL%%">source &amp; docs</a> &middot;
-    <a href="%%REPO_URL%%/blob/main/CHANGELOG.md">changelog</a> &middot;
-    built by GitHub Actions from <code>scripts/build_demo.py</code>
-  </div>
-</footer>
 
 <script src="regl.min.js"></script>
 <script src="nebula-gl.js"></script>
@@ -157,52 +127,163 @@ mnemo daemon start &amp;&amp; mnemo ui   # opens the local UI</pre>
 (function () {
   "use strict";
   var boot = document.getElementById("boot");
-  function fail(msg) { if (boot) boot.textContent = msg; }
-  if (!window.createREGL || !window.NebulaGL) {
-    return fail("renderer failed to load");
+  function fail(m) { if (boot) boot.textContent = m; }
+  if (!window.createREGL || !window.NebulaGL) return fail("renderer failed to load");
+
+  function esc(s) {
+    return String(s).replace(/[&<>]/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c];
+    });
   }
+  function hex(c) {
+    function h(v) { return ("0" + Math.round(v * 255).toString(16)).slice(-2); }
+    return "#" + h(c[0]) + h(c[1]) + h(c[2]);
+  }
+
   fetch("nebula.json").then(function (r) {
     if (!r.ok) throw new Error("nebula.json " + r.status);
     return r.json();
   }).then(function (data) {
+    var nodes = data.nodes, edges = data.edges, adj = data.adj || {};
     var cv = document.getElementById("nebula-gl");
     var labels = window.NebulaGL.LabelProvider(
       document.getElementById("nebula-labels"));
     var gl = window.NebulaGL.create(cv, {
-      nodes: data.nodes,
-      edges: data.edges,
-      labels: labels,
+      nodes: nodes, edges: edges, labels: labels,
       theme: {
         bg: [0.027, 0.035, 0.059, 1.0],
         edge: [0.42, 0.54, 0.86, 0.085],
-        glow: 0.9,
-        accent: [0.494, 0.906, 0.878]
+        glow: 0.9, accent: [0.494, 0.906, 0.878]
       }
     });
-    // default label set = every node; the renderer frame-budgets it.
-    labels.setLabels(data.nodes.map(function (n) {
+    labels.setLabels(nodes.map(function (n) {
       return { x: n.x, y: n.y, text: n.name };
     }));
-    var edgesOn = true, labelsOn = true;
-    gl.setEdgesVisible(edgesOn);
-    gl.setLabelsVisible(labelsOn);
+    if (boot) boot.style.display = "none";
+    document.getElementById("status").textContent =
+      nodes.length + " nodes · " + edges.length +
+      " edges · seeded synthetic mnemo galaxy (static demo)";
+
+    // --- detail panel (mirrors the local /graph) ---
+    var card = document.getElementById("card");
+    var empty = document.getElementById("empty");
+    var selId = -1;
+    function deselect() {
+      selId = -1; card.style.display = "none"; empty.style.display = "";
+      gl.select(null);
+      var a = document.querySelector(".tree-file.active");
+      if (a) a.classList.remove("active");
+    }
+    function select(i) {
+      var n = nodes[i]; if (!n) return;
+      selId = i;
+      empty.style.display = "none"; card.style.display = "";
+      var ty = document.getElementById("d-type");
+      ty.textContent = n.type;
+      ty.style.setProperty("--type-color", hex(n.color));
+      ty.className = "ntype ntype-" + n.type;
+      document.getElementById("d-name").textContent = n.name;
+      var se = document.getElementById("d-src");
+      se.textContent = n.src || ""; se.style.display = n.src ? "" : "none";
+      document.getElementById("d-desc").textContent = n.desc || "";
+      document.getElementById("d-body").textContent = n.body || "";
+      var nb = adj[String(i)] || [];
+      document.getElementById("d-conn-h").textContent =
+        "Connections (" + nb.length + ")";
+      var ul = document.getElementById("d-conn");
+      ul.innerHTML = "";
+      nb.slice(0, 60).forEach(function (e) {
+        var m = nodes[e.i]; if (!m) return;
+        var li = document.createElement("li");
+        li.innerHTML = "<span>" + esc(m.short || m.name) +
+          "</span><span class='r'>" + esc(e.rel) + " · " +
+          e.conf.toFixed(2) + "</span>";
+        li.onclick = function () { select(e.i); gl.select(e.i); };
+        ul.appendChild(li);
+      });
+      var a = document.querySelector(".tree-file.active");
+      if (a) a.classList.remove("active");
+      var tf = document.querySelector('.tree-file[data-i="' + i + '"]');
+      if (tf) { tf.classList.add("active"); }
+    }
+    gl.on("clickNode", function (i) { select(i); });
+    gl.on("clickStage", function () { deselect(); });
+    document.getElementById("close").onclick = deselect;
+    window.addEventListener("keydown", function (e) {
+      if (e.key === "Escape") deselect();
+    });
+
+    // --- toggles ---
+    var eOn = true, lOn = true;
     var be = document.getElementById("t-edges");
     var bl = document.getElementById("t-labels");
+    gl.setEdgesVisible(eOn); gl.setLabelsVisible(lOn);
     be.onclick = function () {
-      edgesOn = !edgesOn; gl.setEdgesVisible(edgesOn);
-      be.classList.toggle("off", !edgesOn);
+      eOn = !eOn; gl.setEdgesVisible(eOn); be.classList.toggle("off", !eOn);
     };
     bl.onclick = function () {
-      labelsOn = !labelsOn; gl.setLabelsVisible(labelsOn);
-      bl.classList.toggle("off", !labelsOn);
+      lOn = !lOn; gl.setLabelsVisible(lOn); bl.classList.toggle("off", !lOn);
     };
-    var sel = document.getElementById("sel");
-    gl.on("clickNode", function (i) {
-      var n = data.nodes[i];
-      if (n) sel.textContent = n.name + "  (" + n.type + ")";
+
+    // --- type-chip + text filter (dim non-matching, never hide) ---
+    var types = {};
+    nodes.forEach(function (n) { types[n.type] = (types[n.type] || 0) + 1; });
+    var off = {};
+    var chipBox = document.getElementById("chips");
+    Object.keys(types).sort().forEach(function (t) {
+      var b = document.createElement("button");
+      b.className = "demo-chip"; b.textContent = t + " (" + types[t] + ")";
+      b.onclick = function () {
+        off[t] = !off[t]; b.classList.toggle("off", !!off[t]); applyFilter();
+      };
+      chipBox.appendChild(b);
     });
-    gl.on("clickStage", function () { sel.textContent = "nothing selected"; });
-    if (boot) boot.style.display = "none";
+    var find = document.getElementById("find");
+    find.addEventListener("input", applyFilter);
+    function applyFilter() {
+      var q = find.value.trim().toLowerCase();
+      var anyOff = Object.keys(off).some(function (k) { return off[k]; });
+      if (!q && !anyOff) { gl.setHighlight(null); return; }
+      var keep = new Set();
+      nodes.forEach(function (n, i) {
+        if (off[n.type]) return;
+        if (q && n.name.toLowerCase().indexOf(q) < 0 &&
+                 n.type.toLowerCase().indexOf(q) < 0) return;
+        keep.add(i);
+      });
+      gl.setHighlight(keep);
+    }
+
+    // --- left tree: group by source directory (like the file tree) ---
+    var groups = {};
+    nodes.forEach(function (n, i) {
+      var g = n.src ? n.src.split("/").slice(0, 3).join("/") : ("type:" + n.type);
+      (groups[g] || (groups[g] = [])).push(i);
+    });
+    var tree = document.getElementById("tree");
+    Object.keys(groups).sort().forEach(function (g) {
+      var head = document.createElement("div");
+      head.className = "tree-group";
+      head.innerHTML = "<span>▾</span><span>" + esc(g) +
+        "</span><span class='n'>" + groups[g].length + "</span>";
+      var box = document.createElement("div");
+      groups[g].slice(0, 40).forEach(function (i) {
+        var a = document.createElement("a");
+        a.className = "tree-file vscode-file";
+        a.href = "#"; a.setAttribute("data-i", i);
+        a.textContent = nodes[i].short || nodes[i].name;
+        a.onclick = function (ev) {
+          ev.preventDefault(); select(i); gl.select(i);
+        };
+        box.appendChild(a);
+      });
+      var openTog = true;
+      head.onclick = function () {
+        openTog = !openTog; box.style.display = openTog ? "" : "none";
+        head.firstChild.textContent = openTog ? "▾" : "▸";
+      };
+      tree.appendChild(head); tree.appendChild(box);
+    });
   }).catch(function (e) { fail("could not load the graph: " + e.message); });
 })();
 </script>

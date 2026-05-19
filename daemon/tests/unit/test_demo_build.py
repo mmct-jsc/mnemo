@@ -1,11 +1,14 @@
 """Contract for the static GitHub Pages demo builder.
 
-The demo is a lean, static artifact: a deterministic synthetic graph
-that DEPICTS mnemo (no real/workspace data) run through the REAL
-layout engine, baked to one ``nebula.json`` the vendored renderer
-draws. These probes are GPU-free + authoritative; the visual is the
-published Pages site. Also the hard security guard: no secret-shaped
-string may ever enter the tree (a full-perm PAT was pasted in chat).
+The demo IS the real Nebula page: the actual app.css + the actual
+mark.svg logo + the actual vendored renderer, driven by a
+deterministic synthetic graph that DEPICTS mnemo (no real/workspace
+data) laid out by the REAL engine and baked to one nebula.json with
+per-node detail + the adjacency, so the demo has the SAME functions
+as the local /graph (3-panel shell, tree, filter, select/highlight,
+detail + connections, toggles). GPU-free + authoritative. Also the
+hard security guard: no secret-shaped string may ever enter the tree
+(a full-perm PAT was pasted in chat).
 """
 
 from __future__ import annotations
@@ -63,8 +66,9 @@ def test_nebula_json_schema_finite_and_deterministic(bd) -> None:
         "nebula.json must be byte-identical across builds (the real "
         "layout engine is deterministic) -> cacheable + reviewable"
     )
-    nodes, edges = j1["nodes"], j1["edges"]
+    nodes, edges, adj = j1["nodes"], j1["edges"], j1["adj"]
     assert len(nodes) >= 800
+    n = len(nodes)
     for nd in nodes:
         assert isinstance(nd["x"], float)
         assert isinstance(nd["y"], float)
@@ -76,30 +80,69 @@ def test_nebula_json_schema_finite_and_deterministic(bd) -> None:
         assert all(0.0 <= v <= 1.0 for v in c), "rgb in 0..1"
         assert nd["name"], "node has a name"
         assert nd["type"], "node has a type"
-    n = len(nodes)
+        # detail-panel fields (parity with the local /graph)
+        assert isinstance(nd["desc"], str), "description is a string"
+        assert nd["desc"], "node has a non-empty description"
+        assert isinstance(nd["body"], str), "body is a string"
+        assert nd["body"], "node has a non-empty body"
+        assert isinstance(nd["src"], str), "node has a source path (may be '')"
+        assert isinstance(nd["short"], str), "short label is a string"
+        assert nd["short"], "node has a non-empty short label"
     for e in edges:
         assert 0 <= e["s"] < n, "edge source index in range"
         assert 0 <= e["t"] < n, "edge target index in range"
+    # the adjacency drives the detail panel's Connections list.
+    assert isinstance(adj, dict), "adj is a dict"
+    assert adj, "nebula.json must carry the adjacency"
+    for k, lst in adj.items():
+        assert 0 <= int(k) < n, "adj key is a valid node index"
+        for e in lst:
+            assert 0 <= e["i"] < n, "neighbor index in range"
+            assert isinstance(e["rel"], str), "relation is a string"
+            assert e["rel"], "neighbor has a relation"
+            assert 0.0 <= e["conf"] <= 1.0, "confidence in 0..1"
 
 
-def test_template_wires_the_real_vendored_renderer() -> None:
-    tmpl = (REPO / "demo" / "index.html.tmpl").read_text(encoding="utf-8")
+def test_page_is_the_real_nebula_shell_with_all_functions() -> None:
+    """The demo must be the REAL Nebula (app.css + mark.svg + the
+    vendored renderer) with the local /graph functions, not a bare
+    canvas: 3-panel shell, tree, filter, select/deselect, highlight,
+    detail + connections, edge/label toggles."""
+    t = (REPO / "demo" / "index.html.tmpl").read_text(encoding="utf-8")
     for tok in (
+        # the real stylesheet + the real logo (not the vscode brain)
+        '<link rel="stylesheet" href="app.css">',
+        "mark.svg",
+        # the real renderer
         "regl.min.js",
         "nebula-gl.js",
         "NebulaGL.create(",
         "nebula.json",
         'id="nebula-gl"',
         'id="nebula-labels"',
+        # the real 3-panel shell structure (styled by app.css)
+        'class="nebula-shell"',
+        'class="nebula-tree"',
+        'class="nebula-canvas"',
+        'class="nebula-detail"',
+        # the local /graph functions
+        "gl.select(",
+        "clickNode",
+        "clickStage",
+        "setHighlight",
+        "setEdgesVisible",
+        "setLabelsVisible",
+        '"Escape"',
+        "tree-file",
+        "Connections (",
     ):
-        assert tok in tmpl, f"demo template must wire the real renderer: {tok!r}"
-    # static + offline: no daemon URL, no CDN runtime dep.
-    assert "127.0.0.1:7373" not in tmpl, "the demo is static -- no daemon URL"
-    assert "unpkg.com" not in tmpl, "no CDN runtime dep"
-    assert "cdn." not in tmpl, "no CDN runtime dep"
+        assert tok in t, f"demo must wire the real Nebula function/asset: {tok!r}"
+    assert "127.0.0.1:7373" not in t, "the demo is static -- no daemon URL"
+    assert "unpkg.com" not in t, "no CDN runtime dep"
+    assert "cdn." not in t, "no CDN runtime dep"
 
 
-def test_assemble_emits_only_the_lean_fileset(bd, tmp_path) -> None:
+def test_assemble_emits_only_the_real_nebula_fileset(bd, tmp_path) -> None:
     out = tmp_path / "dist"
     bd.assemble(out)
     got = {p.name for p in out.iterdir() if p.is_file()}
@@ -108,11 +151,15 @@ def test_assemble_emits_only_the_lean_fileset(bd, tmp_path) -> None:
         "nebula.json",
         "regl.min.js",
         "nebula-gl.js",
-        "brain.svg",
-    }, f"dist must be exactly the lean set, got {sorted(got)}"
+        "app.css",
+        "mark.svg",
+    }, f"dist must be exactly the real-Nebula set, got {sorted(got)}"
     html = (out / "index.html").read_text(encoding="utf-8")
     assert "%%" not in html, "no unrendered template slot (%%NAME%% marker)"
     assert json.loads((out / "nebula.json").read_text(encoding="utf-8"))["nodes"]
+    assert "<svg" in (out / "mark.svg").read_text(encoding="utf-8"), (
+        "mark.svg must be the real mnemo logo"
+    )
 
 
 def test_no_secret_shaped_string_in_tracked_tree() -> None:
