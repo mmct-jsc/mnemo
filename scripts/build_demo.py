@@ -1,12 +1,16 @@
 """Build the static GitHub Pages demo for mnemo.
 
-A lean, static artifact (no daemon, no CDN). A DETERMINISTIC synthetic
-graph that *depicts mnemo's own architecture* (no real/workspace/
-private data) is run through the REAL server layout engine
-(``mnemo.ui.graph_layout.compute_graph_layout``) and baked to one
-``nebula.json`` that the vendored client renderer (``regl`` +
-``nebula-gl.js``) draws live. Feature-card snippets are generated
-from the SAME seed so the page stays truthful to the shown graph.
+A lean, static artifact (no daemon, no CDN) that is the REAL Nebula
+page: the actual ``app.css`` + the actual ``mark.svg`` logo + the
+actual vendored renderer (``regl`` + ``nebula-gl.js``), driven by a
+DETERMINISTIC synthetic graph that *depicts mnemo's own architecture*
+(no real/workspace/private data). The synthetic graph is laid out by
+the REAL engine (``mnemo.ui.graph_layout.compute_graph_layout``) and
+baked to one ``nebula.json`` (positions + per-node detail + the
+adjacency) so the demo has the SAME functions as the local /graph:
+3-panel shell, file tree, filter bar, hover/select/highlight, the
+detail panel with description/body + a Connections (neighbors) list,
+edge/label toggles, and all the deselect paths.
 
 Importable (the unit-test contract drives it) and a CLI:
     uv run python scripts/build_demo.py --out dist
@@ -21,9 +25,11 @@ import shutil
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
-VENDOR = REPO / "daemon" / "mnemo" / "ui" / "static" / "vendor"
+UI = REPO / "daemon" / "mnemo" / "ui"
+VENDOR = UI / "static" / "vendor"
+APP_CSS = UI / "static" / "app.css"
+LOGO = UI / "static" / "mnem" / "mark.svg"
 TMPL = REPO / "demo" / "index.html.tmpl"
-BRAIN = REPO / "extensions" / "vscode" / "media" / "brain.svg"
 REPO_URL = "https://github.com/mmct-jsc/mnemo"
 PAGES_URL = "https://mmct-jsc.github.io/mnemo/"
 
@@ -38,11 +44,7 @@ def _version() -> str:
     return "0.0.0"
 
 
-# --- the synthetic mnemo-themed graph -------------------------------
 # Eight community "subsystems" mirroring mnemo's real architecture.
-# Each contributes a code_module + code_function/method/class, memory
-# nodes, and commits, with dense intra edges + sparse inter bridges so
-# the spectral->log-spiral engine yields a believable galaxy.
 _SUBSYSTEMS = [
     (
         "ui",
@@ -181,10 +183,38 @@ _MEM = {
     ],
 }
 
+# deterministic-but-realistic relation per (src_type -> dst_type).
+_REL = {
+    "code_module": ("defines", 0.95),
+    "code_class": ("method_of", 0.95),
+    "commit": ("touched_by", 1.0),
+    "memory_feedback": ("applies_to", 0.8),
+    "memory_project": ("applies_to", 0.8),
+    "memory_reference": ("applies_to", 0.8),
+    "plan_doc": ("documents", 0.85),
+    "session_summary": ("recorded_in", 0.7),
+    "project_doc": ("documents", 0.85),
+}
+
+
+def _src_path(pkg: str, typ: str, name: str) -> str:
+    base = pkg.replace(".", "/")
+    if name.endswith(".js"):
+        return f"daemon/{base}/static/vendor/{name}"
+    if name.endswith(".html"):
+        return f"daemon/{base}/templates/{name}"
+    if typ.startswith("memory_") or typ in ("session_summary", "memory_user"):
+        return f"~/.claude/projects/D--Repository-knowledge-base/memory/{name}.md"
+    if typ in ("plan_doc", "project_doc"):
+        return f"docs/plans/{name}.md"
+    if typ == "commit":
+        return ""
+    return f"daemon/{base}.py"
+
 
 def build_seed_graph() -> tuple[int, list[tuple[int, int]], list[dict]]:
-    """Deterministic synthetic graph depicting mnemo. Returns
-    ``(n, edges, meta)`` where ``meta[i] = {name, type, comm}``."""
+    """Deterministic synthetic graph depicting mnemo. ``meta[i]`` has
+    ``{name, short, type, comm, src}``."""
     rng = random.Random(_SEED)
     meta: list[dict] = []
     edges: list[tuple[int, int]] = []
@@ -193,61 +223,74 @@ def build_seed_graph() -> tuple[int, list[tuple[int, int]], list[dict]]:
     for ci, (key, pkg, syms) in enumerate(_SUBSYSTEMS):
         members: list[int] = []
         mod_idx = len(meta)
-        meta.append({"name": pkg, "type": "code_module", "comm": ci})
+        meta.append(
+            {
+                "name": pkg,
+                "short": pkg,
+                "type": "code_module",
+                "comm": ci,
+                "src": _src_path(pkg, "code_module", "x"),
+            }
+        )
         members.append(mod_idx)
-        # ~150 nodes/subsystem: cycle the symbol list with suffixes.
         per = 150
         for k in range(per):
             sym = syms[k % len(syms)]
-            if (
-                sym.endswith(".js")
-                or sym.endswith(".html")
-                or sym[0].islower()
-                and "." not in sym
-                and sym.islower()
-                and "_" in sym
-            ):
-                typ = "code_function"
+            if sym.endswith((".js", ".html")):
+                typ = "code_module"
             elif sym[0].isupper():
                 typ = "code_class" if k % 5 == 0 else "code_method"
-            elif sym.endswith(".js") or sym.endswith(".html"):
-                typ = "code_module"
             elif "route" in sym or "endpoint" in sym or sym.startswith("tier3"):
                 typ = "code_route" if k % 2 else "code_endpoint"
             else:
                 typ = "code_function"
-            name = sym if k < len(syms) else f"{sym}_{k // len(syms)}"
+            short = sym if k < len(syms) else f"{sym}_{k // len(syms)}"
             i = len(meta)
-            meta.append({"name": f"{pkg}.{name}", "type": typ, "comm": ci})
+            meta.append(
+                {
+                    "name": f"{pkg}.{short}",
+                    "short": short,
+                    "type": typ,
+                    "comm": ci,
+                    "src": _src_path(pkg, typ, short),
+                }
+            )
             members.append(i)
-            # dense intra-community structure (defines / calls)
             edges.append((mod_idx, i))
             for _ in range(3):
                 j = rng.choice(members)
                 if j != i:
                     edges.append((i, j))
-        # memory nodes attached to this subsystem
         for mname, mtype in _MEM.get(key, []):
             i = len(meta)
-            meta.append({"name": mname, "type": mtype, "comm": ci})
-            members.append(i)
-            edges.append((rng.choice(members[:per]), i))  # applies_to
-        # commit nodes touching this subsystem
-        for _ in range(6):
-            i = len(meta)
-            sha = f"{rng.randrange(16**7):07x}"
             meta.append(
                 {
-                    "name": f"{sha} feat({key}): " + rng.choice(syms),
-                    "type": "commit",
+                    "name": mname,
+                    "short": mname,
+                    "type": mtype,
                     "comm": ci,
+                    "src": _src_path(pkg, mtype, mname),
                 }
             )
             members.append(i)
-            edges.append((i, rng.choice(members[:per])))  # touched_by
+            edges.append((rng.choice(members[:per]), i))
+        for _ in range(6):
+            i = len(meta)
+            sha = f"{rng.randrange(16**7):07x}"
+            msg = f"feat({key}): " + rng.choice(syms)
+            meta.append(
+                {
+                    "name": f"{sha} {msg}",
+                    "short": sha,
+                    "type": "commit",
+                    "comm": ci,
+                    "src": "",
+                }
+            )
+            members.append(i)
+            edges.append((i, rng.choice(members[:per])))
         comm_members.append(members)
 
-    # sparse inter-community bridges (imports / cross-refs)
     for a in range(len(comm_members)):
         for b in range(a + 1, len(comm_members)):
             for _ in range(2):
@@ -260,7 +303,35 @@ def build_seed_graph() -> tuple[int, list[tuple[int, int]], list[dict]]:
     return len(meta), edges, meta
 
 
-# --- bake the layout via the REAL engine ----------------------------
+def _desc(m: dict) -> str:
+    t = m["type"]
+    if t == "code_module":
+        return f"Module {m['name']} -- a synthetic stand-in for one of mnemo's packages."
+    if t in ("code_function", "code_method"):
+        return f"{m['short']}(): a representative {t.replace('code_', '')} in {m['comm']}."
+    if t == "code_class":
+        return f"class {m['short']}: a representative type in this subsystem."
+    if t in ("code_route", "code_endpoint"):
+        return f"{m['short']}: an HTTP surface anchor (cross-stack sitemap)."
+    if t == "commit":
+        return "A synthetic commit touching this subsystem (provenance edge)."
+    return f"{m['short']}: a synthetic {t} node depicting mnemo's memory layer."
+
+
+def _body(m: dict) -> str:
+    t = m["type"]
+    if t.startswith("code_"):
+        return (
+            f"# {m['name']}\n# (synthetic demo node -- depicts mnemo's "
+            f"own architecture; no real source)\n\ndef {m['short']}(...):\n"
+            f"    ...  # {m['comm']} subsystem"
+        )
+    return (
+        f"---\nname: {m['short']}\ntype: {t}\n---\n\nSynthetic "
+        f"{t} node for the mnemo demo galaxy (no real/private content)."
+    )
+
+
 def _hex_rgb(h: str) -> list[float]:
     h = h.lstrip("#")
     return [round(int(h[i : i + 2], 16) / 255.0, 4) for i in (0, 2, 4)]
@@ -275,25 +346,29 @@ def build_nebula_json() -> dict:
     for s, t in edges:
         deg[s] += 1
         deg[t] += 1
-    pos = compute_graph_layout(n, edges)  # real, deterministic, cached
+    pos = compute_graph_layout(n, edges)
     nodes = []
     for i in range(n):
+        m = meta[i]
         d = deg[i]
-        size = max(1.5, min(4.6, 1.3 + (d**0.5) * 0.78))
         nodes.append(
             {
                 "x": float(pos[2 * i]),
                 "y": float(pos[2 * i + 1]),
-                "size": round(size, 3),
-                "color": _hex_rgb(color_for(meta[i]["type"])),
-                "name": meta[i]["name"],
-                "type": meta[i]["type"],
+                "size": round(max(1.5, min(4.6, 1.3 + (d**0.5) * 0.78)), 3),
+                "color": _hex_rgb(color_for(m["type"])),
+                "name": m["name"],
+                "short": m["short"],
+                "type": m["type"],
                 "deg": d,
+                "src": m["src"],
+                "desc": _desc(m),
+                "body": _body(m),
             }
         )
-    # de-dup edges, drop self-loops
     seen: set[tuple[int, int]] = set()
     out_e: list[dict] = []
+    adj: dict[str, list[dict]] = {}
     for s, t in edges:
         if s == t:
             continue
@@ -302,51 +377,21 @@ def build_nebula_json() -> dict:
             continue
         seen.add(k)
         out_e.append({"s": s, "t": t})
-    return {"nodes": nodes, "edges": out_e}
-
-
-# --- truthful feature-card snippets from the SAME seed ---------------
-def _snippets() -> dict:
-    _, _, meta = build_seed_graph()
-    by_t: dict[str, list[str]] = {}
-    for idx, m in enumerate(meta):
-        by_t.setdefault(m["type"], []).append(f"{idx}:{m['name']}")
-    fb = by_t["memory_feedback"][0].split(":", 1)
-    pj = by_t["memory_project"][0].split(":", 1)
-    fn = [x.split(":", 1) for x in by_t["code_function"][:2]]
-    rag = (
-        "&gt; how do we keep the Nebula from re-rendering when idle?\n\n"
-        f"[mnemo:{fb[0]}] {fb[1]} (memory_feedback)\n"
-        "  one scheduler; frame() re-arms only while animating, else idles.\n"
-        f"[mnemo:{pj[0]}] {pj[1]} (memory_project)\n"
-        "  server-laid layout is cached; the browser is a pure renderer.\n"
-        "-- 2 hits, 142 tokens (budget 800)"
-    )
-    code = (
-        f"trace-call {fn[0][1]}\n"
-        f"  {fn[0][1]}  ->  {fn[1][1]}  (calls, 0.95)\n"
-        f"  {fn[1][1]}  ->  mnemo.store.Store.query  (cross-file, 0.80)"
-    )
-    chat = (
-        "you: which nodes are related to the layout engine?\n"
-        "Mnem: pulling the session subgraph + highlighting it on the "
-        "live Nebula graph... (sample exchange)"
-    )
-    return {"RAG": rag, "CODE": code, "CHAT": chat}
+        rel, conf = _REL.get(meta[s]["type"], ("calls", 0.9))
+        if meta[s]["comm"] != meta[t]["comm"]:
+            rel, conf = "imports", 0.8
+        adj.setdefault(str(s), []).append({"i": t, "rel": rel, "conf": conf})
+        adj.setdefault(str(t), []).append({"i": s, "rel": rel, "conf": conf})
+    return {"nodes": nodes, "edges": out_e, "adj": adj}
 
 
 def render_index() -> str:
     tmpl = TMPL.read_text(encoding="utf-8")
-    s = _snippets()
-    repl = {
+    for k, v in {
         "%%VERSION%%": _version(),
         "%%REPO_URL%%": REPO_URL,
         "%%PAGES_URL%%": PAGES_URL,
-        "%%RAG_EXAMPLE%%": s["RAG"],
-        "%%CODE_EXAMPLE%%": s["CODE"],
-        "%%CHAT_EXAMPLE%%": s["CHAT"],
-    }
-    for k, v in repl.items():
+    }.items():
         tmpl = tmpl.replace(k, v)
     return tmpl
 
@@ -361,7 +406,8 @@ def assemble(out: Path) -> None:
     (out / "index.html").write_text(render_index(), encoding="utf-8")
     shutil.copyfile(VENDOR / "regl.min.js", out / "regl.min.js")
     shutil.copyfile(VENDOR / "nebula-gl.js", out / "nebula-gl.js")
-    shutil.copyfile(BRAIN, out / "brain.svg")
+    shutil.copyfile(APP_CSS, out / "app.css")
+    shutil.copyfile(LOGO, out / "mark.svg")
 
 
 def main() -> None:
