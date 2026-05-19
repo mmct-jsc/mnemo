@@ -382,7 +382,9 @@ function nebula() {
     rawElements: [],
     treeModules: [],
     edgesVisible: true,
-    labelsVisible: true,
+    labelsVisible: false,  // labels default OFF (auto-off); a prior
+                           // explicit choice is still restored from
+                           // localStorage in _restoreState().
     bodyMode: 'markdown',
 
     typeColor(t) {
