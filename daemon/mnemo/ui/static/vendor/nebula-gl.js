@@ -188,8 +188,10 @@
                          // post-click lag) until the next invalidate().
     var gA = 0;          // galactic rotation angle (radians)
     var gT = 0;          // last animation timestamp
-    var edgesOn = true;  // edge/label visibility toggles (the
-    var labelsOn = true; // reported dead toggle controls)
+    var edgesOn = true;   // edge visibility toggle (default on)
+    var labelsOn = false; // labels default OFF (auto-off the label
+                          // display; the toggle / setLabelsVisible
+                          // turns them on on demand)
     var GOMEGA = 0.013;  // rad/s -- a full turn ~8 min: a gentle,
                          // never-distracting "the galaxy is alive"
                          // drift (NOT the v4.5.2 camera-fight loop).
@@ -277,37 +279,61 @@
     // that flow with the disc (the intended "silk"), never a straight
     // wire tangle. Shared by the base web AND the accent incident
     // pass so the accent overlays the SAME curve exactly.
-    var EDGE_SEG = 10;
+    var EDGE_SEG = 12;
     var BOW = 0.16;
-    function tessEdge(sx, sy, tx, ty, parr, larr, po, lo) {
+    // Each edge is a feathered triangle-strip RIBBON, NOT 1px GL
+    // `lines` (hard-rasterized, un-antialiased -> a tessellated
+    // polyline of them reads as "thousands of straight lines"). Per
+    // centerline sample we emit 2 verts offset +/-1 along the
+    // screen-space normal of the curve TANGENT (constant pixel width
+    // at any zoom); the fragment smoothstep's alpha across abs(side)
+    // -> a continuous smooth AA band. Independent edges concatenate
+    // into ONE strip via a degenerate vertex at each edge start+end.
+    var STR = 2 * (EDGE_SEG + 1) + 2;  // ribbon verts per edge
+    function tessEdge(sx, sy, tx, ty, P, Tn, Sd, Ln, vo) {
       var dx = tx - sx, dy = ty - sy;
       var L = Math.sqrt(dx * dx + dy * dy) || 1e-6;
-      var nx = -dy / L, ny = dx / L;            // unit perpendicular
-      var cx = (sx + tx) * 0.5 + nx * L * BOW;  // bowed control point
+      var nx = -dy / L, ny = dx / L;
+      var cx = (sx + tx) * 0.5 + nx * L * BOW;
       var cy = (sy + ty) * 0.5 + ny * L * BOW;
-      var px = sx, py = sy;                     // u=0 == S
-      for (var k = 0; k < EDGE_SEG; k++) {
-        var u = (k + 1) / EDGE_SEG, iu = 1 - u;
-        var qx = iu * iu * sx + 2 * iu * u * cx + u * u * tx;
-        var qy = iu * iu * sy + 2 * iu * u * cy + u * u * ty;
-        var o = po + k * 4, l = lo + k * 2;
-        parr[o] = px; parr[o + 1] = py;
-        parr[o + 2] = qx; parr[o + 3] = qy;
-        larr[l] = L; larr[l + 1] = L;
-        px = qx; py = qy;
+      var v = vo;
+      function put(pX, pY, tX, tY, sd) {
+        P[v * 2] = pX; P[v * 2 + 1] = pY;
+        Tn[v * 2] = tX; Tn[v * 2 + 1] = tY;
+        Sd[v] = sd; Ln[v] = L; v++;
       }
+      for (var k = 0; k <= EDGE_SEG; k++) {
+        var u = k / EDGE_SEG, iu = 1 - u;
+        var bx = iu * iu * sx + 2 * iu * u * cx + u * u * tx;
+        var by = iu * iu * sy + 2 * iu * u * cy + u * u * ty;
+        var gx = 2 * iu * (cx - sx) + 2 * u * (tx - cx);
+        var gy = 2 * iu * (cy - sy) + 2 * u * (ty - cy);
+        var gnv = Math.sqrt(gx * gx + gy * gy) || 1e-6;
+        gx /= gnv; gy /= gnv;
+        if (k === 0) put(bx, by, gx, gy, -1);  // degenerate join-in
+        put(bx, by, gx, gy, -1);
+        put(bx, by, gx, gy, 1);
+      }
+      // degenerate join-out (dup the last vertex)
+      P[v * 2] = P[(v - 1) * 2]; P[v * 2 + 1] = P[(v - 1) * 2 + 1];
+      Tn[v * 2] = Tn[(v - 1) * 2]; Tn[v * 2 + 1] = Tn[(v - 1) * 2 + 1];
+      Sd[v] = Sd[v - 1]; Ln[v] = Ln[v - 1];
     }
-    var edgePos = new Float32Array(edges.length * EDGE_SEG * 4);
-    var edgeLen = new Float32Array(edges.length * EDGE_SEG * 2);
+    var edgePos = new Float32Array(edges.length * STR * 2);
+    var edgeTan = new Float32Array(edges.length * STR * 2);
+    var edgeSide = new Float32Array(edges.length * STR);
+    var edgeLen = new Float32Array(edges.length * STR);
     function rebuildEdges() {
       for (var i = 0; i < edges.length; i++) {
         var s = nodes[edges[i].s], t = nodes[edges[i].t];
-        tessEdge(s.x, s.y, t.x, t.y, edgePos, edgeLen,
-          i * EDGE_SEG * 4, i * EDGE_SEG * 2);
+        tessEdge(s.x, s.y, t.x, t.y, edgePos, edgeTan, edgeSide,
+          edgeLen, i * STR);
       }
     }
     rebuildEdges();
     var edgeBuf = regl.buffer({ usage: 'dynamic', data: edgePos });
+    var edgeTanBuf = regl.buffer({ usage: 'dynamic', data: edgeTan });
+    var edgeSideBuf = regl.buffer({ usage: 'dynamic', data: edgeSide });
     var edgeLenBuf = regl.buffer({ usage: 'dynamic', data: edgeLen });
 
     function res(ctx) { return [ctx.drawingBufferWidth, ctx.drawingBufferHeight]; }
@@ -319,12 +345,16 @@
     // pick/drag stay exact.
     var EDGE_VERT =
       'precision highp float; attribute vec2 position;' +
-      'attribute float len; uniform vec2 cam,res;' +
-      'uniform float zoom; uniform float uA; varying float vLen;' +
-      'void main(){ vLen=len; float s=sin(uA),c=cos(uA);' +
+      'attribute vec2 tang; attribute float side; attribute float len;' +
+      'uniform vec2 cam,res; uniform float zoom; uniform float uA;' +
+      'uniform float hw; varying float vLen; varying float vSide;' +
+      'void main(){ vLen=len; vSide=side; float s=sin(uA),c=cos(uA);' +
       ' vec2 rp=vec2(position.x*c-position.y*s,' +
       '              position.x*s+position.y*c);' +
-      ' vec2 p=(rp-cam)*zoom;' +
+      ' vec2 rt=normalize(vec2(tang.x*c-tang.y*s,' +
+      '                        tang.x*s+tang.y*c));' +
+      ' vec2 nrm=vec2(-rt.y, rt.x);' +    // ribbon normal (screen px)
+      ' vec2 p=(rp-cam)*zoom + nrm*side*hw;' +
       ' gl_Position=vec4(p.x/(res.x*0.5),p.y/(res.y*0.5),0.0,1.0);}';
     // KEEP edges, but make them read as galactic FILAMENTS not a
     // hairball: a flat draw of all ~15.5k chords on a weakly-modular
@@ -339,23 +369,32 @@
     // ``fade``=0 on the accent (incident) pass keeps it full + sharp.
     var EDGE_FRAG =
       'precision highp float; uniform vec4 ec;' +
-      'uniform float wr,uz,uf,fade; varying float vLen;' +
+      'uniform float wr,uz,uf,fade;' +
+      'varying float vLen; varying float vSide;' +
       'void main(){' +
       ' float Ln=vLen/wr;' +
       ' float lf=exp(-Ln*Ln*8.0);' +
       ' float zf=clamp((uz/uf-1.0)*0.5+0.16,0.16,1.0);' +
       ' float k=mix(1.0, lf*zf, fade);' +
-      ' gl_FragColor=vec4(ec.rgb, ec.a*k); }';
+      // feather across the ribbon width = the anti-aliasing: opaque
+      // core, smooth fade at both edges -> one smooth line, not a
+      // faceted 1px polyline.
+      ' float aa=1.0-smoothstep(0.55,1.0,abs(vSide));' +
+      ' gl_FragColor=vec4(ec.rgb, ec.a*k*aa); }';
 
     var drawEdges = regl({
       vert: EDGE_VERT,
       frag: EDGE_FRAG,
-      attributes: { position: edgeBuf, len: edgeLenBuf },
+      attributes: {
+        position: edgeBuf, tang: edgeTanBuf,
+        side: edgeSideBuf, len: edgeLenBuf,
+      },
       uniforms: {
         cam: function () { return [cam.x, cam.y]; },
         zoom: function () { return cam.zoom; },
         res: function (c) { return res(c); },
         uA: function () { return gA; },
+        hw: function () { return 2.4 * dpr; },  // ribbon half-width px
         wr: function () { return worldR; },
         uz: function () { return cam.zoom; },
         uf: function () { return fitZoom || 1; },
@@ -367,8 +406,8 @@
           return [edgeColor[0], edgeColor[1], edgeColor[2], a];
         },
       },
-      count: edges.length * EDGE_SEG * 2,
-      primitive: 'lines',
+      count: edges.length * STR,
+      primitive: 'triangle strip',
       blend: {
         enable: true,
         func: { src: 'src alpha', dst: 'one' },
@@ -419,7 +458,9 @@
         // stay <= the layout no-overlap spacing or distinct stars
         // visually merge again. Low zoom-growth -> tiny at fit (the
         // reference is countless tiny stars), grows when zoomed in.
-        ' gl_PointSize=clamp(siz*(0.35+4.0*zoom),1.5,15.0);}',
+        // a highlighted/focused node (hl=1) is markedly LARGER so it
+        // pops out of the 12k-star field (was: same tiny size as all).
+        ' gl_PointSize=clamp(siz*(0.35+4.0*zoom),1.5,15.0)*(1.0+1.7*hl);}',
       // NO screen-space-derivative call: on a WebGL1 context (regl's
       // default) those need the OES_standard_derivatives extension +
       // an #extension pragma; without it the fragment shader FAILS TO
@@ -441,7 +482,8 @@
         // MUCH gentler bloom (was *0.42*(1.15-..) -> additively
         // stacked to a white-out in the dense core). ~3x less so
         // dense stars stay discrete, faint halo only.
-        ' float bloom=glow*(1.0-smoothstep(0.06,0.5,d))*0.15*(1.0-0.8*vR);' +
+        ' float bloom=glow*(1.0-smoothstep(0.06,0.5,d))*0.15' +
+        '   *(1.0-0.8*vR)*(1.0+1.6*vH);' +  // brighter halo when focused
         // FOCUS: vH=1 = related (full colour + bloom, pops); vH=0 =
         // unrelated -> tinted cool BLUE and dimmed but still VISIBLE
         // as a blue backdrop field (the user: "blue all others if not
@@ -584,15 +626,18 @@
       depth: { enable: false },
     });
 
-    // highlight pass: the selected/hovered node's incident edges,
-    // accent + on top -- SAME robust non-instanced LINES pattern,
-    // its own dynamic buffer (never instanced).
+    // highlight pass: the selected/hovered node's incident edges as
+    // the SAME feathered ribbon, accent-coloured, drawn behind nodes.
     var accent = theme.accent || [0.494, 0.906, 0.878]; // #7ee7e0
-    var hiPos = new Float32Array(4);
+    var hiPos = new Float32Array(STR * 2);
     var hiBuf = regl.buffer({ usage: 'dynamic', data: hiPos });
-    var hiLen = new Float32Array(2);  // EDGE_VERT requires a len attr;
+    var hiTan = new Float32Array(STR * 2);
+    var hiTanBuf = regl.buffer({ usage: 'dynamic', data: hiTan });
+    var hiSide = new Float32Array(STR);
+    var hiSideBuf = regl.buffer({ usage: 'dynamic', data: hiSide });
+    var hiLen = new Float32Array(STR);
     var hiLenBuf = regl.buffer({ usage: 'dynamic', data: hiLen });
-    var hiVerts = 0;  // highlighted VERTICES (2 per incident edge)
+    var hiVerts = 0;  // highlighted ribbon VERTICES
     function rebuildHi() {
       var foc = selId >= 0 ? selId : hoverId;
       var cnt = 0;
@@ -602,31 +647,39 @@
         }
       }
       if (cnt === 0) { hiVerts = 0; return; }
-      var need4 = cnt * EDGE_SEG * 4, need2 = cnt * EDGE_SEG * 2;
-      if (hiPos.length < need4) hiPos = new Float32Array(need4);
-      if (hiLen.length < need2) hiLen = new Float32Array(need2);
-      var q = 0;  // q-th incident edge -> its curve block
+      var nP = cnt * STR * 2, n1 = cnt * STR;
+      if (hiPos.length < nP) hiPos = new Float32Array(nP);
+      if (hiTan.length < nP) hiTan = new Float32Array(nP);
+      if (hiSide.length < n1) hiSide = new Float32Array(n1);
+      if (hiLen.length < n1) hiLen = new Float32Array(n1);
+      var q = 0;  // q-th incident edge -> its ribbon block
       for (var j = 0; j < edges.length; j++) {
         if (edges[j].s === foc || edges[j].t === foc) {
           var s = nodes[edges[j].s], t = nodes[edges[j].t];
-          tessEdge(s.x, s.y, t.x, t.y, hiPos, hiLen,
-            q * EDGE_SEG * 4, q * EDGE_SEG * 2);
+          tessEdge(s.x, s.y, t.x, t.y, hiPos, hiTan, hiSide,
+            hiLen, q * STR);
           q++;
         }
       }
-      hiVerts = cnt * EDGE_SEG * 2;
-      hiBuf({ data: hiPos.subarray(0, need4) });
-      hiLenBuf({ data: hiLen.subarray(0, need2) });
+      hiVerts = cnt * STR;
+      hiBuf({ data: hiPos.subarray(0, nP) });
+      hiTanBuf({ data: hiTan.subarray(0, nP) });
+      hiSideBuf({ data: hiSide.subarray(0, n1) });
+      hiLenBuf({ data: hiLen.subarray(0, n1) });
     }
     var hiEdges = regl({
       vert: EDGE_VERT,
       frag: EDGE_FRAG,
-      attributes: { position: hiBuf, len: hiLenBuf },
+      attributes: {
+        position: hiBuf, tang: hiTanBuf,
+        side: hiSideBuf, len: hiLenBuf,
+      },
       uniforms: {
         cam: function () { return [cam.x, cam.y]; },
         zoom: function () { return cam.zoom; },
         res: function (c) { return res(c); },
         uA: function () { return gA; },
+        hw: function () { return 3.0 * dpr; },  // accent: a touch wider
         wr: function () { return worldR; },
         uz: function () { return cam.zoom; },
         uf: function () { return fitZoom || 1; },
@@ -643,7 +696,7 @@
         },
       },
       count: function () { return hiVerts; },
-      primitive: 'lines',
+      primitive: 'triangle strip',
       blend: { enable: true, func: { src: 'src alpha', dst: 'one' } },
       depth: { enable: false },
     });
@@ -722,9 +775,10 @@
       try {
         drawBg();                         // deep-space cirrus
         drawCore();                       // galactic bulge underglow
+        // ALL edges (base + accent) render BEHIND every node.
         if (edgesOn && edges.length) drawEdges();
-        drawNodes();
         if (edgesOn && hiVerts) hiEdges();
+        drawNodes();
       } catch (e) { /* skip this frame; the loop continues */ }
       if (labels && labels._render) {
         labels._render(cam, gA, canvas.width, canvas.height, dpr, labelsOn);
@@ -852,6 +906,8 @@
           posBuf({ data: posArr });
           rebuildEdges();
           edgeBuf({ data: edgePos });
+          edgeTanBuf({ data: edgeTan });
+          edgeSideBuf({ data: edgeSide });
           edgeLenBuf({ data: edgeLen });
           rebuildHi();
           invalidate();
