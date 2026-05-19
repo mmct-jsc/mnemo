@@ -51,12 +51,8 @@ def test_nebula_gl_surface() -> None:
     # the Milky-Way bulge is a RENDERED luminous core glow (a
     # locality-preserving graph layout cannot pile a density bulge
     # without scrambling edges) -- it must exist as an additive quad.
-    assert "drawCore" in src, (
-        "the galactic core-glow draw must exist (the rendered bulge)"
-    )
-    assert "triangle strip" in src, (
-        "core glow must be a quad (gl.POINTS size is driver-capped)"
-    )
+    assert "drawCore" in src, "the galactic core-glow draw must exist (the rendered bulge)"
+    assert "triangle strip" in src, "core glow must be a quad (gl.POINTS size is driver-capped)"
     # the instanced-edge GL_INVALID_OPERATION trap must not return:
     # edges are a non-instanced LINES draw (no divisor on a buffer).
     assert "divisor" not in src, (

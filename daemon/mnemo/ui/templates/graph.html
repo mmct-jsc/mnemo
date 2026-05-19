@@ -946,6 +946,9 @@ function nebula() {
       // apply the persisted edge/label toggle state to the renderer.
       this.gl.setEdgesVisible(this.edgesVisible);
       this.gl.setLabelsVisible(this.labelsVisible);
+      // seed the overlay so labels show on load when the toggle is on
+      // (default global set -- no selection required).
+      this._refreshLabels();
     },
 
     // World-space label items for the NebulaGL LabelProvider: the
@@ -973,6 +976,48 @@ function nebula() {
         });
       }
       return out;
+    },
+
+    // Default GLOBAL label set: the most-connected nodes, bounded so
+    // the overlay stays legible and the per-frame project loop stays
+    // cheap. Without this the LabelProvider only ever held
+    // selection-scoped items, so the global "labels" toggle did
+    // nothing at idle (the reported dead toggle). Selection and
+    // highlight still override this with their own focused sets.
+    _defaultLabelItems() {
+      if (!this._xy || !this._order.length) return [];
+      const ids = this._order.slice().sort(
+        (a, b) => ((this._byId[b] || {}).deg || 0)
+                - ((this._byId[a] || {}).deg || 0));
+      const out = [];
+      const n = Math.min(64, ids.length);
+      for (let k = 0; k < n; k++) {
+        const id = ids[k];
+        const r = this._byId[id];
+        const i = this._idx[id];
+        if (!r || i == null) continue;
+        out.push({
+          x: this._xy[2 * i],
+          y: this._xy[2 * i + 1],
+          text: r.name.length > 32 ? r.name.slice(0, 31) + '…' : r.name,
+        });
+      }
+      return out;
+    },
+
+    // One state router for the #nebula-labels overlay: off -> clear;
+    // a selection -> its focused set; an active highlight owns its
+    // own labels; otherwise the default global set. Called on render,
+    // toggle and deselect so the labels toggle is ALWAYS meaningful.
+    _refreshLabels() {
+      if (!this.labels) return;
+      if (!this.labelsVisible) { this.labels.clear(); return; }
+      if (this._selId) {
+        this.labels.setLabels(this._labelItems(this._selId));
+        return;
+      }
+      if (this._hl && this._hl.size) return;
+      this.labels.setLabels(this._defaultLabelItems());
     },
 
     // --- selection: highlight (NOT hide) + camera fly -------------
@@ -1034,7 +1079,7 @@ function nebula() {
       this.selected = null;
       this.neighbors = [];
       if (this.gl) this.gl.select(null);
-      if (this.labels) this.labels.clear();
+      this._refreshLabels();
       this.applyFilters();
     },
 
@@ -1089,7 +1134,7 @@ function nebula() {
     clearHighlight() {
       this._hl = null;
       this._pushHighlight();
-      if (this.labels && !this._selId) this.labels.clear();
+      this._refreshLabels();
     },
 
     // --- filters: type chips + text + min-confidence -------------
@@ -1126,9 +1171,7 @@ function nebula() {
     toggleLabels() {
       this.labelsVisible = !this.labelsVisible;
       if (this.gl) this.gl.setLabelsVisible(this.labelsVisible);
-      if (this.labelsVisible && this._selId && this.labels) {
-        this.labels.setLabels(this._labelItems(this._selId));
-      }
+      this._refreshLabels();
       this._persistState();
     },
 
