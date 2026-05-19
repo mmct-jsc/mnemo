@@ -3,11 +3,11 @@
 [![CI](https://github.com/mmct-jsc/mnemo/actions/workflows/ci.yml/badge.svg)](https://github.com/mmct-jsc/mnemo/actions/workflows/ci.yml)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-2.1.0-blue.svg)](CHANGELOG.md)
-[![Tests](https://img.shields.io/badge/tests-605_passing-brightgreen.svg)](daemon/tests/)
+[![Version](https://img.shields.io/badge/version-4.6.1-blue.svg)](CHANGELOG.md)
+[![Tests](https://img.shields.io/badge/tests-1245_passing-brightgreen.svg)](daemon/tests/)
 [![ruff](https://img.shields.io/badge/lint-ruff-orange.svg)](https://github.com/astral-sh/ruff)
 
-Local-first knowledge memory **+ code intelligence** for Claude Code. Aggregates your Claude memory, project knowledge, **and source code** into a single typed graph; retrieves it via hybrid Graph-RAG on every prompt; ships it back as token-budgeted, cited context.
+Local-first knowledge memory **+ code intelligence + an agentic companion** for Claude Code. Aggregates your Claude memory, project knowledge, **and source code** into a single typed graph; retrieves it via hybrid Graph-RAG on every prompt; ships it back as token-budgeted, cited context. Chat with it through a tool-using agent ("Mnem"), and explore the whole graph as a custom WebGL galaxy at `/graph`.
 
 ```
 [Claude Code plugin]   skills + hooks + slash commands
@@ -16,7 +16,7 @@ Local-first knowledge memory **+ code intelligence** for Claude Code. Aggregates
 [mnemo daemon]         Python + FastAPI on 127.0.0.1:7373
         |
         +-- typed graph: memory_* nodes + code_* nodes + commit nodes
-        +-- 9 edge relations: applies_to / calls / routes_to / at_endpoint / ...
+        +-- typed edges: applies_to / calls / routes_to / at_endpoint / touched_by / ...
         +-- per-edge confidence (0.0..1.0) for inferred inferences
         |
         v
@@ -31,32 +31,35 @@ Claude memory is scattered: `~/.claude/projects/<project>/memory/*.md`, per-repo
 
 When you start a session, mnemo injects a memory map. When you submit a prompt, hybrid Graph-RAG injects ≤ 800 tokens of relevant typed memory + code structure. When Claude edits a file, mnemo re-embeds in the background.
 
-## What's new in v2.0 + v2.1
+## What's new
 
-### v2.0 — Code Intelligence
+Newest first. The full version-by-version diff is in [CHANGELOG.md](CHANGELOG.md).
 
-- **Typed code graph** — every `code_repo` source becomes `code_module` + `code_function` + `code_class` + `code_method` + `code_route` + `code_component` + `code_endpoint` nodes with edges for `imports` / `defines` / `method_of` / `calls` / `routes_to` / `at_endpoint`.
-- **Tier 1 ingestion** — tree-sitter parses 16 languages; Python gets full structural extraction (functions, classes, methods, decorated definitions, docstrings → descriptions).
-- **Tier 2 Python call-graph resolver** — Stack-Graphs-inspired scope resolution with constructor + `self`/`this` lookups; same-file edges at 0.95 confidence, cross-file via imports at 0.8.
-- **Tier 3 framework extractors** — FastAPI, Flask, Express (backend); React (frontend); each emits `code_route` + `code_component` + a shared `code_endpoint` URI anchor so cross-stack sitemap queries work.
-- **Source auto-router** — `mnemo source add <path>` classifies the kind (`code_repo` / `memory_dir` / `docs_dir`), shows a dry-run preview, and refuses to scan paths over 50,000 source files without `--force`.
-- **`/code` UI family** — landing, project overview with file-grouped declarations, function detail with 2-hop ego-network, cross-stack sitemap table.
-- **7 new code skills** — `mnemo:explore-codebase`, `mnemo:trace-call`, `mnemo:trace-route`, `mnemo:explain-design`, `mnemo:debug-with-code`, `mnemo:why-is-this-here`, `mnemo:impact-analysis`.
+### v4.x — Nebula custom graph engine + design-system + responsive
 
-### v2.1 — Nebula UI
+- **The Nebula at `/graph` is now a custom WebGL galaxy.** The whole third-party renderer stack (cytoscape, then sigma + graphology) is gone. The layout is computed **server-side in Python** — a deterministic, community-separating spectral embedding sheared into a face-on **log-spiral galaxy**, cached by `scope_key + fingerprint + LAYOUT_VERSION` (the browser is a pure renderer). It is drawn by a purpose-built single-file regl renderer (`nebula-gl.js`): crisp extension-free SDF star points graded by galactic radius, a rendered barred core-glow + full-viewport deep-space dust, length/zoom-graded curved edge filaments, every-node labels (frame-budgeted), a slow GPU-only galactic drift, and click-to-focus that flies + freezes on the node. Scales to 11k+ nodes; idle costs zero.
+- **C1 design-system contract** — every primitive value single-sourced in `app.css :root` + a guard test; a documented page-shell contract so the v3.2-class layout bug can't return.
+- **Fully responsive / adaptive layout** — breakpoint tokens, off-canvas drawers, collapse primitives, a strict no-overflow rule, responsive-contract tests.
+- Provider registry, a dedicated settings surface, and chat-surface/backlog refinements.
 
-- **Three-panel resizable shell at `/graph`** — file tree (VSCode-style icons) | force-directed canvas | node detail panel with Prism syntax highlighting. Drag the gutters to resize; widths persist to localStorage.
-- **Vibrant Nebula palette** — saturated neon-on-velvet, glow halos around every node (per-type color), starfield + bloom backdrop, marching-ants animation on highlighted edges, pulse on the selected node.
-- **Silky transitions everywhere** — cubic-bezier 200–300ms easing on chips, gutters, tree, detail panel, slider, layout buttons. Layout switches cross-fade (140ms out → snap → 220ms in + camera tween) without per-node tweening.
-- **Smart filter bar** — text search, per-type chip toggles, confidence slider with tick marks (0/.5/.7/.9/1), hop selector, layout buttons (force / rings / tree / grid). Force layout snapshots its initial positions so round-tripping through other layouts always returns to the same shape.
-- **Three deselect paths** — click canvas, Escape key, "×" close button in detail panel.
+### v3 — Mnem, the agentic companion
+
+- **A tool-using agent over your own memory + code graph**, not a pre-canned RAG box. Four providers behind one abstraction (Anthropic / OpenAI / Google / Ollama), BYO API keys (env > repo `.env` > OS keychain > 0600 fallback; never in `settings.json`).
+- **Permission protocol** — risk-tagged tools; `confirm`/`danger` calls pause for `POST /v1/chat/<id>/permit`; `allow_always` persists per-project.
+- **Conversations are first-class** SQLite rows with an SSE event stream; a `/chat` page + a **Mnem companion dock on every page**, plus the `mnemo:doc` skill (` ```mnemo-draft ` fences → one-click Save as memory).
+- **MCP server** (`mnemo mcp`, stdio) — the same tool surface, so Cursor / Claude Desktop / Codex / Windsurf get mnemo for free.
+
+### v2 — Code Intelligence + language parity + Workspaces
+
+- **Typed code graph** — every `code_repo` becomes `code_module` / `code_function` / `code_class` / `code_method` / `code_route` / `code_component` / `code_endpoint` nodes with `imports` / `defines` / `method_of` / `calls` / `routes_to` / `at_endpoint` edges, plus commit provenance (`touched_by`) from git history.
+- **Tier 1 tree-sitter ingestion** with full structural extraction at Python parity for **Python, JavaScript, TypeScript, Go, and Django**.
+- **Tier 2 call-graph resolver** — scope resolution with constructor + `self`/`this` lookups (same-file 0.95, cross-file via imports 0.8).
+- **Tier 3 framework extractors** — FastAPI / Flask / Express (backend) + React (frontend) emit routes/components anchored on a shared `code_endpoint` URI so cross-stack sitemap queries work.
+- **Source auto-router** (`mnemo source add` classifies kind + dry-run preview + 50k-file guard), the **`/code` UI family**, **7 code skills**, and **named Workspaces** — switchable bundles of `project_keys` + filter prefs; with no active workspace the UI drops into BASE-only mode.
 
 ### v1.2 — Learning to Listen (carried forward)
 
-- **Feedback events** — thumb up/down on each retrieval hit; auto-detected re-queries within a 5-minute window flag missed-hit candidates.
-- **MMR re-rank** — top-K hits diversified to reduce paraphrased duplicates.
-- **Auto-tuner** — coordinate-descent over the 6-term scoring weights, MRR objective, threshold-gated (default 30 labeled queries).
-- **`POST /v1/nodes`** — direct node creation for the VS Code extension's "save as note" command.
+- **Feedback events** (thumb up/down per hit; auto-detected re-queries flag missed hits), **MMR re-rank** to de-duplicate paraphrases, and a **coordinate-descent auto-tuner** over the 6-term scoring weights (MRR objective, threshold-gated).
 
 ## Quick start
 
@@ -126,6 +129,9 @@ Restart Claude Code after install; the next session sees mnemo's hooks fire auto
 - [docs/architecture.md](docs/architecture.md) — three tiers, data model, retrieval algorithm, and what we deliberately don't do.
 - [docs/plans/2026-05-09-mnemo-design.md](docs/plans/2026-05-09-mnemo-design.md) — full v1 design.
 - [docs/plans/2026-05-11-mnemo-v2.0-design.md](docs/plans/2026-05-11-mnemo-v2.0-design.md) — full v2.0 (Code Intelligence) design.
+- [docs/plans/2026-05-14-mnemo-v3-design.md](docs/plans/2026-05-14-mnemo-v3-design.md) — full v3 (Mnem agentic companion) design.
+- [docs/plans/2026-05-16-mnemo-v4-design.md](docs/plans/2026-05-16-mnemo-v4-design.md) — full v4.x (design-system contract) design.
+- [docs/plans/2026-05-17-mnemo-v4.6-custom-graph-engine-design.md](docs/plans/2026-05-17-mnemo-v4.6-custom-graph-engine-design.md) — the custom Nebula graph engine (server layout + WebGL renderer) design.
 - [docs/workflows/index.md](docs/workflows/index.md) — guided summaries of the workflow skills.
 - [docs/examples/sample-queries.md](docs/examples/sample-queries.md) — real queries against a real `~/.claude/` memory, with the actual scored hits.
 - [CHANGELOG.md](CHANGELOG.md) — version-by-version diff.
