@@ -38,7 +38,7 @@ dependencies = [
     # openai / google-genai / keyring / mcp land in phases 5-7.
     "anthropic>=0.40",
     "openai>=1.40",
-    "google-genai>=0.3",
+    "google-genai>=2.3.0",
     "mcp>=1.2",
     "keyring>=25.7.0",
 ]
