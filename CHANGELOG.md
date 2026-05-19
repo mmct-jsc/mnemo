@@ -2,6 +2,63 @@
 
 All notable changes to mnemo are documented here.
 
+## [4.6.0] - 2026-05-19
+
+**Custom graph engine -- the Nebula is a galaxy.** User rejected the
+entire v4.5 third-party (sigma.js) renderer arc and directed: build
+custom libraries, optimise performance and quality. The whole
+third-party renderer stack is deleted and replaced by a purpose-built
+two-part engine, validated + TDD-planned before implementation
+(`docs/plans/2026-05-17-mnemo-v4.6-custom-graph-engine{,-design}.md`):
+
+- **Server-side layout** (`daemon/mnemo/ui/graph_layout.py`):
+  deterministic community-separating spectral embedding -> light
+  ForceAtlas2 declutter -> sheared into a face-on logarithmic-spiral
+  **galaxy** (mild structural bulge + coherent arms; locality
+  preserved so edges stay meaningful); small components / singletons
+  become a radial, outward-thinning halo field. Cached + algorithm-
+  versioned (`LAYOUT_VERSION`), computed once per scope; the browser
+  is a pure renderer.
+- **Custom WebGL renderer** (`static/vendor/nebula-gl.js`, vendored
+  `regl` 2.1.0; sigma + graphology removed): crisp extension-free SDF
+  star points (a true stellar palette graded by galactic radius), a
+  rendered warm barred core-glow + deep-space dust, a slow perpetual
+  GPU-only galactic rotation ("the nodes travel", zero per-frame CPU
+  graph mutation -- not the v4.5.2 camera-fight class), O(1) grid
+  picking, render-only-when-needed.
+
+Root-caused + fixed during the live-review iteration (systematic-
+debugging; the dev preview is a 0x0 software-WebGL tab so the surface
+is locked by GPU-free contract tests + verified on the user's GPU):
+
+- **The "black canvas":** `fwidth()` in a WebGL1 fragment shader
+  needs `OES_standard_derivatives`; absent -> the shader fails to
+  compile -> an invalid program -> `GL_INVALID_OPERATION` every frame
+  -> nothing rasterises. The SDF is now extension-free.
+- **Background dust + core-glow were finite world-space SQUARES**
+  (a unit quad scaled by a world radius) whose wash had not decayed
+  at the quad boundary -> a hard square edge, glow cut off outside.
+  Both are now full-viewport clip-space passes that reconstruct the
+  world point per pixel -> they fill the view at any zoom/pan and
+  fade gracefully with no geometric edge; the core is sized to the
+  dense disc (a high node-radius percentile), not the halo-inflated
+  maximum.
+- **Focus fly hit the wrong place:** `select()` eased the camera to
+  the static layout coord while the shader draws every node rotated
+  by the advancing rotation angle. The fly now targets the rotated
+  point and the rotation freezes while a node is focused (resumes on
+  deselect) -- the camera locks exactly on the node.
+- **Edges** are graded by world length + zoom (short local filaments
+  stay, long cross-disc chords fade so the spiral survives; the
+  overview is the clean spiral, zoom-in reveals local structure) and
+  tessellated into consistently-bowed quadratic-Bezier curves -> they
+  flow with the disc as smooth elegant filaments, not a straight
+  pixelated hairball.
+- **Labels:** a default global set (every node, degree-prioritised)
+  shown whenever the toggle is on, with a per-frame draw budget so
+  the full set stays smooth; the labels / edges toggles and the
+  node-focus spotlight all work.
+
 ## [4.5.3] - 2026-05-17
 
 **Crisp + alive.** User live-review of v4.5.2: "lag web, move lag,
