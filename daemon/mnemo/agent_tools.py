@@ -453,10 +453,11 @@ def _mnemo_page_context(ctx: ToolContext) -> dict:
 # "What's related in THIS session?" -- the cited / tool-used node ids of
 # the running conversation + their 1-hop neighbours. The companion calls
 # this then mnemo_highlight_nodes to highlight the subgraph ON THE LIVE
-# NEBULA GRAPH instead of guessing. v4.5 swapped the renderer to
-# sigma.js v3 + graphology, whose nodeReducer makes a real graph-view
-# highlight a pure data change -- this closes the old gotcha-31 cosmos
-# ceiling and the v3.2 "side panel, not the graph" honesty caveat.
+# NEBULA GRAPH instead of guessing. v4.6 replaced the v4.5 third-party
+# renderer with the custom nebula-gl.js WebGL engine; the renderer
+# handle's setHighlight() still makes a real graph-view highlight a
+# pure data change -- this closes the old gotcha-31 cosmos ceiling
+# and the v3.2 "side panel, not the graph" honesty caveat.
 
 _SESSION_CITE_RE = re.compile(r"\[mnemo:([^\]\s]+)\]")
 # the tool args that unambiguously name a node (so a tool the user
@@ -858,14 +859,14 @@ def _mnemo_open_panel(ctx: ToolContext, *, panel_id: str) -> dict:
     risk=RISK_CONFIRM,
     description=(
         "Highlight a SET of related nodes ON THE LIVE NEBULA GRAPH: "
-        "sigma's nodeReducer spotlights them (kept at full vivid "
-        "color, labelled, enlarged) and greys the rest (never hidden), "
-        "and the camera frames the set. Pair with mnemo_session_nodes "
-        "to show 'what's related in this session'. This DOES light "
-        "them up on the graph -- tell the user so (v4.5's sigma.js "
-        "renderer swap closed the old cosmos highlight ceiling; the "
-        "graph itself now delivers it). The /graph page must be open "
-        "for the user to see it."
+        "the custom WebGL renderer (nebula-gl.js) spotlights them "
+        "(full vivid color, labelled) and dims the rest to a cool "
+        "field (never hidden), and the camera frames the set. Pair "
+        "with mnemo_session_nodes to show 'what's related in this "
+        "session'. This DOES light them up on the graph -- tell the "
+        "user so (the v4.6 custom renderer's setHighlight() delivers "
+        "it; the old cosmos highlight ceiling stays closed). The "
+        "/graph page must be open for the user to see it."
     ),
     parameters=_obj(
         {"node_ids": {"type": "array", "items": {"type": "string"}}},
