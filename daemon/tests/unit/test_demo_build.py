@@ -203,3 +203,12 @@ def test_no_secret_shaped_string_in_tracked_tree() -> None:
         if pat.search(txt):
             offenders.append(rel)
     assert not offenders, f"secret-shaped string in tracked files: {offenders}"
+
+
+def test_demo_labels_default_off() -> None:
+    """v4.6.4: the demo also auto-offs the label display by default."""
+    t = (REPO / "demo" / "index.html.tmpl").read_text(encoding="utf-8")
+    assert "lOn = false" in t, "the demo must default labels OFF"
+    assert "var eOn = true, lOn = true" not in t, (
+        "no stray labels-on default may remain in the demo"
+    )
