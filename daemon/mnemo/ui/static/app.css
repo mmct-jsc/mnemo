@@ -4204,83 +4204,37 @@ dl.meta dd { margin: 0; color: var(--fg); min-width: 0; overflow-wrap: anywhere;
   grid-column: 3 / 4;
   position: relative;
   overflow: hidden;
-  /* v4.5 (RC6): an OPAQUE dark base so the C1 nebula backdrop is
-     guaranteed behind sigma's (transparent, alpha-context) WebGL
-     canvases -- the reported "white background, colors too bright".
-     The .nebula-canvas::before blooms + the shell starfield still
-     layer on top of this; #cy-nebula sits above, transparent. */
-  background:
-    radial-gradient(circle at 30% 18%, #0c1124 0%, transparent 60%),
-    radial-gradient(circle at 78% 82%, #06222a 0%, transparent 58%),
-    linear-gradient(180deg, #07090f 0%, #0a0e18 100%);
+  /* v4.6: a plain OPAQUE C1 deep-space base (#07090f). The v4.6
+     renderer (nebula-gl.js) clears its own GL canvas to this exact
+     colour, so there is NO transparent-canvas + CSS-atmosphere
+     coupling anymore -- that coupling was the v4.5.x failure source
+     (the "white background / lag" reports). This is just the
+     fallback paint behind the two absolutely-filling canvases. */
+  background: #07090f;
 }
 
-/* v4.5.3 LIVING DEEP-SPACE ATMOSPHERE -- pure CSS, GPU-composited,
-   ZERO JavaScript and ZERO graph re-render. This is what makes the
-   nebula feel alive now: the v4.5.2 attempt drove "life" by repainting
-   ~11k star points + ~15.5k curved edges every frame (the reported
-   lag) with a camera the loop owned (it fought zoom/pan/click). Here
-   the motion lives entirely behind the graph: ::before = slow drifting
-   nebula gas, ::after = a parallax starfield twinkling on its own beat.
-   Both sit at z:0 and show THROUGH sigma's transparent WebGL canvas
-   (#cy-nebula, z:1); the graph paints strictly on demand, untouched. */
-.nebula-canvas::before {
-  content: "";
-  position: absolute;
-  inset: -14%;                 /* oversized so drift never bares an edge */
-  pointer-events: none;
-  z-index: 0;
-  background:
-    radial-gradient(ellipse 58% 50% at 22% 26%, rgba(124, 92, 240, 0.11) 0%, transparent 70%),
-    radial-gradient(ellipse 54% 46% at 80% 76%, rgba(34, 211, 238, 0.09) 0%, transparent 72%),
-    radial-gradient(ellipse 48% 40% at 60% 32%, rgba(126, 231, 224, 0.05) 0%, transparent 75%);
-  animation: nebula-drift 64s ease-in-out infinite alternate;
-  will-change: transform;
-}
-.nebula-canvas::after {
-  content: "";
-  position: absolute;
-  inset: -10%;
-  pointer-events: none;
-  z-index: 0;
-  background:
-    radial-gradient(1.4px 1.4px at 15% 28%, rgba(214, 222, 255, 0.9) 50%, transparent 51%),
-    radial-gradient(1.2px 1.2px at 72% 62%, rgba(170, 230, 255, 0.8) 50%, transparent 51%),
-    radial-gradient(1px 1px at 43% 82%, rgba(255, 224, 196, 0.7) 50%, transparent 51%),
-    radial-gradient(1.3px 1.3px at 88% 16%, rgba(208, 200, 255, 0.8) 50%, transparent 51%),
-    radial-gradient(1px 1px at 8% 70%, rgba(196, 255, 224, 0.6) 50%, transparent 51%),
-    radial-gradient(1.1px 1.1px at 56% 8%, rgba(214, 222, 255, 0.7) 50%, transparent 51%),
-    radial-gradient(1px 1px at 33% 52%, rgba(180, 220, 255, 0.55) 50%, transparent 51%);
-  background-size:
-    240px 240px, 200px 200px, 280px 280px, 220px 220px,
-    260px 260px, 300px 300px, 180px 180px;
-  animation:
-    nebula-twinkle 7.5s ease-in-out infinite alternate,
-    nebula-parallax 130s linear infinite;
-  will-change: transform, opacity;
-}
-@keyframes nebula-drift {
-  0%   { transform: translate3d(-1.6%, -1%, 0) scale(1.02); }
-  100% { transform: translate3d(2%, 1.6%, 0) scale(1.12); }
-}
-@keyframes nebula-parallax {
-  0%   { transform: translate3d(0, 0, 0); }
-  100% { transform: translate3d(-2.6%, 1.6%, 0); }
-}
-@keyframes nebula-twinkle {
-  0%   { opacity: 0.5; }
-  100% { opacity: 1; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .nebula-canvas::before,
-  .nebula-canvas::after { animation: none; }
-}
-
-#cy-nebula {
+/* v4.6: the two stacked canvases fill .nebula-canvas exactly.
+   #nebula-gl is the WebGL graph (z:1); #nebula-labels is the 2D
+   label overlay the renderer's LabelProvider draws onto -- it sits
+   on top (z:2) and is click-through so all input lands on the GL
+   canvas. #cy-nebula is an inert hidden legacy node. */
+#nebula-gl,
+#nebula-labels {
   position: absolute;
   inset: 0;
-  background: transparent;
+  width: 100%;
+  height: 100%;
+}
+#nebula-gl {
   z-index: 1;
+  background: transparent;
+}
+#nebula-labels {
+  z-index: 2;
+  pointer-events: none;
+}
+#cy-nebula {
+  display: none;
 }
 
 .nebula-detail {
@@ -5337,78 +5291,13 @@ dl.meta dd { margin: 0; color: var(--fg); min-width: 0; overflow-wrap: anywhere;
 
 /* --- Canvas overlays --- */
 
-/* v2.2.4 DOM-overlay pulse ring. The anchor is positioned by
-   ``_updatePulseAnchor`` JS at the selected node's rendered
-   center; the inner ring is animated purely via CSS @keyframes.
-   This replaces the v2.2.3 cy.animate-based pulse which depended
-   on cytoscape's internal animation queue + transition-property
-   compatibility -- 3 prior fix attempts couldn't make it
-   reliable across click paths (canvas tap vs file-tree click).
-   CSS @keyframes are guaranteed by the spec to run in every
-   browser regardless of cytoscape's animation state. */
-.nebula-pulse-anchor {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 26px;
-  height: 26px;
-  display: none;          /* graph.html shows it only while a node is selected */
-  pointer-events: none;
-  transform: translate(-50%, -50%);
-  z-index: 6;
-  will-change: transform;
-}
-.nebula-pulse-ring {
-  width: 100%;
-  height: 100%;
-  border-radius: 50%;
-  border: 3px solid var(--accent);
-  box-shadow:
-    0 0 14px 3px color-mix(in srgb, var(--accent) 55%, transparent),
-    inset 0 0 14px color-mix(in srgb, var(--accent) 35%, transparent);
-  animation: nebula-pulse-beat 1.05s ease-in-out infinite;
-  /* The :before adds a SECOND ring slightly offset so the pulse
-     reads as a double-beat (heart). The outer ring scales bigger
-     but fades faster -- a "ripple" effect. */
-}
-.nebula-pulse-ring::before {
-  content: "";
-  position: absolute;
-  inset: -6px;
-  border-radius: 50%;
-  border: 2px solid color-mix(in srgb, var(--accent) 70%, transparent);
-  animation: nebula-pulse-ripple 1.05s ease-out infinite;
-}
-@keyframes nebula-pulse-beat {
-  0%, 100% {
-    transform: scale(0.92);
-    opacity: 0.72;
-    box-shadow:
-      0 0 10px 2px color-mix(in srgb, var(--accent) 50%, transparent),
-      inset 0 0 10px color-mix(in srgb, var(--accent) 25%, transparent);
-  }
-  50% {
-    transform: scale(1.18);
-    opacity: 1.0;
-    box-shadow:
-      0 0 28px 8px color-mix(in srgb, var(--accent) 75%, transparent),
-      inset 0 0 18px color-mix(in srgb, var(--accent) 55%, transparent);
-  }
-}
-@keyframes nebula-pulse-ripple {
-  0% {
-    transform: scale(1.0);
-    opacity: 0.6;
-  }
-  100% {
-    transform: scale(1.35);
-    opacity: 0;
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .nebula-pulse-ring,
-  .nebula-pulse-ring::before { animation: none; }
-}
+/* v4.6: the v2.2.4 DOM-overlay pulse ring + its @keyframes are gone.
+   The v4.6 renderer (nebula-gl.js) lights the selected node and its
+   incident filaments in-GL (gl.select), so there is no DOM pulse
+   element and no CSS pulse animation anymore -- a net simplification.
+   The v4.5.x CSS "atmosphere" (drift / twinkle / parallax) is removed
+   for the same reason: the WebGL canvas is opaque and self-contained,
+   that transparent-canvas coupling was the documented failure source. */
 
 /* --- Layout-change veil (v2.2.6) ---------------------------------
    When the user picks a different layout (rings / tree / grid /
@@ -5433,7 +5322,7 @@ dl.meta dd { margin: 0; color: var(--fg); min-width: 0; overflow-wrap: anywhere;
   background: var(--bg);
   opacity: 0;
   pointer-events: none;
-  z-index: 5;  /* above #cy-nebula, below .nebula-pulse-anchor (z:6) */
+  z-index: 5;  /* above the #nebula-gl / #nebula-labels canvases */
   transition: opacity 140ms ease-in-out;
 }
 .nebula-layout-veil.on {
