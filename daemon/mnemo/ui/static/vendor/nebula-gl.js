@@ -158,29 +158,6 @@
           ctx.fillText(it.text, bx, by + 9 * dpr);
         }
       },
-      // v4.6 debug HUD -- a one-line ground-truth readout drawn on
-      // the overlay every frame. The dev preview is a 0x0 hidden tab
-      // (no WebGL paint), so this is how the USER reports the real
-      // renderer state back precisely instead of "it's dark". Drawn
-      // AFTER _render so it survives the per-frame clear. Removed
-      // before the v4.6.0 release.
-      _hud: function (text, dpr) {
-        var ctx = canvasEl.getContext('2d');
-        ctx.font = (11 * dpr) + 'px ui-monospace,monospace';
-        ctx.textBaseline = 'top';
-        var lines = String(text).split('\n');
-        var w = 0;
-        for (var i = 0; i < lines.length; i++) {
-          w = Math.max(w, ctx.measureText(lines[i]).width);
-        }
-        var lh = 15 * dpr;
-        ctx.fillStyle = 'rgba(7,9,15,0.85)';
-        ctx.fillRect(0, 0, w + 16 * dpr, lines.length * lh + 8 * dpr);
-        ctx.fillStyle = '#7ee7e0';
-        for (var j = 0; j < lines.length; j++) {
-          ctx.fillText(lines[j], 8 * dpr, 6 * dpr + j * lh);
-        }
-      },
       _canvas: canvasEl,
     };
     return api;
@@ -201,16 +178,6 @@
       canvas: canvas,
       attributes: { antialias: false, alpha: false, depth: false },
     });
-    // The SAME GL context regl owns (getContext returns the existing
-    // one). Used ONLY by the debug HUD to report regl-internal ground
-    // truth (drawing-buffer size, viewport rect, GL error, draw
-    // throws) -- the dev preview is a 0x0 hidden tab so this is the
-    // only way to see why the draw calls render nothing. Removed with
-    // the HUD before the v4.6.0 release.
-    var rawgl = canvas.getContext('webgl2') || canvas.getContext('webgl');
-    var diag = { dbg: '?', vp: '?', err: 0, draw: 'ok' };
-    var _lastLog = 0;
-
     var cam = { x: 0, y: 0, zoom: 1 };
     var raf = 0, disposed = false, fitted = false;
     var gA = 0;          // galactic rotation angle (radians)
@@ -225,7 +192,6 @@
                          // anchored to THIS, never a hard 0.5 floor
                          // (0.5 on a fit~0.07 graph = fly 7x into the
                          // void = the "click -> black" report).
-    var nDraws = 0;      // frames drawn (debug HUD)
     var hoverId = -1, selId = -1, dragId = -1;
     var hl = null; // Set | null
     var cbs = {};
@@ -746,46 +712,16 @@
       resize();
       regl.poll();
       regl.clear({ color: bg, depth: 1 });
-      // wrap the draws so a regl/GL throw is REPORTED on the HUD
-      // instead of silently rendering nothing (the exact mystery).
+      // a transient GL hiccup must NEVER kill the perpetual loop.
       try {
-        drawBg();                         // faint deep-space cirrus
+        drawBg();                         // deep-space cirrus
         drawCore();                       // galactic bulge underglow
         if (edgesOn && edges.length) drawEdges();
         drawNodes();
         if (edgesOn && hiVerts) hiEdges();
-        diag.draw = 'ok';
-      } catch (e) {
-        diag.draw = (e && e.message ? e.message : String(e)).slice(0, 70);
-      }
-      nDraws++;
-      if (rawgl) {
-        diag.dbg = rawgl.drawingBufferWidth + 'x' + rawgl.drawingBufferHeight;
-        var v = rawgl.getParameter(rawgl.VIEWPORT);
-        diag.vp = v ? v[2] + 'x' + v[3] : '?';
-        diag.err = rawgl.getError();
-      }
+      } catch (e) { /* skip this frame; the loop continues */ }
       if (labels && labels._render) {
         labels._render(cam, gA, canvas.width, canvas.height, dpr, labelsOn);
-      }
-      // Ground-truth diagnostic to the CONSOLE (NOT an on-canvas
-      // overlay -- the HUD obstructed the view). Logged ~once/sec so
-      // the user can copy ONE line from DevTools: high-level state +
-      // regl-INTERNAL truth (drawing-buffer size the shader divides
-      // by, GL viewport rect, GL error code, any draw-call throw) ->
-      // pinpoints why the draw calls render nothing. Removed before
-      // the v4.6.0 release.
-      var now = (global.performance || Date).now();
-      if (now - _lastLog > 1000) {
-        _lastLog = now;
-        global.console && global.console.log(
-          '[nebula-gl] gl ' + canvas.width + 'x' + canvas.height +
-          ' | fit ' + fitZoom.toExponential(2) +
-          ' | zoom ' + cam.zoom.toExponential(2) +
-          ' | N ' + nodes.length + ' E ' + edges.length +
-          ' | sel ' + selId + ' | draws ' + nDraws +
-          ' || reglDB ' + diag.dbg + ' | vp ' + diag.vp +
-          ' | glErr ' + diag.err + ' | draw ' + diag.draw);
       }
       // PERPETUAL loop -> the galaxy keeps rotating ("nodes travel").
       // This is cheap (a few regl draws/frame at 11k -- NOT the v4.5

@@ -215,6 +215,24 @@ def test_edges_are_curved_filaments_not_straight_segments() -> None:
     )
 
 
+def test_no_debug_scaffolding_ships() -> None:
+    """The dev-only diagnostic loop (the throttled '[nebula-gl] ...'
+    console line + the on-overlay HUD + the per-frame
+    rawgl.getError() sync stall) was the headless debugging aid for
+    the 0x0 software-WebGL preview. It MUST be stripped from the
+    shipped renderer (a per-frame console.log + GL error sync in a
+    perpetual loop is a real production cost). Locked so it cannot
+    silently return in a later release."""
+    src = (V / "nebula-gl.js").read_text(encoding="utf-8")
+    assert "[nebula-gl]" not in src, "the debug console line must be stripped"
+    assert "console.log" not in src, "no console.log in the shipped renderer"
+    assert "_hud" not in src, "the debug HUD must be removed"
+    assert "rawgl" not in src, (
+        "the debug-only raw GL context (per-frame getError sync stall) "
+        "must be removed from the shipped renderer"
+    )
+
+
 def test_nebula_gl_has_no_stub_placeholders() -> None:
     """The plan elided helper bodies with /* ... */ -- they MUST be
     fully implemented, never shipped as placeholders."""
