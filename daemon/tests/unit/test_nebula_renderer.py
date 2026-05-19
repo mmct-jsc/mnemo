@@ -122,9 +122,7 @@ def test_base_html_prewarms_only_the_v46_renderer(base_html: str) -> None:
         "+ leaks the literal into every served page)"
     )
     assert "graphology" not in low, "base.html must not reference graphology"
-    assert "/static/vendor/regl.min.js" in base_html, (
-        "base.html must prefetch the v4.6 regl bundle"
-    )
+    assert "/static/vendor/regl.min.js" in base_html, "base.html must prefetch the v4.6 regl bundle"
     assert "/static/vendor/nebula-gl.js" in base_html, (
         "base.html must prefetch the v4.6 nebula-gl renderer"
     )
@@ -392,6 +390,45 @@ def test_no_css_atmosphere() -> None:
     assert "#07090f" in nc[: nc.index("}")], (
         ".nebula-canvas must be a plain opaque dark (#07090f) container "
         "-- the renderer clears its own GL canvas, no CSS atmosphere."
+    )
+
+
+def test_labels_toggle_has_a_default_set_when_nothing_selected(
+    graph_html: str,
+) -> None:
+    """labels.setLabels() was only ever called on selection / highlight
+    / search, so the LabelProvider (which early-returns when items is
+    empty) had nothing to draw at idle and the global 'labels' toggle
+    did nothing -- the reported 'the label toggle is not working'.
+
+    Fix: a bounded default global label set (top nodes by degree)
+    shown whenever labels are on and nothing is selected/highlighted,
+    refreshed on render, toggle and deselect via one _refreshLabels()
+    state router."""
+    assert "_defaultLabelItems" in graph_html, (
+        "there must be a bounded default (top-by-degree) global label "
+        "set so the labels toggle is meaningful with no selection."
+    )
+    assert "_refreshLabels" in graph_html, (
+        "a single _refreshLabels() must route labels by current state "
+        "(off -> clear, selection -> focused set, else -> default)."
+    )
+    assert ".deg || 0" in graph_html, (
+        "the default label set must rank by node degree (the most "
+        "connected nodes orient the overview)."
+    )
+    # the toggle must NOT be a no-op when nothing is selected.
+    assert "this.labelsVisible && this._selId && this.labels" not in graph_html, (
+        "toggleLabels() must not require an active selection to show "
+        "any labels (that is exactly why the toggle looked dead)."
+    )
+    # deselect returns to the default set, not a blank overlay.
+    # (anchor on the JS method def "deselect() {" -- bare "deselect()"
+    # also appears as the @click close-button markup.)
+    ds = graph_html[graph_html.index("deselect() {") :][:420]
+    assert "_refreshLabels" in ds, (
+        "deselect() must restore the default label set (when labels "
+        "are on), not bare labels.clear()."
     )
 
 
