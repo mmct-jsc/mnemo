@@ -231,11 +231,12 @@
       if (e.key === "Escape") deselect();
     });
 
-    // --- toggles ---
-    var eOn = true, lOn = true;
+    // --- toggles --- (labels default OFF: auto-off the display)
+    var eOn = true, lOn = false;
     var be = document.getElementById("t-edges");
     var bl = document.getElementById("t-labels");
     gl.setEdgesVisible(eOn); gl.setLabelsVisible(lOn);
+    bl.classList.toggle("off", !lOn);  // reflect the default-off state
     be.onclick = function () {
       eOn = !eOn; gl.setEdgesVisible(eOn); be.classList.toggle("off", !eOn);
     };

@@ -205,10 +205,13 @@ def test_edges_are_curved_filaments_not_straight_segments() -> None:
         "edges must follow a quadratic Bezier (bowed control point), not a straight segment."
     )
     assert "2 * iu * u" in src, "the Bezier must include the 2*iu*u*C control term."
-    # the base-web draw count must scale with the tessellation.
-    assert "edges.length * EDGE_SEG * 2" in src, (
-        "drawEdges count must be edges.length * EDGE_SEG * 2 (a "
-        "curved polyline), not edges.length * 2 (a straight chord)."
+    # v4.6.4 contract evolution: the curve is now drawn as a feathered
+    # triangle-strip RIBBON (STR verts/edge), not a 1px LINES polyline
+    # (those couldn't anti-alias -> "thousands of straight lines").
+    # The Bezier tessellation above still proves "curved, not straight".
+    assert "edges.length * STR" in src, (
+        "drawEdges count must scale with the per-edge ribbon stride "
+        "(edges.length * STR), not a straight chord."
     )
     assert "count: edges.length * 2," not in src, (
         "the old straight 2-vertex-per-edge draw must be gone."
@@ -239,6 +242,71 @@ def test_pointer_is_canvas_relative_and_confined() -> None:
     )
     assert "clientX" in src, "use e.clientX (viewport-stable) + the canvas rect"
     assert "clientY" in src, "use e.clientY (viewport-stable) + the canvas rect"
+
+
+def test_edges_are_a_feathered_ribbon_not_aliased_lines() -> None:
+    """GL `lines` are 1px hard-rasterized with NO anti-aliasing -- a
+    tessellated polyline of them reads as "thousands of straight lines
+    connected", never one smooth curve (the recurring complaint; a
+    bigger segment count is the same family and never fixes the hard
+    1px look). Root-cause fix: render each edge as a feathered
+    anti-aliased triangle-strip RIBBON (constant pixel width via a
+    screen-space tangent normal; alpha smoothstep'd across the
+    width). The length/zoom alpha grade is preserved."""
+    src = (V / "nebula-gl.js").read_text(encoding="utf-8")
+    assert "'lines'" not in src, (
+        "the `lines` primitive (1px, no AA) must be gone -- edges are "
+        "a feathered triangle-strip ribbon now."
+    )
+    assert "attribute float side" in src, (
+        "the ribbon needs a per-vertex side (+/-1) to feather alpha across the band width."
+    )
+    assert "attribute vec2 tang" in src, (
+        "the ribbon offsets along the screen-space normal of the "
+        "curve tangent (constant pixel width at any zoom)."
+    )
+    # the feather = the anti-aliasing across the ribbon width.
+    assert "abs(vSide)" in src, "alpha must smoothstep across abs(side) (the AA)"
+    assert src.count("triangle strip") >= 3, (
+        "edges (base + accent) join bg/core as triangle-strip draws"
+    )
+    # the length/zoom grade survives the ribbon change.
+    assert "exp(-Ln*Ln*8.0)" in src, "the length alpha grade must survive"
+    assert "uz/uf" in src, "the zoom alpha grade must survive the ribbon"
+
+
+def test_highlighted_node_pops_bigger_and_brighter() -> None:
+    """A focused/highlighted node was only re-coloured -- gl_PointSize
+    did NOT depend on hl, so it stayed the same tiny size as 12k
+    others and did not pop. The lit node must be larger AND brighter
+    (bloom) when hl=1."""
+    src = (V / "nebula-gl.js").read_text(encoding="utf-8")
+    i = src.index("gl_PointSize=clamp(")
+    ps = src[i : i + 120]
+    assert "hl" in ps, (
+        "gl_PointSize must scale with hl so a highlighted node is visibly larger than the rest."
+    )
+    assert "0.95+1.6*vH" in src or "1.0+1.6*vH" in src or "1.6*vH" in src, (
+        "the focused node's bloom must be boosted (brighter pop)."
+    )
+
+
+def test_all_edges_render_behind_all_nodes() -> None:
+    """The accent/incident `hiEdges` pass was drawn AFTER drawNodes,
+    so it painted over the nodes. Every edge layer (base AND accent)
+    must render BEHIND all nodes."""
+    src = (V / "nebula-gl.js").read_text(encoding="utf-8")
+    body = src[src.index("regl.clear(") : src.index("regl.clear(") + 600]
+    de = body.index("drawEdges()")
+    hi = body.index("hiEdges()")
+    dn = body.index("drawNodes()")
+    assert de < dn, "base edges must be drawn before (behind) nodes"
+    assert hi < dn, "accent edges must be drawn before (behind) nodes"
+
+
+def test_labels_default_off() -> None:
+    src = (V / "nebula-gl.js").read_text(encoding="utf-8")
+    assert "var labelsOn = false" in src, "labels must default OFF (auto-off the label display)"
 
 
 def test_no_debug_scaffolding_ships() -> None:

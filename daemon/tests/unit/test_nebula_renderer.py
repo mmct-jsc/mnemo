@@ -472,3 +472,13 @@ def test_highlight_select_contract_preserved(graph_html: str) -> None:
             f"the highlight/select contract token {t!r} must be present "
             f"(the C3-honesty loop must survive the renderer swap)."
         )
+
+
+def test_labels_default_off(graph_html: str) -> None:
+    """v4.6.4: the label overlay is auto-off by default. graph.html
+    defaults labelsVisible to false (a prior explicit choice is still
+    restored from localStorage in _restoreState)."""
+    assert "labelsVisible: false" in graph_html, (
+        "labels must default OFF (auto-off the label display)"
+    )
+    assert "labelsVisible: true" not in graph_html, "no stray labelsVisible:true default may remain"
