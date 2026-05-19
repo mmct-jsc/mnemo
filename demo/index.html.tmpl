@@ -34,6 +34,17 @@
   .demo-find{width:100%;box-sizing:border-box;margin:.25rem 0 .5rem;
     background:#05070c;color:#e6edf3;border:1px solid rgba(126,231,224,.18);
     border-radius:8px;padding:8px 10px;font:13px ui-sans-serif,system-ui}
+  /* the filter section is a full-width bar on the SHELL's 2nd grid
+     row (grid-template-rows:1fr auto) -- the bottom of the window,
+     NOT inside the file panel. */
+  .demo-filterbar{grid-column:1 / -1;grid-row:2 / 3;display:flex;
+    align-items:center;gap:10px;flex-wrap:wrap;padding:8px 14px;
+    background:rgba(8,11,19,.92);
+    border-top:1px solid rgba(126,231,224,.12)}
+  .demo-filterbar .fb-label{color:#8b95a7;font:600 11px/1 ui-monospace,
+    monospace;text-transform:uppercase;letter-spacing:.08em}
+  .demo-filterbar .demo-find{flex:0 0 240px;margin:0}
+  .demo-filterbar .demo-chips{flex:1 1 auto;margin:0}
   .nb-body{background:#05070c;border:1px solid rgba(126,231,224,.14);
     border-radius:9px;padding:11px;margin:.5rem 0;overflow:auto;
     font:12px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
@@ -84,8 +95,6 @@
 <section class="nebula-shell">
   <aside class="nebula-tree">
     <h3 class="tree-title">mnemo &mdash; synthetic graph</h3>
-    <input class="demo-find" id="find" placeholder="filter nodes (name / type)&hellip;" autocomplete="off">
-    <div class="demo-chips" id="chips"></div>
     <div id="tree"></div>
   </aside>
 
@@ -119,6 +128,12 @@
       <ul class="nb-conn" id="d-conn"></ul>
     </div>
   </aside>
+
+  <div class="demo-filterbar">
+    <span class="fb-label">filter</span>
+    <input class="demo-find" id="find" placeholder="name / type&hellip;" autocomplete="off">
+    <div class="demo-chips" id="chips"></div>
+  </div>
 </section>
 
 <script src="regl.min.js"></script>
@@ -198,13 +213,16 @@
         li.innerHTML = "<span>" + esc(m.short || m.name) +
           "</span><span class='r'>" + esc(e.rel) + " · " +
           e.conf.toFixed(2) + "</span>";
-        li.onclick = function () { select(e.i); gl.select(e.i); };
+        li.onclick = function () { select(e.i); };
         ul.appendChild(li);
       });
       var a = document.querySelector(".tree-file.active");
       if (a) a.classList.remove("active");
       var tf = document.querySelector('.tree-file[data-i="' + i + '"]');
       if (tf) { tf.classList.add("active"); }
+      gl.select(i);  // renderer camera-fly + focus -- the SINGLE
+                     // source, so a CANVAS click focuses too (not
+                     // only tree/neighbour clicks).
     }
     gl.on("clickNode", function (i) { select(i); });
     gl.on("clickStage", function () { deselect(); });
@@ -273,7 +291,7 @@
         a.href = "#"; a.setAttribute("data-i", i);
         a.textContent = nodes[i].short || nodes[i].name;
         a.onclick = function (ev) {
-          ev.preventDefault(); select(i); gl.select(i);
+          ev.preventDefault(); select(i);
         };
         box.appendChild(a);
       });
