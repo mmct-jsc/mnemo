@@ -2,6 +2,34 @@
 
 All notable changes to mnemo are documented here.
 
+## [4.6.3] - 2026-05-19
+
+**Renderer drag-confinement fix (prod + demo) + demo /graph parity.**
+
+- **`nebula-gl.js` (the shipped renderer -- affects prod `/graph`):**
+  the `mousemove`/`mouseup` listeners are on `window` (so a drag
+  survives a brief cursor excursion), but they used
+  `e.offsetX/offsetY` -- which on a window-level listener is relative
+  to `e.target`. The instant the cursor crossed onto a sibling panel
+  (tree / detail / filter) the coordinate origin jumped and the
+  camera flicked ("drag to the side bars flicks weirdly", reported in
+  both the demo and prod). Fixed at the root: one `ptr(e)` helper
+  computes canvas-relative coords from `getBoundingClientRect()` +
+  `clientX/clientY` (viewport-stable, target-independent) used by
+  wheel/mousedown/mousemove, and pan/drag/hover now **bail when the
+  pointer is outside the canvas rect** -- no action out of the
+  canvas. Drag still survives an excursion and resumes on re-entry;
+  `mouseup`/`blur`/`buttons===0` still end it.
+- **Demo page:** a canvas click now focuses the node (the demo's
+  `select()` is the single source and calls `gl.select()` itself, so
+  it no longer worked only from the tree/neighbour clicks); and the
+  filter (find + type chips) moved out of the file panel into a
+  full-width bottom bar on the shell's 2nd grid row.
+
+Renderer-only + demo-only; `LAYOUT_VERSION` unchanged. Suite 1251
+pass / 2 skip; ruff clean. (extension/middleware unchanged -> stay
+at 4.6.2; the demo redeploys on merge with the fixed renderer.)
+
 ## [4.6.2] - 2026-05-19
 
 **MCP / tools / extension audit + version alignment.** A sweep of the
