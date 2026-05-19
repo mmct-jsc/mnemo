@@ -188,6 +188,33 @@ def test_core_glow_is_full_viewport_not_a_world_square() -> None:
     )
 
 
+def test_edges_are_curved_filaments_not_straight_segments() -> None:
+    """Straight 2-vertex GL lines read as harsh pixelated wires. The
+    edges must be tessellated into a multi-segment quadratic Bezier
+    bowed consistently (a coherent swirl in the rotation sense) so
+    they flow with the disc as elegant filaments -- drawn with the
+    same graded additive blend (overlap -> silk). Both the base web
+    and the accent incident pass must use the same tessellation."""
+    src = (V / "nebula-gl.js").read_text(encoding="utf-8")
+    assert "EDGE_SEG" in src, (
+        "edges must be tessellated by an EDGE_SEG segment count, not "
+        "drawn as single straight chords."
+    )
+    # a real quadratic Bezier sample (iu=1-u; iu*iu*S + 2*iu*u*C + u*u*T)
+    assert "iu * iu" in src, (
+        "edges must follow a quadratic Bezier (bowed control point), not a straight segment."
+    )
+    assert "2 * iu * u" in src, "the Bezier must include the 2*iu*u*C control term."
+    # the base-web draw count must scale with the tessellation.
+    assert "edges.length * EDGE_SEG * 2" in src, (
+        "drawEdges count must be edges.length * EDGE_SEG * 2 (a "
+        "curved polyline), not edges.length * 2 (a straight chord)."
+    )
+    assert "count: edges.length * 2," not in src, (
+        "the old straight 2-vertex-per-edge draw must be gone."
+    )
+
+
 def test_nebula_gl_has_no_stub_placeholders() -> None:
     """The plan elided helper bodies with /* ... */ -- they MUST be
     fully implemented, never shipped as placeholders."""

@@ -99,6 +99,15 @@
 
   function makeLabelProvider(canvasEl) {
     var items = [];
+    // The default label set is now EVERY node (the toggle must show
+    // all names). Iterating + projecting all of them per frame is
+    // cheap, but measuring/filling a pill for thousands of on-screen
+    // ones is not -- so bound the number actually DRAWN per frame.
+    // items arrive degree-sorted, so at the overview the budget is
+    // spent on the most-connected nodes; zoomed into a region the
+    // on-screen count is well under budget so every node there is
+    // labelled. Keeps the perpetual loop smooth (the no-jank rule).
+    var LABEL_BUDGET = 900;
     var api = {
       setLabels: function (list) { items = list || []; },
       clear: function () { items = []; },
@@ -118,13 +127,16 @@
         ctx.font = (12 * dpr) + 'px ui-sans-serif,system-ui,sans-serif';
         ctx.textBaseline = 'middle';
         var gs = Math.sin(ga), gc = Math.cos(ga);
+        var drawn = 0;
         for (var i = 0; i < items.length; i++) {
+          if (drawn >= LABEL_BUDGET) break;  // per-frame draw bound
           var it = items[i];
           var wx = it.x * gc - it.y * gs;  // same +ga the shader applies
           var wy = it.x * gs + it.y * gc;
           var sx = (wx - cam.x) * cam.zoom + vw / 2;
           var sy = -(wy - cam.y) * cam.zoom + vh / 2;
           if (sx < -200 || sx > vw + 200 || sy < -50 || sy > vh + 50) continue;
+          drawn++;
           var pad = 5 * dpr;
           var tw = ctx.measureText(it.text).width;
           var bx = sx + 8 * dpr, by = sy - 9 * dpr;
@@ -284,16 +296,42 @@
     // The prior per-instance setup had no per-vertex attribute stream
     // and rendered nothing. A flat per-vertex position buffer is the
     // robust, extension-free pattern with no instancing pitfalls.
-    var edgePos = new Float32Array(edges.length * 4);
-    var edgeLen = new Float32Array(edges.length * 2);  // 1 float / vertex
+    // Straight chords read as harsh pixelated wires. Tessellate each
+    // edge into EDGE_SEG segments along a quadratic Bezier whose
+    // control point bows the chord by a CONSISTENT-sign perpendicular
+    // -> every edge curves the same handed way = a coherent swirl in
+    // the galactic-rotation sense. With the graded low-alpha additive
+    // blend the overlapping curves sum into smooth elegant filaments
+    // that flow with the disc (the intended "silk"), never a straight
+    // wire tangle. Shared by the base web AND the accent incident
+    // pass so the accent overlays the SAME curve exactly.
+    var EDGE_SEG = 10;
+    var BOW = 0.16;
+    function tessEdge(sx, sy, tx, ty, parr, larr, po, lo) {
+      var dx = tx - sx, dy = ty - sy;
+      var L = Math.sqrt(dx * dx + dy * dy) || 1e-6;
+      var nx = -dy / L, ny = dx / L;            // unit perpendicular
+      var cx = (sx + tx) * 0.5 + nx * L * BOW;  // bowed control point
+      var cy = (sy + ty) * 0.5 + ny * L * BOW;
+      var px = sx, py = sy;                     // u=0 == S
+      for (var k = 0; k < EDGE_SEG; k++) {
+        var u = (k + 1) / EDGE_SEG, iu = 1 - u;
+        var qx = iu * iu * sx + 2 * iu * u * cx + u * u * tx;
+        var qy = iu * iu * sy + 2 * iu * u * cy + u * u * ty;
+        var o = po + k * 4, l = lo + k * 2;
+        parr[o] = px; parr[o + 1] = py;
+        parr[o + 2] = qx; parr[o + 3] = qy;
+        larr[l] = L; larr[l + 1] = L;
+        px = qx; py = qy;
+      }
+    }
+    var edgePos = new Float32Array(edges.length * EDGE_SEG * 4);
+    var edgeLen = new Float32Array(edges.length * EDGE_SEG * 2);
     function rebuildEdges() {
       for (var i = 0; i < edges.length; i++) {
         var s = nodes[edges[i].s], t = nodes[edges[i].t];
-        edgePos[i * 4] = s.x; edgePos[i * 4 + 1] = s.y;
-        edgePos[i * 4 + 2] = t.x; edgePos[i * 4 + 3] = t.y;
-        var dx = t.x - s.x, dy = t.y - s.y;
-        var L = Math.sqrt(dx * dx + dy * dy);
-        edgeLen[i * 2] = L; edgeLen[i * 2 + 1] = L;
+        tessEdge(s.x, s.y, t.x, t.y, edgePos, edgeLen,
+          i * EDGE_SEG * 4, i * EDGE_SEG * 2);
       }
     }
     rebuildEdges();
@@ -357,7 +395,7 @@
           return [edgeColor[0], edgeColor[1], edgeColor[2], a];
         },
       },
-      count: edges.length * 2,
+      count: edges.length * EDGE_SEG * 2,
       primitive: 'lines',
       blend: {
         enable: true,
@@ -592,22 +630,21 @@
         }
       }
       if (cnt === 0) { hiVerts = 0; return; }
-      if (hiPos.length < cnt * 4) hiPos = new Float32Array(cnt * 4);
-      if (hiLen.length < cnt * 2) hiLen = new Float32Array(cnt * 2);
-      var k = 0, m = 0;
+      var need4 = cnt * EDGE_SEG * 4, need2 = cnt * EDGE_SEG * 2;
+      if (hiPos.length < need4) hiPos = new Float32Array(need4);
+      if (hiLen.length < need2) hiLen = new Float32Array(need2);
+      var q = 0;  // q-th incident edge -> its curve block
       for (var j = 0; j < edges.length; j++) {
         if (edges[j].s === foc || edges[j].t === foc) {
           var s = nodes[edges[j].s], t = nodes[edges[j].t];
-          hiPos[k++] = s.x; hiPos[k++] = s.y;
-          hiPos[k++] = t.x; hiPos[k++] = t.y;
-          var dx = t.x - s.x, dy = t.y - s.y;
-          var L = Math.sqrt(dx * dx + dy * dy);
-          hiLen[m++] = L; hiLen[m++] = L;
+          tessEdge(s.x, s.y, t.x, t.y, hiPos, hiLen,
+            q * EDGE_SEG * 4, q * EDGE_SEG * 2);
+          q++;
         }
       }
-      hiVerts = cnt * 2;
-      hiBuf({ data: hiPos.subarray(0, cnt * 4) });
-      hiLenBuf({ data: hiLen.subarray(0, cnt * 2) });
+      hiVerts = cnt * EDGE_SEG * 2;
+      hiBuf({ data: hiPos.subarray(0, need4) });
+      hiLenBuf({ data: hiLen.subarray(0, need2) });
     }
     var hiEdges = regl({
       vert: EDGE_VERT,

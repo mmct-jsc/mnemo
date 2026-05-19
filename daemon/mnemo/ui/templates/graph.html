@@ -978,20 +978,21 @@ function nebula() {
       return out;
     },
 
-    // Default GLOBAL label set: the most-connected nodes, bounded so
-    // the overlay stays legible and the per-frame project loop stays
-    // cheap. Without this the LabelProvider only ever held
-    // selection-scoped items, so the global "labels" toggle did
-    // nothing at idle (the reported dead toggle). Selection and
-    // highlight still override this with their own focused sets.
+    // Default GLOBAL label set: EVERY node's name (the labels toggle
+    // must show all of them, not a sample). Degree-sorted so the
+    // most-connected nodes win the renderer's per-frame draw budget
+    // at the overview, while zooming into any region labels all the
+    // nodes there. The LabelProvider bounds pills drawn per frame
+    // (LABEL_BUDGET) so the full set stays smooth. Without a default
+    // set the toggle did nothing at idle (the earlier dead toggle);
+    // selection and highlight still override with their focused sets.
     _defaultLabelItems() {
       if (!this._xy || !this._order.length) return [];
       const ids = this._order.slice().sort(
         (a, b) => ((this._byId[b] || {}).deg || 0)
                 - ((this._byId[a] || {}).deg || 0));
       const out = [];
-      const n = Math.min(64, ids.length);
-      for (let k = 0; k < n; k++) {
+      for (let k = 0; k < ids.length; k++) {
         const id = ids[k];
         const r = this._byId[id];
         const i = this._idx[id];

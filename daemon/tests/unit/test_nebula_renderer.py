@@ -432,6 +432,29 @@ def test_labels_toggle_has_a_default_set_when_nothing_selected(
     )
 
 
+def test_default_labels_cover_all_nodes_frame_budgeted(
+    graph_html: str,
+) -> None:
+    """The default label set was capped at 64, so the labels toggle
+    never showed all node names. The cap must be gone -- the default
+    set is EVERY node (degree-sorted so the most-connected win z-order
+    / the per-frame budget) -- and the LabelProvider must bound how
+    many pills it actually draws per frame (LABEL_BUDGET) so an 11k
+    set stays smooth (the cardinal no-jank rule) while zooming into
+    any region still labels all nodes there."""
+    assert "Math.min(64" not in graph_html, (
+        "the default label set must NOT be capped (the toggle has to "
+        "be able to show every node's name)."
+    )
+    assert "_defaultLabelItems" in graph_html
+    nebula = (VENDOR / "nebula-gl.js").read_text(encoding="utf-8")
+    assert "LABEL_BUDGET" in nebula, (
+        "the LabelProvider must cap pills DRAWN per frame "
+        "(LABEL_BUDGET) so an uncapped (all-nodes) label set cannot "
+        "rejank the perpetual loop."
+    )
+
+
 def test_highlight_select_contract_preserved(graph_html: str) -> None:
     """The companion-driven highlight loop (the gotcha-31 / C3-honesty
     arc) survives the swap: the document listeners still exist and now
