@@ -233,6 +233,47 @@ def test_no_debug_scaffolding_ships() -> None:
     )
 
 
+def test_render_loop_is_single_scheduler_no_ease_fork() -> None:
+    """easeTo() must NOT call frame() directly: frame() re-arms itself,
+    so a direct call from the ease step FORKS a second never-cancelled
+    perpetual rAF chain on every node click -> compounding lag (the
+    reported 'laggy after the first click into a node'). The loop must
+    be a single scheduler: the ease drives renders via invalidate(),
+    and frame() re-arms ONLY while actually animating (rotation active
+    selId<0, or an ease in progress) and otherwise IDLES until the
+    next invalidate() -- restoring the design's idle==zero intent."""
+    src = (V / "nebula-gl.js").read_text(encoding="utf-8")
+    assert "var easing" in src, (
+        "an ease-in-progress flag must gate the perpetual re-arm so "
+        "the camera fly still animates while a node is focused."
+    )
+    assert "selId < 0 || easing" in src, (
+        "frame() must re-arm only while rotating (selId<0) or easing; "
+        "otherwise it idles (no perpetual full re-render when nothing "
+        "changes -- the post-click lag)."
+    )
+    ease = src[src.index("function easeTo(") : src.index("function easeTo(") + 700]
+    assert "frame();" not in ease, (
+        "easeTo() must NOT call frame() directly (that forks a second "
+        "self-perpetuating rAF chain per click); drive via invalidate()."
+    )
+    assert "invalidate(" in ease, "easeTo() must drive renders via invalidate()."
+
+
+def test_node_drag_ends_when_button_released_offscreen() -> None:
+    """Node drag continued forever if the mouseup was missed (released
+    outside the window / focus lost) because down/dragId only cleared
+    on an explicit mouseup -- the reported 'D&D does not stop when out
+    of the board'. The global mousemove must self-heal when no button
+    is held, and a window blur must end the drag too."""
+    src = (V / "nebula-gl.js").read_text(encoding="utf-8")
+    assert "e.buttons === 0" in src, (
+        "mousemove must end the drag when no mouse button is held "
+        "(a missed mouseup off-window must not leave a stuck drag)."
+    )
+    assert "addEventListener('blur'" in src, "a window blur must also end any in-progress drag."
+
+
 def test_nebula_gl_has_no_stub_placeholders() -> None:
     """The plan elided helper bodies with /* ... */ -- they MUST be
     fully implemented, never shipped as placeholders."""

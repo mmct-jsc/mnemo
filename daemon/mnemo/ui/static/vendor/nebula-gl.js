@@ -180,6 +180,12 @@
     });
     var cam = { x: 0, y: 0, zoom: 1 };
     var raf = 0, disposed = false, fitted = false;
+    var easing = false;  // a camera fly is in progress -> the loop
+                         // must keep rendering even while a node is
+                         // focused (rotation frozen). Outside an ease,
+                         // a focused/still graph IDLES (no perpetual
+                         // re-render of the heavy scene == the
+                         // post-click lag) until the next invalidate().
     var gA = 0;          // galactic rotation angle (radians)
     var gT = 0;          // last animation timestamp
     var edgesOn = true;  // edge/label visibility toggles (the
@@ -723,16 +729,23 @@
       if (labels && labels._render) {
         labels._render(cam, gA, canvas.width, canvas.height, dpr, labelsOn);
       }
-      // PERPETUAL loop -> the galaxy keeps rotating ("nodes travel").
-      // This is cheap (a few regl draws/frame at 11k -- NOT the v4.5
-      // per-element reducer that caused the v4.5.2 lag) and is paused
-      // while hidden (battery). The motion is a GPU vertex transform;
-      // it never fights the user's camera and pick/drag stay exact.
-      if (!global.document || !global.document.hidden) {
+      // SINGLE-SCHEDULER loop. Re-arm ONLY while something is
+      // genuinely animating: the galaxy is rotating (no node focused,
+      // selId<0) OR a camera fly is in progress (easing). When a node
+      // is focused and still, OR the tab is hidden, the loop IDLES
+      // (raf=0) and waits for the next invalidate() (hover / drag /
+      // wheel / select / deselect / visibility). This restores the
+      // design's "renders only when dirty, idle == zero cost": the
+      // perpetual re-render of the heavy scene for an UNCHANGING
+      // image was the post-click lag. gT is cleared on idle so
+      // rotation resumes with no time-jump when it next runs.
+      var animating = (selId < 0 || easing)
+        && (!global.document || !global.document.hidden);
+      if (animating) {
         raf = global.requestAnimationFrame(frame);
       } else {
         raf = 0;
-        gT = 0;  // resume cleanly (no time jump) on visibilitychange
+        gT = 0;
       }
     }
     function invalidate() {
@@ -745,20 +758,34 @@
       });
     }
 
+    // step() ONLY mutates the camera + requests a render via
+    // invalidate(); it never calls frame() directly. Calling the
+    // self-perpetuating frame() from here forked an extra rAF chain
+    // per click (the never-cancelled handles compounded into the
+    // post-click lag). ``easing`` keeps the single loop alive for the
+    // fly's duration even though the node is focused (rotation
+    // frozen); when it ends the loop renders once more and idles.
     function easeTo(tx, ty, tz) {
       var sx = cam.x, sy = cam.y, sz = cam.zoom;
       var t0 = (global.performance || Date).now();
       var dur = 420;
+      easing = true;
       function step() {
-        if (disposed) return;
+        if (disposed) { easing = false; return; }
         var k = Math.min(1, ((global.performance || Date).now() - t0) / dur);
         var e = 1 - Math.pow(1 - k, 3);
         cam.x = sx + (tx - sx) * e;
         cam.y = sy + (ty - sy) * e;
         cam.zoom = sz + (tz - sz) * e;
-        frame();
-        if (k < 1) global.requestAnimationFrame(step);
+        if (k < 1) {
+          invalidate();
+          global.requestAnimationFrame(step);
+        } else {
+          easing = false;
+          invalidate();  // final frame, then the loop idles (focused)
+        }
       }
+      invalidate();
       global.requestAnimationFrame(step);
     }
 
@@ -784,7 +811,15 @@
       dragId = hit;
       moved = false;
     });
+    function endDrag() { down = null; dragId = -1; }
+    // a mouseup released OUTSIDE the window (or eaten by another
+    // layer) never reaches our handler -> down/dragId stayed set and
+    // every later move kept dragging the node with no button held
+    // (the reported "D&D doesn't stop off the board"). Heal it: any
+    // move with no button pressed ends the drag; a window blur too.
+    global.addEventListener('blur', endDrag);
     global.addEventListener('mousemove', function (e) {
+      if (down && e.buttons === 0) { endDrag(); return; }
       if (down) {
         var dx = e.offsetX - down.px, dy = e.offsetY - down.py;
         if (Math.abs(dx) + Math.abs(dy) > 3) moved = true;
@@ -822,8 +857,7 @@
         if (down.hit >= 0) emit('clickNode', down.hit);
         else emit('clickStage', null);
       }
-      down = null;
-      dragId = -1;
+      endDrag();
     });
 
     function emit(ev, a) {
