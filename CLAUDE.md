@@ -2,9 +2,9 @@
 
 ## What this is
 
-`mnemo` is a local-first knowledge memory system for Claude Code, distributed as a Claude Code plugin. It aggregates Claude memory + project knowledge, exposes hybrid Graph-RAG retrieval over a typed graph, and ships ≤ 800 tokens of relevant memory back to Claude via hooks.
+`mnemo` is a local-first knowledge memory **+ code intelligence + agentic companion** for Claude Code, distributed as a Claude Code plugin. It aggregates Claude memory, project knowledge, **and source code** into a single typed graph; exposes hybrid Graph-RAG retrieval over it and ships ≤ 800 tokens of cited context back to Claude via hooks every prompt; lets you chat with it through a tool-using agent ("Mnem", BYO API key, also an MCP server); and renders the whole graph as a custom server-laid / WebGL-rendered galaxy at `/graph`. Current line: v4.6.1.
 
-Full design: [docs/plans/2026-05-09-mnemo-design.md](docs/plans/2026-05-09-mnemo-design.md).
+Full v1 design: [docs/plans/2026-05-09-mnemo-design.md](docs/plans/2026-05-09-mnemo-design.md); v2 (code intelligence) [docs/plans/2026-05-11-mnemo-v2.0-design.md](docs/plans/2026-05-11-mnemo-v2.0-design.md); v3 (companion) [docs/plans/2026-05-14-mnemo-v3-design.md](docs/plans/2026-05-14-mnemo-v3-design.md); v4 (design-system) [docs/plans/2026-05-16-mnemo-v4-design.md](docs/plans/2026-05-16-mnemo-v4-design.md); the custom graph engine [docs/plans/2026-05-17-mnemo-v4.6-custom-graph-engine-design.md](docs/plans/2026-05-17-mnemo-v4.6-custom-graph-engine-design.md).
 
 ## Hard rules (do not violate)
 
