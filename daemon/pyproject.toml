@@ -27,7 +27,7 @@ dependencies = [
     # ``mnemo.parsers.tree_sitter`` -- users install them on demand
     # via ``pip install tree-sitter-<lang>``.
     "tree-sitter>=0.23",
-    "tree-sitter-python>=0.23",
+    "tree-sitter-python>=0.25.0",
     "tree-sitter-javascript>=0.23",
     "tree-sitter-typescript>=0.23.2",
     "tree-sitter-go>=0.23",
