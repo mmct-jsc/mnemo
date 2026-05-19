@@ -65,6 +65,36 @@ def test_nebula_gl_surface() -> None:
     )
 
 
+def test_focus_fly_is_rotation_correct() -> None:
+    """The perpetual galactic rotation displays every node at
+    rotate(pos,+gA). The focus camera-fly therefore must target the
+    ROTATED point, not the static layout coord, AND the rotation must
+    freeze while a node is focused -- otherwise the still-spinning node
+    slides off the (static) eased camera. That divergence is the
+    reported 'zoom only knows the original position, not where the
+    node moved to'. This locks the fix so the static-target bug and
+    the never-freezing rotation can't silently return."""
+    src = (V / "nebula-gl.js").read_text(encoding="utf-8")
+    # the bug: easing the camera to the un-rotated layout coordinate.
+    assert "easeTo(nodes[selId].x, nodes[selId].y" not in src, (
+        "select() must NOT ease to the static layout coord -- the node "
+        "vertex shader draws rotate(pos,+gA), so a static target lands "
+        "the fly off the visible node."
+    )
+    # the fix: a named rotated-focus helper drives the fly.
+    assert "focusTarget" in src, (
+        "select() must fly to focusTarget(i) (pos rotated by +gA, the "
+        "same transform the node shader applies)."
+    )
+    # and the rotation must be gated by selection so the frozen camera
+    # and the node stay locked together while focused.
+    assert "selId < 0" in src, (
+        "the galactic rotation advance must be gated on selId<0 "
+        "(frozen while a node is focused) so the eased camera stays "
+        "centered on it."
+    )
+
+
 def test_nebula_gl_has_no_stub_placeholders() -> None:
     """The plan elided helper bodies with /* ... */ -- they MUST be
     fully implemented, never shipped as placeholders."""
