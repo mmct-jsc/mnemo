@@ -2,6 +2,30 @@
 
 All notable changes to mnemo are documented here.
 
+## [4.6.1] - 2026-05-19
+
+**Two interaction regressions on the shipped v4.6.0 Nebula, fixed.**
+
+- **Laggy after the first node click.** `easeTo()` (the camera fly on
+  select) called the self-perpetuating `frame()` directly every step;
+  nothing cancels the previously-scheduled frame, so each click
+  forked another never-dying `requestAnimationFrame` render chain --
+  compounding (worse with every click) and made blatant by v4.6.0's
+  ~10x-heavier curved-edge scene plus the rotation freezing on focus
+  (the loop full-re-rendered an unchanging image forever). The render
+  loop is now a single scheduler: the ease only mutates the camera
+  and requests a render via `invalidate()`; `frame()` re-arms ONLY
+  while genuinely animating (the galaxy is rotating, no node focused,
+  OR an ease is in progress) and otherwise idles until the next
+  interaction. Restores the design's "renders only when dirty, idle
+  == zero cost": the galaxy still travels when nothing is focused; a
+  focused/still graph now costs zero.
+- **Node drag never stopped off-canvas.** A `mouseup` released
+  outside the window (or focus lost) never reached the handler, so
+  the drag state stayed set and every later mouse move kept dragging
+  the node with no button held. The drag now self-heals -- any move
+  with no button pressed ends it, and a window blur ends it too.
+
 ## [4.6.0] - 2026-05-19
 
 **Custom graph engine -- the Nebula is a galaxy.** User rejected the
