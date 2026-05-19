@@ -2,6 +2,39 @@
 
 All notable changes to mnemo are documented here.
 
+## [4.6.4] - 2026-05-19
+
+**Smooth ribbon edges + focus pop + edges-behind-nodes + labels
+auto-off** (prod `/graph` + the demo; renderer-only, `LAYOUT_VERSION`
+unchanged). Four user-reported issues, root-caused:
+
+- **Edges are now a feathered anti-aliased RIBBON, not 1px GL
+  `lines`.** GL `lines` are hard-rasterized with no AA, so a
+  tessellated polyline of them read as "thousands of straight lines
+  connected" (the recurring complaint; a bigger segment count is the
+  same family and never fixes the hard 1px look). Root-cause fix: per
+  edge a triangle-strip ribbon -- each centerline sample emits 2
+  verts offset +/-1 along the screen-space normal of the curve
+  tangent (constant pixel width at any zoom); the fragment
+  smoothstep's alpha across `abs(side)` -> one continuous smooth
+  band. Independent edges concatenate into one strip via degenerate
+  joins. The existing length/zoom alpha grade is preserved. Geometry
+  is ~1.4x the prior line count (bounded; the alpha grade keeps fill
+  cheap) -- **GPU-verify there is no new lag on the full graph**; the
+  documented fallback is to revert edges to `lines` if it regresses.
+- **A highlighted/focused node now POPS:** `gl_PointSize` scales with
+  `hl` (markedly larger) and its bloom is boosted -- previously
+  highlight only re-coloured it at the same tiny size as 12k others.
+- **All edges render BEHIND every node:** the accent/incident
+  `hiEdges` pass was drawn after `drawNodes` (painting over nodes);
+  it now draws before, with the base web.
+- **Labels auto-off by default** in the renderer, `graph.html`
+  (`labelsVisible:false`; a prior explicit choice is still restored
+  from localStorage), and the demo.
+
+Suite 1257 pass / 2 skip; ruff clean. Pages auto-redeploys on merge
+with the new renderer.
+
 ## [4.6.3] - 2026-05-19
 
 **Renderer drag-confinement fix (prod + demo) + demo /graph parity.**
