@@ -466,25 +466,45 @@
     // rendered: an additive radial quad (NOT a gl.POINTS sprite --
     // point size is driver-capped; and extension-free GLSL only --
     // no derivatives). Scales with zoom so it stays the galaxy core.
-    var coreR = Math.max(worldR * 0.42, 1.0);
+    // The core glow is sized to the DENSE disc, NOT worldR (the max
+    // node distance) -- the sparse far outer field/halo inflates
+    // worldR to several x the bright spiral, which blew the glow up
+    // into a huge wash. An 80th-percentile node radius tracks the
+    // spiral itself; the glow is a fraction of that so it reads as a
+    // compact luminous core.
+    var _dist = new Float64Array(nodes.length || 1);
+    for (var _q = 0; _q < nodes.length; _q++) {
+      _dist[_q] = Math.hypot(nodes[_q].x || 0, nodes[_q].y || 0);
+    }
+    _dist.sort();
+    var discR = nodes.length
+      ? (_dist[Math.floor(nodes.length * 0.8)] || worldR) : worldR;
+    var coreR = Math.max(discR * 0.62, 1.0);
     var coreQuad = regl.buffer(
       new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]));
     var drawCore = regl({
+      // FULL-VIEWPORT pass (same proven pattern as drawBg): the quad
+      // IS the screen every frame, the fragment reconstructs the
+      // world point per pixel and measures the bar/bulge in WORLD
+      // space scaled by cr -> the warm core fades smoothly to nothing
+      // with NO geometric edge (the old uv*cr square cut the glow off
+      // at a hard boundary bigger than the spiral).
       vert:
-        'precision highp float; attribute vec2 uv;' +
-        'uniform vec2 cam,res; uniform float zoom; uniform float cr;' +
-        'varying vec2 vUv;' +
-        'void main(){ vUv=uv; vec2 w=uv*cr - cam; vec2 p=w*zoom;' +
-        ' gl_Position=vec4(p.x/(res.x*0.5),p.y/(res.y*0.5),0.0,1.0);}',
+        'precision highp float; attribute vec2 uv; varying vec2 vN;' +
+        'void main(){ vN=uv; gl_Position=vec4(uv,0.0,1.0); }',
       frag:
-        'precision highp float; varying vec2 vUv; uniform float inten;' +
+        'precision highp float; varying vec2 vN;' +
+        'uniform vec2 cam,res; uniform float zoom;' +
+        'uniform float cr; uniform float inten;' +
         'void main(){' +
+        ' vec2 w=cam + vN*(res*0.5)/zoom;' +  // world point this pixel
+        ' vec2 q=w/cr;' +                      // in core-radius units
         // THE BAR: rotate into the bar frame (~-34 deg, like the
         // reference's slanted bar) and measure an ELLIPTICAL distance
         // (long axis = the bar). A broad elongated warm glow + a
         // tighter brighter central bulge -> a golden barred core.
         ' float s=-0.555,c=0.832;' +  // sin/cos of ~-0.585 rad
-        ' vec2 rv=vec2(vUv.x*c-vUv.y*s, vUv.x*s+vUv.y*c);' +
+        ' vec2 rv=vec2(q.x*c-q.y*s, q.x*s+q.y*c);' +
         ' vec2 ev=vec2(rv.x*0.52, rv.y*1.55);' +     // bar elongation
         ' float bar=exp(-dot(ev,ev)*2.7);' +          // the bar
         ' float bulge=exp(-dot(rv,rv)*8.5)*1.25;' +   // bright bulge

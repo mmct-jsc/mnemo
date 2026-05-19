@@ -153,6 +153,41 @@ def test_edges_are_length_and_zoom_graded_not_a_flat_hairball() -> None:
     )
 
 
+def test_core_glow_is_full_viewport_not_a_world_square() -> None:
+    """The galactic core-glow had the SAME defect as the old bg dust:
+    a finite world-space square quad (uv*cr - cam, cr=worldR*0.42).
+    Because worldR is the max node distance -- inflated by the sparse
+    far outer field to several x the spiral -- that square is BIGGER
+    than the spiral and its warm bar+bulge is still ~0.01 at the quad
+    boundary -> a hard square edge with the glow cut off outside (the
+    reported '1 outer square bigger than the spiral core, cut off').
+    It must be a full-viewport clip-space pass that reconstructs the
+    world point per pixel (same proven pattern as drawBg) and be
+    sized to the DENSE disc (a high percentile of node radius), not
+    the outer-field-inflated max."""
+    src = (V / "nebula-gl.js").read_text(encoding="utf-8")
+    i = src.index("drawCore = regl(")
+    core = src[i : i + 1500]
+    assert "gl_Position=vec4(uv,0.0,1.0)" in core, (
+        "drawCore must be a full-viewport clip-space pass, not a "
+        "world-scaled square quad (the visible outer square)."
+    )
+    assert "(res*0.5)/zoom" in core, (
+        "drawCore must reconstruct the world position per pixel so "
+        "the bulge is world-anchored with no geometric edge."
+    )
+    assert "uv*cr - cam" not in core, (
+        "drawCore must NOT scale a unit quad by a finite radius "
+        "(uv*cr - cam) -- that is the square that gets cut off."
+    )
+    # the core must be sized to the dense disc, not max node distance
+    # (which the sparse outer halo inflates ~3x past the spiral).
+    assert "discR" in src, (
+        "the core radius must derive from a high percentile of node "
+        "distance (the dense disc), not the outer-field-inflated max."
+    )
+
+
 def test_nebula_gl_has_no_stub_placeholders() -> None:
     """The plan elided helper bodies with /* ... */ -- they MUST be
     fully implemented, never shipped as placeholders."""
