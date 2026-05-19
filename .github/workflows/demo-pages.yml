@@ -1,0 +1,53 @@
+name: Demo Pages
+
+# Builds the lean static demo (scripts/build_demo.py: a deterministic
+# synthetic mnemo-themed graph -> the REAL layout engine -> one
+# nebula.json the vendored renderer draws) and publishes it to
+# GitHub Pages. Uses ONLY the built-in GITHUB_TOKEN -- no PAT.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "scripts/build_demo.py"
+      - "demo/**"
+      - "daemon/mnemo/ui/static/vendor/**"
+      - "daemon/mnemo/ui/graph_layout.py"
+      - "daemon/mnemo/ui/palette.py"
+      - ".github/workflows/demo-pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: demo-pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v7
+      - name: Install daemon deps (layout engine + palette)
+        run: uv sync --extra dev
+        working-directory: daemon
+      - name: Build the static demo
+        run: uv --project daemon run python scripts/build_demo.py --out dist
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mnemo - live demo</title>
+<meta name="description" content="mnemo: local-first knowledge memory + code intelligence + agentic companion for Claude Code. Interactive Nebula galaxy on seeded synthetic data.">
+<link rel="icon" href="brain.svg">
+<style>
+  :root{
+    --bg:#07090f; --panel:#0d1018; --line:#1c2230;
+    --fg:#e6edf3; --dim:#8b95a7; --accent:#7ee7e0;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    --sans:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{background:var(--bg);color:var(--fg);font-family:var(--sans)}
+  a{color:var(--accent);text-decoration:none}
+  a:hover{text-decoration:underline}
+  header{
+    display:flex;align-items:center;gap:14px;
+    padding:22px 26px;border-bottom:1px solid var(--line)
+  }
+  header img{width:34px;height:34px;filter:drop-shadow(0 0 6px var(--accent))}
+  header h1{font-size:22px;letter-spacing:.5px;font-weight:650}
+  .pill{
+    font:600 11px/1 var(--mono);color:var(--bg);background:var(--accent);
+    padding:5px 9px;border-radius:999px;margin-left:4px
+  }
+  header .sub{color:var(--dim);font-size:13px;margin-left:auto;text-align:right}
+  .stage{position:relative;width:100%;height:72vh;min-height:420px;background:var(--bg)}
+  #nebula-gl,#nebula-labels{position:absolute;inset:0;width:100%;height:100%}
+  #nebula-labels{pointer-events:none}
+  .hud{
+    position:absolute;left:16px;top:14px;display:flex;gap:8px;
+    flex-wrap:wrap;align-items:center;z-index:5
+  }
+  .hud button{
+    font:600 12px/1 var(--sans);color:var(--fg);background:rgba(13,16,24,.82);
+    border:1px solid var(--line);border-radius:999px;padding:7px 12px;cursor:pointer
+  }
+  .hud button.off{color:var(--dim);opacity:.65}
+  .hud .tag{
+    font:600 11px/1 var(--mono);color:var(--dim);
+    background:rgba(13,16,24,.82);border:1px solid var(--line);
+    border-radius:999px;padding:7px 11px
+  }
+  .cap{
+    position:absolute;left:16px;bottom:14px;right:16px;color:var(--dim);
+    font-size:12.5px;z-index:5;pointer-events:none
+  }
+  .cap b{color:var(--accent)}
+  .boot{
+    position:absolute;inset:0;display:flex;align-items:center;
+    justify-content:center;color:var(--dim);font:600 13px var(--mono)
+  }
+  section.feat{max-width:1080px;margin:0 auto;padding:42px 22px 8px}
+  section.feat h2{
+    font-size:13px;letter-spacing:2px;text-transform:uppercase;
+    color:var(--dim);font-weight:700;margin-bottom:18px
+  }
+  .grid{display:grid;gap:16px;grid-template-columns:repeat(2,1fr)}
+  @media (max-width:760px){ .grid{grid-template-columns:1fr} }
+  .card{
+    background:var(--panel);border:1px solid var(--line);
+    border-radius:14px;padding:18px 18px 16px
+  }
+  .card h3{font-size:15px;margin-bottom:6px}
+  .card p{color:var(--dim);font-size:13px;margin-bottom:12px}
+  .card pre{
+    background:#05070c;border:1px solid var(--line);border-radius:9px;
+    padding:12px;overflow:auto;font:12px/1.5 var(--mono);color:#cdd6e3;
+    white-space:pre-wrap;word-break:break-word
+  }
+  footer{
+    max-width:1080px;margin:30px auto 0;padding:24px 22px 48px;
+    border-top:1px solid var(--line);color:var(--dim);font-size:13px
+  }
+  footer pre{
+    background:#05070c;border:1px solid var(--line);border-radius:9px;
+    padding:12px;margin:12px 0;font:12.5px/1.6 var(--mono);color:#cdd6e3
+  }
+  footer .note{font-size:12px;opacity:.8}
+</style>
+</head>
+<body>
+<header>
+  <img src="brain.svg" alt="mnemo">
+  <h1>mnemo<span class="pill">v%%VERSION%%</span></h1>
+  <div class="sub">
+    local-first knowledge memory + code intelligence + agentic companion<br>
+    <a href="%%REPO_URL%%">github.com/mmct-jsc/mnemo</a>
+  </div>
+</header>
+
+<div class="stage" id="stage">
+  <canvas id="nebula-gl"></canvas>
+  <canvas id="nebula-labels"></canvas>
+  <div class="hud">
+    <button id="t-edges">edges</button>
+    <button id="t-labels">labels</button>
+    <span class="tag" id="tag">the live Nebula renderer &middot; seeded synthetic mnemo graph</span>
+  </div>
+  <div class="boot" id="boot">warming the nebula&hellip;</div>
+  <div class="cap" id="cap">
+    drag to pan &middot; scroll to zoom &middot; click a star to focus it &middot;
+    <b id="sel">nothing selected</b>
+  </div>
+</div>
+
+<section class="feat">
+  <h2>what mnemo does (server-side features &mdash; shown from the same seed)</h2>
+  <div class="grid">
+    <div class="card">
+      <h3>Graph-RAG retrieval</h3>
+      <p>Every prompt gets &le; 800 tokens of typed, cited memory + code structure injected by hooks.</p>
+      <pre>%%RAG_EXAMPLE%%</pre>
+    </div>
+    <div class="card">
+      <h3>Code intelligence</h3>
+      <p>A typed code graph (modules / functions / classes / routes) with a Tier-2 call resolver.</p>
+      <pre>%%CODE_EXAMPLE%%</pre>
+    </div>
+    <div class="card">
+      <h3>Mnem &mdash; agentic companion</h3>
+      <p>A tool-using agent over your own memory + code graph (BYO key; also an MCP server).</p>
+      <pre>%%CHAT_EXAMPLE%%</pre>
+    </div>
+    <div class="card">
+      <h3>Plugin hooks</h3>
+      <p>SessionStart injects a memory map; UserPromptSubmit injects budget-capped cited context; PostToolUse re-embeds edits in the background. No config.</p>
+      <pre>SessionStart  -&gt; memory map
+UserPromptSubmit -&gt; &le;800 tok cited context
+PostToolUse(Edit|Write) -&gt; background re-embed</pre>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <strong>This is a static demo</strong> &mdash; the Nebula above is the real
+  WebGL renderer on a fixed synthetic graph that depicts mnemo's own
+  architecture (no private data). The retrieval / code / chat panels are
+  examples generated from the same seed. Run the real, full system locally:
+  <pre>git clone %%REPO_URL%%
+cd mnemo &amp;&amp; ./install.sh        # or .\install.ps1 on Windows
+mnemo daemon start &amp;&amp; mnemo ui   # opens the local UI</pre>
+  <div class="note">
+    <a href="%%REPO_URL%%">source &amp; docs</a> &middot;
+    <a href="%%REPO_URL%%/blob/main/CHANGELOG.md">changelog</a> &middot;
+    built by GitHub Actions from <code>scripts/build_demo.py</code>
+  </div>
+</footer>
+
+<script src="regl.min.js"></script>
+<script src="nebula-gl.js"></script>
+<script>
+(function () {
+  "use strict";
+  var boot = document.getElementById("boot");
+  function fail(msg) { if (boot) boot.textContent = msg; }
+  if (!window.createREGL || !window.NebulaGL) {
+    return fail("renderer failed to load");
+  }
+  fetch("nebula.json").then(function (r) {
+    if (!r.ok) throw new Error("nebula.json " + r.status);
+    return r.json();
+  }).then(function (data) {
+    var cv = document.getElementById("nebula-gl");
+    var labels = window.NebulaGL.LabelProvider(
+      document.getElementById("nebula-labels"));
+    var gl = window.NebulaGL.create(cv, {
+      nodes: data.nodes,
+      edges: data.edges,
+      labels: labels,
+      theme: {
+        bg: [0.027, 0.035, 0.059, 1.0],
+        edge: [0.42, 0.54, 0.86, 0.085],
+        glow: 0.9,
+        accent: [0.494, 0.906, 0.878]
+      }
+    });
+    // default label set = every node; the renderer frame-budgets it.
+    labels.setLabels(data.nodes.map(function (n) {
+      return { x: n.x, y: n.y, text: n.name };
+    }));
+    var edgesOn = true, labelsOn = true;
+    gl.setEdgesVisible(edgesOn);
+    gl.setLabelsVisible(labelsOn);
+    var be = document.getElementById("t-edges");
+    var bl = document.getElementById("t-labels");
+    be.onclick = function () {
+      edgesOn = !edgesOn; gl.setEdgesVisible(edgesOn);
+      be.classList.toggle("off", !edgesOn);
+    };
+    bl.onclick = function () {
+      labelsOn = !labelsOn; gl.setLabelsVisible(labelsOn);
+      bl.classList.toggle("off", !labelsOn);
+    };
+    var sel = document.getElementById("sel");
+    gl.on("clickNode", function (i) {
+      var n = data.nodes[i];
+      if (n) sel.textContent = n.name + "  (" + n.type + ")";
+    });
+    gl.on("clickStage", function () { sel.textContent = "nothing selected"; });
+    if (boot) boot.style.display = "none";
+  }).catch(function (e) { fail("could not load the graph: " + e.message); });
+})();
+</script>
+</body>
+</html>
