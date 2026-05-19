@@ -95,6 +95,37 @@ def test_focus_fly_is_rotation_correct() -> None:
     )
 
 
+def test_background_dust_is_full_viewport_not_a_world_square() -> None:
+    """The deep-space dust must fill the whole viewport at ANY
+    zoom/pan, never a finite world-space square quad whose radial
+    falloff is still visible at the quad boundary (-> a hard square
+    edge with black outside: the reported 'the dust are limited into
+    1 square'). The fix is a full-viewport clip-space pass that
+    reconstructs the world position per pixel (inverse camera) so the
+    wash stays anchored to the galaxy yet has no geometric edge."""
+    src = (V / "nebula-gl.js").read_text(encoding="utf-8")
+    bg = src[src.index("drawBg = regl(") : src.index("drawBg = regl(") + 1400]
+    # the background quad must be emitted directly in clip space
+    # (covers the entire NDC viewport every frame, regardless of cam).
+    assert "gl_Position=vec4(uv,0.0,1.0)" in bg, (
+        "drawBg must be a full-viewport clip-space pass "
+        "(gl_Position=vec4(uv,0.0,1.0)), not a world-scaled square quad."
+    )
+    # and it must reconstruct the world point per pixel (inverse of the
+    # node transform) so the wash is world-anchored without an edge.
+    assert "(res*0.5)/zoom" in bg, (
+        "drawBg must reconstruct the world position per pixel "
+        "(cam + clip*(res*0.5)/zoom) so the dust is anchored to the "
+        "galaxy in world space with no square boundary."
+    )
+    # the old finite world-square basis (uv*cr - cam) must be GONE
+    # from the background pass specifically.
+    assert "uv*cr - cam" not in bg, (
+        "drawBg must NOT scale a unit quad by a finite world radius "
+        "(uv*cr - cam) -- that is the visible square."
+    )
+
+
 def test_nebula_gl_has_no_stub_placeholders() -> None:
     """The plan elided helper bodies with /* ... */ -- they MUST be
     fully implemented, never shipped as placeholders."""

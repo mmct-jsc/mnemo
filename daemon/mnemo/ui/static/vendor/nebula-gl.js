@@ -482,32 +482,44 @@
       depth: { enable: false },
     });
 
-    // --- background DUST: a huge, very faint cool radial wash behind
-    // everything -- deep-space cirrus that gives the galaxy depth and
-    // a sense of a vast surrounding universe. Same safe additive quad
-    // (no derivatives, no point cap), ~3x the core, intensity ~0.1.
+    // --- background DUST: deep-space cirrus behind everything. The
+    // prior version scaled a unit quad by a FINITE world radius
+    // (uv*cr) -> a square whose radial wash had not decayed at the
+    // quad boundary, so its edge showed and outside it was hard black
+    // (the reported "the dust are limited into 1 square"). This is now
+    // a FULL-VIEWPORT clip-space pass (the quad IS the screen, every
+    // frame, at any zoom/pan) that reconstructs the world point per
+    // pixel by inverting the node camera transform -- so the wash
+    // stays anchored to the galaxy in world space yet has NO geometric
+    // edge: it just fades to deep space everywhere off-screen.
+    // Extension-free (no derivatives), additive, no point cap.
     var bgR = Math.max(worldR * 2.6, 1.0);
     var drawBg = regl({
       vert:
         'precision highp float; attribute vec2 uv;' +
-        'uniform vec2 cam,res; uniform float zoom; uniform float cr;' +
-        'varying vec2 vUv;' +
-        'void main(){ vUv=uv; vec2 w=uv*cr - cam; vec2 p=w*zoom;' +
-        ' gl_Position=vec4(p.x/(res.x*0.5),p.y/(res.y*0.5),0.0,1.0);}',
+        'varying vec2 vN;' +
+        'void main(){ vN=uv; gl_Position=vec4(uv,0.0,1.0); }',
       frag:
-        'precision highp float; varying vec2 vUv;' +
-        'void main(){ float d=length(vUv);' +
-        // a broad soft elliptical cool wash (violet->blue), nearly
-        // gone by the edge -> faint cirrus, never a hard disc.
-        ' float g=exp(-d*d*1.7)*0.115;' +
-        ' vec3 col=mix(vec3(0.34,0.30,0.62), vec3(0.16,0.26,0.46), d);' +
+        'precision highp float; varying vec2 vN;' +
+        'uniform vec2 cam,res; uniform float zoom; uniform float br;' +
+        'void main(){' +
+        // inverse of the node transform p=(w-cam)*zoom,
+        // clip=p/(res*0.5): the world point under THIS screen pixel.
+        ' vec2 w=cam + vN*(res*0.5)/zoom;' +
+        ' float d=length(w)/br;' +
+        // broad soft cool wash (violet->blue) decayed to ~0 far from
+        // the galaxy + a faint deep-space floor so the void is
+        // near-black, never a flat panel and never a square.
+        ' float g=exp(-d*d*1.7)*0.125 + 0.006*exp(-d*0.6);' +
+        ' vec3 col=mix(vec3(0.34,0.30,0.62), vec3(0.13,0.20,0.42),' +
+        '              clamp(d,0.0,1.0));' +
         ' gl_FragColor=vec4(col*g, g); }',
       attributes: { uv: coreQuad },
       uniforms: {
         cam: function () { return [cam.x, cam.y]; },
         zoom: function () { return cam.zoom; },
         res: function (c) { return res(c); },
-        cr: function () { return bgR; },
+        br: function () { return bgR; },
       },
       count: 4,
       primitive: 'triangle strip',
