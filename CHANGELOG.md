@@ -2,6 +2,37 @@
 
 All notable changes to mnemo are documented here.
 
+## [4.6.2] - 2026-05-19
+
+**MCP / tools / extension audit + version alignment.** A sweep of the
+non-daemon surfaces against the shipped v4.6.x state.
+
+- **Tool descriptions de-sigma'd (honesty fix).** `mnemo_session_nodes`
+  and `mnemo_highlight_nodes` in `agent_tools.py` still described the
+  **deleted v4.5 sigma.js renderer** ("sigma's nodeReducer", "v4.5's
+  sigma.js renderer swap") — false since v4.6 replaced it with the
+  custom `nebula-gl.js` WebGL engine. Rewritten to describe the v4.6
+  renderer's `setHighlight()` truthfully (the capability is unchanged
+  and still backed by real wiring; the gotcha-31 / C3-honesty
+  contract and its guard test stay green). The MCP server exposes the
+  same registry, so its tool surface inherits the corrected wording
+  automatically (no `mcp_server.py` change — it is a single-source
+  pass-through with no version string or parity drift).
+- **Version alignment.** The VS Code extension
+  (`extensions/vscode`, was 1.1.0) and the Python middleware client
+  (`clients/middleware-py`, was 1.1.0) are bumped to **4.6.2** to
+  match the daemon. The extension's daemon client was audited — all
+  endpoints it uses (`/v1/health|query|projects/active|sources|
+  reindex|nodes`) still exist and are contract-compatible on v4.6.x,
+  so no client code changes were needed.
+
+Known follow-up (flagged, out of scope for a version sync): the
+middleware `[google]` extra still targets the legacy
+`google-generativeai` SDK because its shim's `install()` only wraps
+that API; aligning it to the project-standard `google-genai`
+(`client.models.generate_content`) is a real shim change tracked
+separately.
+
 ## [4.6.1] - 2026-05-19
 
 **Two interaction regressions on the shipped v4.6.0 Nebula, fixed.**
