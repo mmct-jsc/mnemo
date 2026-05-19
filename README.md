@@ -3,9 +3,12 @@
 [![CI](https://github.com/mmct-jsc/mnemo/actions/workflows/ci.yml/badge.svg)](https://github.com/mmct-jsc/mnemo/actions/workflows/ci.yml)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-4.6.1-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-4.6.2-blue.svg)](CHANGELOG.md)
 [![Tests](https://img.shields.io/badge/tests-1245_passing-brightgreen.svg)](daemon/tests/)
 [![ruff](https://img.shields.io/badge/lint-ruff-orange.svg)](https://github.com/astral-sh/ruff)
+[![Live demo](https://img.shields.io/badge/live-demo-7ee7e0.svg)](https://mmct-jsc.github.io/mnemo/)
+
+**▶ [Live interactive demo](https://mmct-jsc.github.io/mnemo/)** — the real Nebula galaxy renderer on a seeded synthetic graph of mnemo's own architecture (static, no backend).
 
 Local-first knowledge memory **+ code intelligence + an agentic companion** for Claude Code. Aggregates your Claude memory, project knowledge, **and source code** into a single typed graph; retrieves it via hybrid Graph-RAG on every prompt; ships it back as token-budgeted, cited context. Chat with it through a tool-using agent ("Mnem"), and explore the whole graph as a custom WebGL galaxy at `/graph`.
 
