@@ -140,6 +140,21 @@ def test_page_is_the_real_nebula_shell_with_all_functions() -> None:
     assert "127.0.0.1:7373" not in t, "the demo is static -- no daemon URL"
     assert "unpkg.com" not in t, "no CDN runtime dep"
     assert "cdn." not in t, "no CDN runtime dep"
+    # #1: select() must itself drive the renderer focus, so a CANVAS
+    # click focuses too (not only tree/neighbour clicks). Single
+    # source -> no double gl.select() at the call sites.
+    assert "gl.select(i)" in t, "select() must call gl.select(i) (canvas-click focus)"
+    assert "select(e.i); gl.select(e.i)" not in t, (
+        "neighbour click must not double-call gl.select (single source)"
+    )
+    # #2: the filter belongs in a full-width bottom bar (the shell's
+    # 2nd grid row), NOT inside the file/tree panel.
+    assert 'class="demo-filterbar"' in t, "filter must be its own bottom bar"
+    assert "grid-row:2 / 3" in t, "the filter bar sits on the shell's 2nd row"
+    tree = t[t.index('<aside class="nebula-tree">') :]
+    tree = tree[: tree.index("</aside>")]
+    assert 'id="find"' not in tree, "the filter input must NOT be in the tree panel"
+    assert 'id="chips"' not in tree, "the type chips must NOT be in the tree panel"
 
 
 def test_assemble_emits_only_the_real_nebula_fileset(bd, tmp_path) -> None:

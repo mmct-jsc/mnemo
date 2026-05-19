@@ -791,22 +791,41 @@
 
     // --- input: wheel zoom-to-cursor, drag pan, node drag, click ---
     var down = null, moved = false;
+    // CANVAS-RELATIVE pointer coords. The move/up listeners are on
+    // `global` so a drag survives a brief cursor excursion, but
+    // e.offsetX/offsetY on a WINDOW-level listener is relative to
+    // e.target -- the instant the cursor crosses onto a sibling panel
+    // (tree / detail / filter) the origin jumps and the camera flicks
+    // (the reported "drag to the side bars flicks", in the demo AND
+    // prod /graph). clientX/clientY are viewport-stable; subtract the
+    // live canvas rect. ``in`` is false off the canvas, and every
+    // pan/drag/hover bails when !in -> NO action out of the canvas.
+    function ptr(e) {
+      var r = canvas.getBoundingClientRect();
+      var x = e.clientX - r.left, y = e.clientY - r.top;
+      return {
+        x: x, y: y,
+        in: x >= 0 && y >= 0 && x <= r.width && y <= r.height,
+      };
+    }
     canvas.addEventListener('wheel', function (e) {
       e.preventDefault();
-      var before = screenToWorld(e.offsetX, e.offsetY);
+      var p = ptr(e);
+      var before = screenToWorld(p.x, p.y);
       var f = e.deltaY < 0 ? 1.12 : 1 / 1.12;
       cam.zoom = Math.max(1e-4, Math.min(1e4, cam.zoom * f));
-      var after = screenToWorld(e.offsetX, e.offsetY);
+      var after = screenToWorld(p.x, p.y);
       cam.x += before.x - after.x;
       cam.y += before.y - after.y;
       invalidate();
     }, { passive: false });
 
     canvas.addEventListener('mousedown', function (e) {
-      var w = screenToWorld(e.offsetX, e.offsetY);
+      var p = ptr(e);
+      var w = screenToWorld(p.x, p.y);
       var r = 14 / cam.zoom;
       var hit = pick.nearest(w.x, w.y, r);
-      down = { px: e.offsetX, py: e.offsetY, wx: w.x, wy: w.y,
+      down = { px: p.x, py: p.y, wx: w.x, wy: w.y,
         cx: cam.x, cy: cam.y, hit: hit };
       dragId = hit;
       moved = false;
@@ -814,17 +833,18 @@
     function endDrag() { down = null; dragId = -1; }
     // a mouseup released OUTSIDE the window (or eaten by another
     // layer) never reaches our handler -> down/dragId stayed set and
-    // every later move kept dragging the node with no button held
-    // (the reported "D&D doesn't stop off the board"). Heal it: any
-    // move with no button pressed ends the drag; a window blur too.
+    // every later move kept dragging with no button held. Heal it:
+    // any move with no button pressed ends the drag; a window blur too.
     global.addEventListener('blur', endDrag);
     global.addEventListener('mousemove', function (e) {
       if (down && e.buttons === 0) { endDrag(); return; }
+      var p = ptr(e);
+      if (!p.in) return;  // NO action out of canvas (kills the flick)
       if (down) {
-        var dx = e.offsetX - down.px, dy = e.offsetY - down.py;
+        var dx = p.x - down.px, dy = p.y - down.py;
         if (Math.abs(dx) + Math.abs(dy) > 3) moved = true;
         if (dragId >= 0) {
-          var w = screenToWorld(e.offsetX, e.offsetY);
+          var w = screenToWorld(p.x, p.y);
           nodes[dragId].x = w.x;
           nodes[dragId].y = w.y;
           posArr[dragId * 2] = w.x;
@@ -836,12 +856,12 @@
           rebuildHi();
           invalidate();
         } else {
-          cam.x = down.cx - (e.offsetX - down.px) * dpr / cam.zoom;
-          cam.y = down.cy + (e.offsetY - down.py) * dpr / cam.zoom;
+          cam.x = down.cx - (p.x - down.px) * dpr / cam.zoom;
+          cam.y = down.cy + (p.y - down.py) * dpr / cam.zoom;
           invalidate();
         }
       } else {
-        var w2 = screenToWorld(e.offsetX, e.offsetY);
+        var w2 = screenToWorld(p.x, p.y);
         var h = pick.nearest(w2.x, w2.y, 14 / cam.zoom);
         if (h !== hoverId) {
           hoverId = h;
@@ -852,7 +872,7 @@
         }
       }
     });
-    global.addEventListener('mouseup', function (e) {
+    global.addEventListener('mouseup', function () {
       if (down && !moved) {
         if (down.hit >= 0) emit('clickNode', down.hit);
         else emit('clickStage', null);
