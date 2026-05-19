@@ -215,6 +215,32 @@ def test_edges_are_curved_filaments_not_straight_segments() -> None:
     )
 
 
+def test_pointer_is_canvas_relative_and_confined() -> None:
+    """The drag/pan/hover handlers are on `global` (so a drag started
+    on the canvas continues smoothly), but `e.offsetX/offsetY` on a
+    window-level listener is relative to e.target -- the moment the
+    cursor leaves the canvas onto a sibling panel (tree / detail /
+    filter) the origin jumps and the camera flicks (reported in BOTH
+    the demo and prod /graph). Pointer coords MUST be canvas-relative
+    via getBoundingClientRect()+clientX/clientY, and pan/drag/hover
+    MUST be confined to the canvas bounds (no action out of canvas)."""
+    src = (V / "nebula-gl.js").read_text(encoding="utf-8")
+    # the bug: offset coords inside the window-level move handler.
+    mv = src[src.index("addEventListener('mousemove'") :]
+    mv = mv[: mv.index("addEventListener('mouseup'")]
+    assert "offsetX" not in mv, (
+        "the global mousemove must NOT use e.offsetX (target-relative "
+        "on a window listener -> flicks over sibling panels)"
+    )
+    assert "offsetY" not in mv, "the global mousemove must NOT use e.offsetY"
+    # the fix: canvas-relative coords + an in-canvas confinement guard.
+    assert "getBoundingClientRect" in src, (
+        "pointer coords must be canvas-rect-relative (clientX-rect.left)"
+    )
+    assert "clientX" in src, "use e.clientX (viewport-stable) + the canvas rect"
+    assert "clientY" in src, "use e.clientY (viewport-stable) + the canvas rect"
+
+
 def test_no_debug_scaffolding_ships() -> None:
     """The dev-only diagnostic loop (the throttled '[nebula-gl] ...'
     console line + the on-overlay HUD + the per-frame
