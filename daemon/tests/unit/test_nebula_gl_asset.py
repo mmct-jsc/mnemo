@@ -126,6 +126,37 @@ def test_background_dust_is_full_viewport_not_a_world_square() -> None:
     )
 
 
+def test_edges_are_length_and_zoom_graded_not_a_flat_hairball() -> None:
+    """On the real weakly-modular 11k graph a flat-alpha draw of all
+    ~15.5k edges is a hairball: long cross-disc chords sum into a
+    central wash that buries the star spiral ('when no edge it's look
+    good'). The fix keeps edges but grades each edge's alpha by its
+    world length (short local filaments stay; long chords -> ~0, so
+    the spiral survives) and by zoom relative to the whole-graph fit
+    (overview ~invisible; zoom-in reveals local structure). A flat
+    LINES vertex can't know the other endpoint, so the length must be
+    a real per-edge attribute carried on its own dynamic buffer."""
+    src = (V / "nebula-gl.js").read_text(encoding="utf-8")
+    assert "attribute float len" in src, (
+        "the edge vertex shader must take a per-edge world-length "
+        "attribute (a flat LINES draw cannot derive it in-shader)."
+    )
+    assert "edgeLen" in src, (
+        "there must be a per-edge length buffer (edgeLen) rebuilt with "
+        "edge positions so it stays correct under node drag."
+    )
+    assert "exp(-Ln*Ln*8.0)" in src, (
+        "the edge fragment must fade alpha by normalized length so "
+        "long cross-disc chords vanish (the hairball) while short "
+        "local filaments remain (galactic texture)."
+    )
+    assert "uz/uf" in src, (
+        "edge alpha must also scale with zoom relative to the fit "
+        "(overview ~invisible -> the clean spiral; zoom-in reveals "
+        "local edges)."
+    )
+
+
 def test_nebula_gl_has_no_stub_placeholders() -> None:
     """The plan elided helper bodies with /* ... */ -- they MUST be
     fully implemented, never shipped as placeholders."""
