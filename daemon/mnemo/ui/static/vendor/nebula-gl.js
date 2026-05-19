@@ -285,15 +285,20 @@
     // and rendered nothing. A flat per-vertex position buffer is the
     // robust, extension-free pattern with no instancing pitfalls.
     var edgePos = new Float32Array(edges.length * 4);
+    var edgeLen = new Float32Array(edges.length * 2);  // 1 float / vertex
     function rebuildEdges() {
       for (var i = 0; i < edges.length; i++) {
         var s = nodes[edges[i].s], t = nodes[edges[i].t];
         edgePos[i * 4] = s.x; edgePos[i * 4 + 1] = s.y;
         edgePos[i * 4 + 2] = t.x; edgePos[i * 4 + 3] = t.y;
+        var dx = t.x - s.x, dy = t.y - s.y;
+        var L = Math.sqrt(dx * dx + dy * dy);
+        edgeLen[i * 2] = L; edgeLen[i * 2 + 1] = L;
       }
     }
     rebuildEdges();
     var edgeBuf = regl.buffer({ usage: 'dynamic', data: edgePos });
+    var edgeLenBuf = regl.buffer({ usage: 'dynamic', data: edgeLen });
 
     function res(ctx) { return [ctx.drawingBufferWidth, ctx.drawingBufferHeight]; }
 
@@ -304,25 +309,47 @@
     // pick/drag stay exact.
     var EDGE_VERT =
       'precision highp float; attribute vec2 position;' +
-      'uniform vec2 cam,res; uniform float zoom; uniform float uA;' +
-      'void main(){ float s=sin(uA),c=cos(uA);' +
+      'attribute float len; uniform vec2 cam,res;' +
+      'uniform float zoom; uniform float uA; varying float vLen;' +
+      'void main(){ vLen=len; float s=sin(uA),c=cos(uA);' +
       ' vec2 rp=vec2(position.x*c-position.y*s,' +
       '              position.x*s+position.y*c);' +
       ' vec2 p=(rp-cam)*zoom;' +
       ' gl_Position=vec4(p.x/(res.x*0.5),p.y/(res.y*0.5),0.0,1.0);}';
+    // KEEP edges, but make them read as galactic FILAMENTS not a
+    // hairball: a flat draw of all ~15.5k chords on a weakly-modular
+    // graph sums (additively) into a central wash that buries the
+    // star spiral ("when no edge it's look good"). So grade each
+    // edge's alpha by (a) its world length -- short local edges trace
+    // real structure and stay; long cross-disc chords (the hairball
+    // + the boxy crossing pattern) fall to ~0, so the spiral survives
+    // -- and (b) zoom relative to the whole-graph fit: at the
+    // overview edges are barely there (the clean spiral), zooming
+    // into a region ramps the local filaments in for inspection.
+    // ``fade``=0 on the accent (incident) pass keeps it full + sharp.
     var EDGE_FRAG =
       'precision highp float; uniform vec4 ec;' +
-      'void main(){ gl_FragColor=ec; }';
+      'uniform float wr,uz,uf,fade; varying float vLen;' +
+      'void main(){' +
+      ' float Ln=vLen/wr;' +
+      ' float lf=exp(-Ln*Ln*8.0);' +
+      ' float zf=clamp((uz/uf-1.0)*0.5+0.16,0.16,1.0);' +
+      ' float k=mix(1.0, lf*zf, fade);' +
+      ' gl_FragColor=vec4(ec.rgb, ec.a*k); }';
 
     var drawEdges = regl({
       vert: EDGE_VERT,
       frag: EDGE_FRAG,
-      attributes: { position: edgeBuf },
+      attributes: { position: edgeBuf, len: edgeLenBuf },
       uniforms: {
         cam: function () { return [cam.x, cam.y]; },
         zoom: function () { return cam.zoom; },
         res: function (c) { return res(c); },
         uA: function () { return gA; },
+        wr: function () { return worldR; },
+        uz: function () { return cam.zoom; },
+        uf: function () { return fitZoom || 1; },
+        fade: function () { return 1; },  // base web: length+zoom graded
         ec: function () {
           // when a node is focused, fade the base web HARD so only the
           // accent incident filaments read.
@@ -533,6 +560,8 @@
     var accent = theme.accent || [0.494, 0.906, 0.878]; // #7ee7e0
     var hiPos = new Float32Array(4);
     var hiBuf = regl.buffer({ usage: 'dynamic', data: hiPos });
+    var hiLen = new Float32Array(2);  // EDGE_VERT requires a len attr;
+    var hiLenBuf = regl.buffer({ usage: 'dynamic', data: hiLen });
     var hiVerts = 0;  // highlighted VERTICES (2 per incident edge)
     function rebuildHi() {
       var foc = selId >= 0 ? selId : hoverId;
@@ -544,26 +573,35 @@
       }
       if (cnt === 0) { hiVerts = 0; return; }
       if (hiPos.length < cnt * 4) hiPos = new Float32Array(cnt * 4);
-      var k = 0;
+      if (hiLen.length < cnt * 2) hiLen = new Float32Array(cnt * 2);
+      var k = 0, m = 0;
       for (var j = 0; j < edges.length; j++) {
         if (edges[j].s === foc || edges[j].t === foc) {
           var s = nodes[edges[j].s], t = nodes[edges[j].t];
           hiPos[k++] = s.x; hiPos[k++] = s.y;
           hiPos[k++] = t.x; hiPos[k++] = t.y;
+          var dx = t.x - s.x, dy = t.y - s.y;
+          var L = Math.sqrt(dx * dx + dy * dy);
+          hiLen[m++] = L; hiLen[m++] = L;
         }
       }
       hiVerts = cnt * 2;
       hiBuf({ data: hiPos.subarray(0, cnt * 4) });
+      hiLenBuf({ data: hiLen.subarray(0, cnt * 2) });
     }
     var hiEdges = regl({
       vert: EDGE_VERT,
       frag: EDGE_FRAG,
-      attributes: { position: hiBuf },
+      attributes: { position: hiBuf, len: hiLenBuf },
       uniforms: {
         cam: function () { return [cam.x, cam.y]; },
         zoom: function () { return cam.zoom; },
         res: function (c) { return res(c); },
         uA: function () { return gA; },
+        wr: function () { return worldR; },
+        uz: function () { return cam.zoom; },
+        uf: function () { return fitZoom || 1; },
+        fade: function () { return 0; },  // accent: never length/zoom faded
         ec: function () {
           // bright, near-opaque accent so the related constellation's
           // filaments are UNMISTAKABLE against the blue-dimmed rest.
@@ -766,6 +804,7 @@
           posBuf({ data: posArr });
           rebuildEdges();
           edgeBuf({ data: edgePos });
+          edgeLenBuf({ data: edgeLen });
           rebuildHi();
           invalidate();
         } else {
