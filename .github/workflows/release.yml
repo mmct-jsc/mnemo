@@ -35,6 +35,11 @@ concurrency:
 jobs:
   release:
     name: Tag + build + publish
+    # Only the public repo publishes. On the private enterprise mirror
+    # (mmct-jsc/mnemo_enterprise) this entire job is skipped so no
+    # duplicate tag / GitHub release / PyPI publish ever fires there.
+    # PyPI publish is additionally gated by vars.PUBLISH_TO_PYPI below.
+    if: github.repository == 'mmct-jsc/mnemo'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
