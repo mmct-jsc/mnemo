@@ -31,7 +31,7 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from mnemo import config, retrieve
 from mnemo.parsers import md as _md_parser
@@ -40,6 +40,17 @@ from mnemo.store import NODE_TYPES, Node, Store, signal_for_reason
 RISK_SAFE = "safe"
 RISK_CONFIRM = "confirm"
 RISK_DANGER = "danger"
+
+# v3 phase 1.5: structured risk taxonomy. ``Risk`` gives static
+# type-checkers (ruff / mypy / pyright) edit-time safety against
+# bogus values; ``ALL_RISKS`` is the single source of truth for
+# tests + host-side validators. Order is least-to-most dangerous so
+# hosts iterating the tuple display risks in a sensible default
+# order. Treated as part of the MCP wire contract: external hosts
+# can read ``descriptor["risk"]`` (returned by ``mcp_server.tool_list``)
+# and trust the value is one of these three literals.
+Risk = Literal["safe", "confirm", "danger"]
+ALL_RISKS: tuple[Risk, ...] = (RISK_SAFE, RISK_CONFIRM, RISK_DANGER)
 
 # Hard cap so a single mnemo_get_code_lines call can't dump a whole
 # huge file into the model context.
@@ -64,7 +75,7 @@ class ToolContext:
 class ToolSpec:
     name: str
     description: str
-    risk: str
+    risk: Risk
     parameters: dict  # JSON Schema (object) -- provider tool defs + MCP
     fn: Callable[..., dict]
 
@@ -75,14 +86,14 @@ TOOLS: dict[str, ToolSpec] = {}
 def _register(spec: ToolSpec) -> ToolSpec:
     if spec.name in TOOLS:
         raise ValueError(f"duplicate tool registration: {spec.name}")
-    if spec.risk not in (RISK_SAFE, RISK_CONFIRM, RISK_DANGER):
-        raise ValueError(f"bad risk for {spec.name}: {spec.risk}")
+    if spec.risk not in ALL_RISKS:
+        raise ValueError(f"bad risk for {spec.name}: {spec.risk!r} not in {ALL_RISKS}")
     TOOLS[spec.name] = spec
     return spec
 
 
 def _tool(
-    *, name: str, risk: str, description: str, parameters: dict
+    *, name: str, risk: Risk, description: str, parameters: dict
 ) -> Callable[[Callable[..., dict]], Callable[..., dict]]:
     def deco(fn: Callable[..., dict]) -> Callable[..., dict]:
         def safe_fn(ctx: ToolContext, **kwargs: Any) -> dict:
