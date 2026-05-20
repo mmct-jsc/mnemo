@@ -2,6 +2,25 @@
 
 All notable changes to mnemo are documented here.
 
+## [4.6.5] - 2026-05-20
+
+### Security
+
+- **Bump `idna` to `>= 3.15`** in both `daemon/uv.lock` and
+  `clients/middleware-py/uv.lock` to close the CVE-2024-3651 bypass
+  (GHSA-65pc-fj4g-8rjx). `idna` 3.14 rejects oversized inputs to
+  `idna.encode()` up-front, and 3.15 (the resolved version) adds an
+  early DNS-length cap on individual labels for defense-in-depth.
+  Flagged by GitHub Dependabot. No behavior change beyond hardened
+  input validation in `idna.encode()`; no API or test impact.
+
+Incidental: `uv lock` also refreshed two unrelated entries in
+`clients/middleware-py/uv.lock` -- the `exceptiongroup` marker
+narrowed from `python_full_version < '3.13'` to `< '3.11'` (now
+correctly defers to the Python 3.11+ stdlib version), and
+`mnemo-middleware`'s self-version pin caught up to `4.6.2`. Both are
+benign lockfile-hygiene refreshes with no behavior change.
+
 ## [4.6.4] - 2026-05-19
 
 **Smooth ribbon edges + focus pop + edges-behind-nodes + labels
