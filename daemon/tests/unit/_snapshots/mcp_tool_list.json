@@ -1,0 +1,528 @@
+[
+  {
+    "description": "Register a new indexing source (memory_dir / code_repo / ...). (risk: confirm)",
+    "inputSchema": {
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "project_key": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "path",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "name": "mnemo_add_source",
+    "risk": "confirm"
+  },
+  {
+    "description": "Apply retrieval scoring-weight deltas (alpha/beta/gamma/delta/epsilon/zeta) to the live config -- the Settings retune assistant's apply step. Bounded + recoverable. Returns the before/after so the page can validate. (risk: confirm)",
+    "inputSchema": {
+      "properties": {
+        "weights": {
+          "description": "subset of alpha/beta/gamma/delta/epsilon/zeta -> float",
+          "type": "object"
+        }
+      },
+      "required": [
+        "weights"
+      ],
+      "type": "object"
+    },
+    "name": "mnemo_apply_retune",
+    "risk": "confirm"
+  },
+  {
+    "description": "Mutate settings.json (scoring / retention / ...). (risk: danger)",
+    "inputSchema": {
+      "properties": {
+        "patch": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "patch"
+      ],
+      "type": "object"
+    },
+    "name": "mnemo_change_settings",
+    "risk": "danger"
+  },
+  {
+    "description": "Create a new memory node. Reindex picks it up later. (risk: confirm)",
+    "inputSchema": {
+      "properties": {
+        "body": {
+          "type": "string"
+        },
+        "frontmatter": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "project_key": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "name",
+        "body"
+      ],
+      "type": "object"
+    },
+    "name": "mnemo_create_node",
+    "risk": "confirm"
+  },
+  {
+    "description": "Permanently delete a node (cascades its edges). (risk: danger)",
+    "inputSchema": {
+      "properties": {
+        "node_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "node_id"
+      ],
+      "type": "object"
+    },
+    "name": "mnemo_delete_node",
+    "risk": "danger"
+  },
+  {
+    "description": "Read lines [start, end] (1-based, inclusive) from a source file. Capped at 400 lines per call. (risk: safe)",
+    "inputSchema": {
+      "properties": {
+        "end": {
+          "type": "integer"
+        },
+        "source_path": {
+          "type": "string"
+        },
+        "start": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "source_path",
+        "start",
+        "end"
+      ],
+      "type": "object"
+    },
+    "name": "mnemo_get_code_lines",
+    "risk": "safe"
+  },
+  {
+    "description": "Edges connected to a node. direction in {out,in,both}; optional relation filter. (risk: safe)",
+    "inputSchema": {
+      "properties": {
+        "direction": {
+          "default": "both",
+          "enum": [
+            "out",
+            "in",
+            "both"
+          ],
+          "type": "string"
+        },
+        "node_id": {
+          "type": "string"
+        },
+        "relation": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "node_id"
+      ],
+      "type": "object"
+    },
+    "name": "mnemo_get_edges",
+    "risk": "safe"
+  },
+  {
+    "description": "Full body + frontmatter for one node by id. (risk: safe)",
+    "inputSchema": {
+      "properties": {
+        "node_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "node_id"
+      ],
+      "type": "object"
+    },
+    "name": "mnemo_get_node",
+    "risk": "safe"
+  },
+  {
+    "description": "Highlight a SET of related nodes ON THE LIVE NEBULA GRAPH: the custom WebGL renderer (nebula-gl.js) spotlights them (full vivid color, labelled) and dims the rest to a cool field (never hidden), and the camera frames the set. Pair with mnemo_session_nodes to show 'what's related in this session'. This DOES light them up on the graph -- tell the user so (the v4.6 custom renderer's setHighlight() delivers it; the old cosmos highlight ceiling stays closed). The /graph page must be open for the user to see it. (risk: confirm)",
+    "inputSchema": {
+      "properties": {
+        "node_ids": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "node_ids"
+      ],
+      "type": "object"
+    },
+    "name": "mnemo_highlight_nodes",
+    "risk": "confirm"
+  },
+  {
+    "description": "List the mnemo workflow skills available to load. Returns each skill's name + description. Call this first, then mnemo_run_skill to load one's guidance. (risk: safe)",
+    "inputSchema": {
+      "properties": {},
+      "required": [],
+      "type": "object"
+    },
+    "name": "mnemo_list_skills",
+    "risk": "safe"
+  },
+  {
+    "description": "Navigate the browser to a mnemo path (e.g. /graph). (risk: confirm)",
+    "inputSchema": {
+      "properties": {
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
+    "name": "mnemo_navigate",
+    "risk": "confirm"
+  },
+  {
+    "description": "Open a UI panel (detail side panel, search popover, ...). (risk: confirm)",
+    "inputSchema": {
+      "properties": {
+        "panel_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "panel_id"
+      ],
+      "type": "object"
+    },
+    "name": "mnemo_open_panel",
+    "risk": "confirm"
+  },
+  {
+    "description": "The user's CURRENT screen: the live page state the UI attached to this conversation (page, path, selected node, visible nodes, query, weights, ...). Call this FIRST when the user says 'this page' / 'here' / 'what's on screen' so you act in-context. (risk: safe)",
+    "inputSchema": {
+      "properties": {},
+      "required": [],
+      "type": "object"
+    },
+    "name": "mnemo_page_context",
+    "risk": "safe"
+  },
+  {
+    "description": "Wipe a chat conversation + all its messages. (risk: danger)",
+    "inputSchema": {
+      "properties": {
+        "conv_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "conv_id"
+      ],
+      "type": "object"
+    },
+    "name": "mnemo_purge_conversation",
+    "risk": "danger"
+  },
+  {
+    "description": "Hybrid Graph-RAG retrieval over memory + code, ranked and token-budgeted. Use for broad research. Returns ranked hits each with a [mnemo:<id>] citation. (risk: safe)",
+    "inputSchema": {
+      "properties": {
+        "limit": {
+          "default": 8,
+          "type": "integer"
+        },
+        "max_tokens": {
+          "default": 800,
+          "type": "integer"
+        },
+        "project_key": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "prompt": {
+          "description": "natural-language query",
+          "type": "string"
+        }
+      },
+      "required": [
+        "prompt"
+      ],
+      "type": "object"
+    },
+    "name": "mnemo_query",
+    "risk": "safe"
+  },
+  {
+    "description": "Acknowledge a reindex request. The actual reindex runs via the daemon's /v1/reindex SSE channel (a tool must not block on it). (risk: confirm)",
+    "inputSchema": {
+      "properties": {
+        "source_path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "mnemo_reindex_source",
+    "risk": "confirm"
+  },
+  {
+    "description": "Unregister a source + cascade-clean its nodes. (risk: danger)",
+    "inputSchema": {
+      "properties": {
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
+    "name": "mnemo_remove_source",
+    "risk": "danger"
+  },
+  {
+    "description": "Load a mnemo skill's guidance into the conversation and follow it for the rest of this turn. ``skill_name`` is the skill's directory name (or its frontmatter name). (risk: confirm)",
+    "inputSchema": {
+      "properties": {
+        "skill_name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "skill_name"
+      ],
+      "type": "object"
+    },
+    "name": "mnemo_run_skill",
+    "risk": "confirm"
+  },
+  {
+    "description": "Scroll a DOM element (by CSS selector) into view. (risk: confirm)",
+    "inputSchema": {
+      "properties": {
+        "selector": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "selector"
+      ],
+      "type": "object"
+    },
+    "name": "mnemo_scroll_to",
+    "risk": "confirm"
+  },
+  {
+    "description": "List nodes by type, optional name glob + project filter. (risk: safe)",
+    "inputSchema": {
+      "properties": {
+        "limit": {
+          "default": 20,
+          "type": "integer"
+        },
+        "name_glob": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "project_key": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "type": "object"
+    },
+    "name": "mnemo_search_by_type",
+    "risk": "safe"
+  },
+  {
+    "description": "Select/focus a node on the current Nebula or /code view. (risk: confirm)",
+    "inputSchema": {
+      "properties": {
+        "node_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "node_id"
+      ],
+      "type": "object"
+    },
+    "name": "mnemo_select_node",
+    "risk": "confirm"
+  },
+  {
+    "description": "The nodes this conversation has cited or acted on, plus their 1-hop neighbours. Use to ground 'what's related in this session / highlight it on the Nebula graph' before mnemo_highlight_nodes. (risk: safe)",
+    "inputSchema": {
+      "properties": {},
+      "required": [],
+      "type": "object"
+    },
+    "name": "mnemo_session_nodes",
+    "risk": "safe"
+  },
+  {
+    "description": "Apply a type / confidence / layout filter on the view. (risk: confirm)",
+    "inputSchema": {
+      "properties": {
+        "filter_kind": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "filter_kind",
+        "value"
+      ],
+      "type": "object"
+    },
+    "name": "mnemo_set_filter",
+    "risk": "confirm"
+  },
+  {
+    "description": "Register a thumbs up/down on a retrieval hit. (risk: confirm)",
+    "inputSchema": {
+      "properties": {
+        "direction": {
+          "enum": [
+            "up",
+            "down"
+          ],
+          "type": "string"
+        },
+        "node_id": {
+          "type": "string"
+        },
+        "query_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "node_id",
+        "direction"
+      ],
+      "type": "object"
+    },
+    "name": "mnemo_thumbs_feedback",
+    "risk": "confirm"
+  },
+  {
+    "description": "BFS from a node up to max_hops (optional relation filter). The 'why-is-this-here' provenance walk. Returns nodes tagged with their hop distance + the edges traversed. (risk: safe)",
+    "inputSchema": {
+      "properties": {
+        "max_hops": {
+          "default": 2,
+          "type": "integer"
+        },
+        "relations": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "start_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "start_id"
+      ],
+      "type": "object"
+    },
+    "name": "mnemo_traverse",
+    "risk": "safe"
+  },
+  {
+    "description": "Patch a node's name / description / body / frontmatter. (risk: confirm)",
+    "inputSchema": {
+      "properties": {
+        "fields": {
+          "type": "object"
+        },
+        "node_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "node_id",
+        "fields"
+      ],
+      "type": "object"
+    },
+    "name": "mnemo_update_node",
+    "risk": "confirm"
+  }
+]
