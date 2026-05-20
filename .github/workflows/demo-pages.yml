@@ -14,6 +14,7 @@ on:
       - "daemon/mnemo/ui/static/vendor/**"
       - "daemon/mnemo/ui/graph_layout.py"
       - "daemon/mnemo/ui/palette.py"
+      - "daemon/mnemo/__init__.py"
       - ".github/workflows/demo-pages.yml"
   workflow_dispatch:
 
