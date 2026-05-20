@@ -38,12 +38,12 @@ jobs:
         working-directory: daemon
       - name: Build the static demo
         run: uv --project daemon run python scripts/build_demo.py --out dist
-      - uses: actions/configure-pages@v5
+      - uses: actions/configure-pages@v6
         with:
           # self-enable Pages (source = GitHub Actions) on first run
           # using the built-in GITHUB_TOKEN -- no PAT / manual admin.
           enablement: true
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: dist
 
