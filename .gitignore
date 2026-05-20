@@ -61,3 +61,8 @@ desktop.ini
 
 # Local Claude scratch
 .claude/settings.local.json
+
+# Confidential plans / unbuilt-feature roadmap docs (standing rule from 2026-05-20).
+# These NEVER leave the local machine. Drop strategy/roadmap/feature-design
+# files here, not under docs/plans/. See ~/.claude memory for the full policy.
+docs/_private/
