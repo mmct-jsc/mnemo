@@ -92,6 +92,15 @@ The install script:
 
 Restart Claude Code after install; the next session sees mnemo's hooks fire automatically.
 
+## Use mnemo from any MCP-capable agent
+
+mnemo's MCP server (`mnemo mcp`, stdio) is provider-neutral — same 26-tool surface, any agent. Phase 1 of the substrate roadmap ships two flagship 5-minute mount guides:
+
+- **[Cursor](docs/integrations/cursor.md)** (IDE-embedded) — one block in `~/.cursor/mcp.json`, window reload, done.
+- **[OpenAI Agents SDK](docs/integrations/openai-agents-sdk.md)** (agent-loop) — Python + TypeScript snippets wiring `MCPServerStdio` directly to mnemo.
+
+See **[docs/integrations/](docs/integrations/README.md)** for the full index, the selection rubric, and the deferred picks (Continue, Zed, Gemini CLI, LangGraph) with the rationale for each defer.
+
 ## Slash commands
 
 - `/mnemo-query <text>` — ad-hoc memory query
