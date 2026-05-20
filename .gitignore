@@ -61,3 +61,6 @@ desktop.ini
 
 # Local Claude scratch
 .claude/settings.local.json
+
+# Local scratch (private notes / drafts).
+docs/_private/
