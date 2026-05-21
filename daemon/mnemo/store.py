@@ -1903,6 +1903,51 @@ class Store:
             )
             self.conn.commit()
 
+    # --- Quota enforcement (Phase 3 / Task 2.5) ---------------------------
+
+    def check_quota(self, api_key_id: str, period: str) -> tuple[bool, str | None]:
+        """Per-key per-period quota check.
+
+        Returns ``(allowed, reason_if_blocked)``:
+
+        - No ``quota`` row for the key -> ``(True, None)``. Hosted-tier
+          operator can leave keys quota-less for "open billing"
+          (track usage but never reject); the billing report's
+          over_quota stays False because ``COALESCE(q.max_*, 0)`` is
+          treated as "unset" by the >0 guards.
+        - Quota set + ``queries >= max_queries`` or
+          ``tokens >= max_tokens`` -> ``(False, "<reason>")``. The
+          /v1/query handler turns this into a 429 with a
+          ``Retry-After`` header pointing at the start of the next
+          UTC month.
+
+        Strict ``>=`` (not ``>``): the user gets EXACTLY ``max_queries``
+        successful requests before the next one is rejected. Tokens
+        may overshoot the limit by one request's worth (we don't
+        know a request's tokens until it runs); that's acceptable
+        slack for v0.1 and documented in
+        ``docs/hosted/deploying.md``.
+        """
+        with self._lock:
+            q_row = self.conn.execute(
+                "SELECT max_queries, max_tokens FROM quota "
+                "WHERE api_key_id = ? AND period = 'monthly'",
+                (api_key_id,),
+            ).fetchone()
+            u_row = self.conn.execute(
+                "SELECT queries, tokens FROM usage_period WHERE api_key_id = ? AND period = ?",
+                (api_key_id, period),
+            ).fetchone()
+        if q_row is None:
+            return True, None
+        queries = u_row["queries"] if u_row else 0
+        tokens = u_row["tokens"] if u_row else 0
+        if queries >= q_row["max_queries"]:
+            return False, "queries quota exceeded for period"
+        if tokens >= q_row["max_tokens"]:
+            return False, "tokens quota exceeded for period"
+        return True, None
+
     # --- Billing report (Phase 3 / Task 2.6) ------------------------------
 
     def billing_report(self, period: str) -> list[dict]:

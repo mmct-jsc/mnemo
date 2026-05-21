@@ -314,6 +314,35 @@ def _chat_provider(state: AppState, name: str):
 LOOPBACK_HOSTS: frozenset[str] = frozenset({"127.0.0.1", "::1", "localhost"})
 
 
+def _seconds_until_next_month_utc() -> int:
+    """Seconds remaining until 00:00 UTC on the 1st of next month.
+    The /v1/query 429 ``Retry-After`` header uses this so quota-
+    blocked clients know exactly when their monthly bucket resets."""
+    import datetime
+
+    now = datetime.datetime.now(datetime.UTC)
+    if now.month == 12:
+        next_month = now.replace(
+            year=now.year + 1,
+            month=1,
+            day=1,
+            hour=0,
+            minute=0,
+            second=0,
+            microsecond=0,
+        )
+    else:
+        next_month = now.replace(
+            month=now.month + 1,
+            day=1,
+            hour=0,
+            minute=0,
+            second=0,
+            microsecond=0,
+        )
+    return max(1, int((next_month - now).total_seconds()))
+
+
 def _is_loopback(host: str | None) -> bool:
     """True for the well-known loopback identifiers FastAPI / uvicorn
     surface in ``request.client.host``. Extracted for testability."""
@@ -1123,6 +1152,20 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
         # behavior is unchanged.
         api_key_id: str | None = Depends(api_key_or_local),
     ) -> QueryOut:
+        # Phase 3b / Task 2.5: pre-handler quota enforcement. Reject
+        # the request BEFORE doing the retrieval work so the operator
+        # isn't paying compute for over-quota requests. No-op when
+        # api_key_id is None (flag off / loopback exemption); no-op
+        # when the key has no quota row (open-billing posture).
+        if api_key_id is not None:
+            period = time.strftime("%Y-%m", time.gmtime())
+            allowed, reason = s.check_quota(api_key_id, period)
+            if not allowed:
+                raise HTTPException(
+                    status_code=429,
+                    detail=f"Monthly quota exceeded: {reason}",
+                    headers={"Retry-After": str(_seconds_until_next_month_utc())},
+                )
         # v2.6 phase 10.1: workspaces drive retrieval scope. The resolver
         # walks: explicit -> legacy field -> active workspace -> legacy
         # active_project pointer. See _resolve_query_project.
