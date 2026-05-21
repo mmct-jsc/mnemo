@@ -1864,6 +1864,45 @@ class Store:
                 return r["id"]
         return None
 
+    # --- Usage metering (Phase 3 / Task 2.4) ------------------------------
+
+    def record_usage(
+        self,
+        api_key_id: str,
+        period: str,
+        *,
+        queries: int,
+        tokens: int,
+    ) -> None:
+        """Atomic per-key per-period usage upsert (Phase 3 / Task 2.4).
+
+        Called post-request by the /v1/query metering hook with the
+        delta (default 1 query + the request's tokens_used). The
+        composite primary key ``(api_key_id, period)`` makes this an
+        idempotent UPSERT via SQLite's ``ON CONFLICT DO UPDATE`` --
+        no read-modify-write race even under concurrent requests
+        against the same key.
+
+        ``period`` is the billing-period identifier (``YYYY-MM`` for
+        monthly billing); the metering hook computes it from UTC so
+        DST / timezone drift can't shift attribution.
+        """
+        import time
+
+        now = int(time.time())
+        with self._lock:
+            self.conn.execute(
+                """INSERT INTO usage_period
+                       (api_key_id, period, queries, tokens, updated_at)
+                   VALUES (?, ?, ?, ?, ?)
+                   ON CONFLICT (api_key_id, period) DO UPDATE SET
+                       queries = queries + excluded.queries,
+                       tokens = tokens + excluded.tokens,
+                       updated_at = excluded.updated_at""",
+                (api_key_id, period, queries, tokens, now),
+            )
+            self.conn.commit()
+
     # --- Billing report (Phase 3 / Task 2.6) ------------------------------
 
     def billing_report(self, period: str) -> list[dict]:

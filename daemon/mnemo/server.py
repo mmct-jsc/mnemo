@@ -1119,10 +1119,9 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
         e: Embedder = Depends(get_embedder),
         # Phase 3b / Task 2.3: no-op when Config.hosted_auth_enabled is
         # False (default); loopback stays exempt even when on; returns
-        # the api_key.id when key-authenticated (consumed by the Phase
-        # 3b metering hook in Task 2.4). Self-host loopback behavior
-        # is unchanged.
-        api_key_id: str | None = Depends(api_key_or_local),  # noqa: ARG001
+        # the api_key.id when key-authenticated. Self-host loopback
+        # behavior is unchanged.
+        api_key_id: str | None = Depends(api_key_or_local),
     ) -> QueryOut:
         # v2.6 phase 10.1: workspaces drive retrieval scope. The resolver
         # walks: explicit -> legacy field -> active workspace -> legacy
@@ -1136,6 +1135,15 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
             k=body.k,
             active_project=proj,
         )
+        # Phase 3b / Task 2.4: meter per-key usage when key-authenticated.
+        # api_key_id is None for flag-off OR loopback exemption -- the
+        # self-host loopback path never writes a usage row, preserving
+        # anti-goal #1 (free local-first plugin stays fully free).
+        # Period is UTC YYYY-MM so DST + timezone drift can't shift
+        # billing attribution.
+        if api_key_id is not None:
+            period = time.strftime("%Y-%m", time.gmtime())
+            s.record_usage(api_key_id, period, queries=1, tokens=result.tokens_used)
         return QueryOut.from_result(result)
 
     # --- Projects (v1.1) --------------------------------------------------
