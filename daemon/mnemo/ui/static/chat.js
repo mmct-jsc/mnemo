@@ -49,6 +49,22 @@
       citations: [],
       citeSel: '',
       draft: '',
+      // v5 phase 4: dock-only "prompt architect" mode. When ON the
+      // POST body carries use_skill='mnemo-prompt-architect' so the
+      // phase-3 entry-point pre-loads the skill BEFORE the model sees
+      // the user's text. Defaults OFF so legacy dock usage is
+      // unchanged. The /chat page surface does NOT expose this toggle
+      // in v5.0 (per design doc Q3 -- dock is the primary surface).
+      architectMode: false,
+      // v5 phase 5: dock pre-emit warning state. Set by the SSE
+      // handler when the architect skill's retrieval reports a
+      // non-zero local_only_excluded count; the composer-area banner
+      // binds to this value and the warn_on_local_only_exclusion
+      // companion setting to decide visibility. The full SSE event
+      // wiring lands in v5.x -- v5.0 ships the surface + the dismiss
+      // path so dogfood can opt into the future-wiring already.
+      localOnlyExcluded: 0,
+      warnLocalOnly: true,
       streaming: false,
       thinking: false,
       working: false, // drives the orbiting-dots "working" animation
@@ -751,10 +767,18 @@
             : Promise.resolve();
           return pre
             .then(function () {
+              // v5 phase 4: when the dock's architect toggle is ON,
+              // send the skill name through to the phase-3 entry-point
+              // so the skill guidance pre-loads before the model
+              // sees the user text. Default OFF -> identical to v4.x.
+              var body = { text: text };
+              if (self.architectMode && self.surface === 'dock') {
+                body.use_skill = 'mnemo-prompt-architect';
+              }
               return fetch('/v1/chat/' + id + '/message', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ text: text }),
+                body: JSON.stringify(body),
               });
             })
             .then(function () {

@@ -1,0 +1,4 @@
+{"id": "mqtt-auth-1", "type": "memory_feedback", "body": "The MQTT broker auth store may not propagate after reprovision; verify with a direct paho-mqtt connect probe before changing route code. Look for CONNACK rc=0 in the response."}
+{"id": "mqtt-auth-2", "type": "memory_feedback", "body": "petro_backend overrides the DB MQTT port 1883 to 443 over WSS at /api/v1/mqtt-ws. Match this when the route fails."}
+{"id": "mqtt-auth-3", "type": "memory_feedback", "body": "Do NOT add Redis. We removed Redis 2026-03 in favor of in-process caching. Any architected prompt should explicitly warn against re-introducing it."}
+{"id": "redact-1", "type": "memory_feedback", "body": "Secret-redaction safeguards live in daemon/mnemo/safeguards.py. Output that may leave the daemon (paste-bound prompts) must pass through redact_text first."}
