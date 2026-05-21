@@ -2,6 +2,75 @@
 
 All notable changes to mnemo are documented here.
 
+## [5.3.0] - 2026-05-22
+
+Cursor variant pack. v5.1.1 shipped two themed cursors (default
++ pointer); v5.3.0 extends the pack to cover every other cursor
+type actually used in mnemo's CSS — audited via grep across
+`app.css`, `base.html`, and `chat.html`. Five new C1-palette
+SVGs under `daemon/mnemo/ui/static/cursors/`:
+
+| File | Used on | Visual |
+|---|---|---|
+| `mnem-cursor-grab.svg` | `.mnem-dock` (draggable surfaces) | teal halo + ring + 4 outward chevrons |
+| `mnem-cursor-grabbing.svg` | `.mnem-wrap.dragging .mnem-dock` (mid-drag) | brighter ring + 4 inward chevrons |
+| `mnem-cursor-not-allowed.svg` | disabled `.send` / `.mc-error .mce-retry` / `.chat-error .ce-retry` | warn-tone halo + circle with diagonal slash |
+| `mnem-cursor-col-resize.svg` | `.nebula-gutter` (panel divider) | teal halo + horizontal bidirectional arrows |
+| `mnem-cursor-progress.svg` | `button:disabled`, `.link-button:disabled` | teal halo + center dot + 4 satellite dots |
+
+All 32×32 with hot spot center (16, 16). Same `, <state>`
+platform fallback as v5.1.1 so any UA that refuses the SVG
+cursor degrades cleanly to the OS variant.
+
+### CSS wiring
+
+Every `cursor: <state>` callsite in the bundle was prefixed
+with the matching `url("cursors/mnem-cursor-<state>.svg") 16 16`
+so the themed file takes over wherever the cursor type was
+specified. Three files touched:
+
+- `app.css` — `not-allowed`, `progress`, `col-resize` (relative
+  URLs so the same rule works in the demo Pages build).
+- `base.html` inline `<style>` — `grab`, `grabbing`,
+  `not-allowed` (absolute `/static/cursors/...` paths; this
+  template is daemon-only).
+- `chat.html` inline `<style>` — `not-allowed` on .send /
+  .ce-retry (absolute path; daemon-only).
+
+`build_demo.py`'s existing `copytree` of the cursors directory
+picks up the five new SVGs automatically — no build-script
+change needed.
+
+### Live-verified end-to-end on 127.0.0.1:7373
+
+- All seven cursor SVGs serve as `image/svg+xml` with HTTP 200.
+- `.mnem-dock` computed `cursor` = the themed grab URL + grab
+  fallback.
+- `.nebula-gutter` (on /graph) computed `cursor` = the themed
+  col-resize URL + col-resize fallback.
+- A synthesised disabled button computed `cursor` = the themed
+  progress URL + progress fallback (matches the global
+  `button:disabled` rule).
+- 0 console errors after reload.
+
+### Anti-goal preserved
+
+- Variant pack is additive; nothing was removed from the
+  existing cursor rules. Pre-v5.1.1 platforms still see the
+  exact OS cursor via the `, <state>` fallback chain.
+- Caret text input still keeps `cursor: text` (the v5.1.1 carve-
+  out for caret precision); no themed text cursor in this pack.
+- 47/47 existing `/v1/query` tests still pass without
+  `hosted_auth_enabled`.
+
+### Tests
+
++5 unit added to `test_themed_cursor.py`: every variant
+exists, parses as valid SVG, uses the C1 palette, is wired
+somewhere in the CSS bundle, and `base.html` specifically
+carries the grab + grabbing references. Full suite stays at
+1314 / 1 skip plus these 5 additions.
+
 ## [5.2.0] - 2026-05-22
 
 Cross-surface prompt-architect. The architect pill that v5.0
