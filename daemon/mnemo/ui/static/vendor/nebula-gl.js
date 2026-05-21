@@ -766,6 +766,25 @@
       return { x: dx * c - dy * s, y: dx * s + dy * c };
     }
 
+    // v5.1.1: cam-frame variant of the above, WITHOUT the inverse-
+    // rotate. The wheel handler (zoom-to-cursor) must use this -- its
+    // before/after correction is added to cam.x/cam.y, which live
+    // in the display frame (the shader rotates AFTER applying cam).
+    // Using screenToWorld here rotates the correction by -gA before
+    // applying it to an unrotated cam, which is why the zoom target
+    // drifted off the cursor as the galaxy rotated -- and around
+    // gA ~= pi the drift looked like an exact reversal (the
+    // user-reported "zoom target got reverted compared to cursor").
+    // screenToWorld stays unchanged for pick / hover / node-drag
+    // (those DO want the static frame).
+    function screenToCam(px, py) {
+      var vw = canvas.width, vh = canvas.height;
+      return {
+        x: cam.x + (px * dpr - vw / 2) / cam.zoom,
+        y: cam.y - (py * dpr - vh / 2) / cam.zoom,
+      };
+    }
+
     function resize() {
       // The canvas frequently has NO layout size when create() runs
       // (renderCanvas fires before the panel is painted), so the
@@ -900,10 +919,13 @@
     canvas.addEventListener('wheel', function (e) {
       e.preventDefault();
       var p = ptr(e);
-      var before = screenToWorld(p.x, p.y);
+      // v5.1.1: use the CAM (display) frame for the zoom-to-cursor
+      // correction so the math stays consistent with cam.x/cam.y.
+      // See screenToCam above for the full rationale.
+      var before = screenToCam(p.x, p.y);
       var f = e.deltaY < 0 ? 1.12 : 1 / 1.12;
       cam.zoom = Math.max(1e-4, Math.min(1e4, cam.zoom * f));
-      var after = screenToWorld(p.x, p.y);
+      var after = screenToCam(p.x, p.y);
       cam.x += before.x - after.x;
       cam.y += before.y - after.y;
       invalidate();

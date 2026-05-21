@@ -408,6 +408,13 @@ def assemble(out: Path) -> None:
     shutil.copyfile(VENDOR / "nebula-gl.js", out / "nebula-gl.js")
     shutil.copyfile(APP_CSS, out / "app.css")
     shutil.copyfile(LOGO, out / "mark.svg")
+    # v5.1.1: copy the themed-cursor SVG assets the live UI uses. The
+    # relative URL in app.css (`cursors/mnem-cursor.svg`) resolves to
+    # the demo's `<out>/cursors/` after this copy, matching how the
+    # daemon serves them at `/static/cursors/`.
+    cursors_dir = UI / "static" / "cursors"
+    if cursors_dir.is_dir():
+        shutil.copytree(cursors_dir, out / "cursors", dirs_exist_ok=True)
 
 
 def main() -> None:

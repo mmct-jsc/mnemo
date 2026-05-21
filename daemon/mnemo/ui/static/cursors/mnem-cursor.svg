@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
+  <!--
+    mnemo v5.1.1 themed default cursor.
+    Matches the C1 dark+teal palette (accent #7ee7e0).
+    Hot spot is the center (16, 16) and is referenced in app.css.
+    Three layers: soft halo, ring, center dot.
+  -->
+  <circle cx="16" cy="16" r="10" fill="rgba(126, 231, 224, 0.10)"/>
+  <circle cx="16" cy="16" r="6" fill="rgba(126, 231, 224, 0.20)"
+          stroke="#7ee7e0" stroke-width="1.5" stroke-opacity="0.9"/>
+  <circle cx="16" cy="16" r="1.5" fill="#7ee7e0"/>
+</svg>
