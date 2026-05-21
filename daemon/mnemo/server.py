@@ -303,6 +303,80 @@ def _chat_provider(state: AppState, name: str):
     return providers.get_provider(name, api_key=api_key)
 
 
+# --- Phase 3b / Task 2.3: api_key auth on /v1/query (flag-gated) ----------
+#
+# Anti-goal: the free local-first plugin stays fully capable. The auth
+# dependency is a no-op when ``Config.hosted_auth_enabled`` is False
+# (default); loopback (127.0.0.1 / ::1 / localhost) stays exempt even
+# when the flag is on, so self-host clients on the same machine never
+# need a key.
+
+LOOPBACK_HOSTS: frozenset[str] = frozenset({"127.0.0.1", "::1", "localhost"})
+
+
+def _is_loopback(host: str | None) -> bool:
+    """True for the well-known loopback identifiers FastAPI / uvicorn
+    surface in ``request.client.host``. Extracted for testability."""
+    return host in LOOPBACK_HOSTS
+
+
+def api_key_or_local(request: Request) -> str | None:
+    """Auth gate for /v1/query (Phase 3b / Task 2.3).
+
+    Returns the validated ``api_key.id`` on a key-authenticated
+    request; None when the request was let through unauthenticated
+    (flag off OR loopback exemption). The returned value is consumed
+    by the Phase 3b metering hook (Task 2.4) for usage attribution.
+
+    Decision matrix:
+
+    - ``hosted_auth_enabled == False`` (default) -> allow, return None.
+      Self-host stays exactly as today.
+    - ``hosted_auth_enabled == True`` AND request from loopback -> allow,
+      return None. Loopback exemption preserves the local UI / CLI /
+      plugin path even on hosted deployments running on the same box.
+    - ``hosted_auth_enabled == True`` AND non-loopback AND no/invalid/
+      revoked key -> 401 Unauthorized with a hint header.
+    - ``hosted_auth_enabled == True`` AND non-loopback AND valid key ->
+      allow, return ``api_key.id``.
+
+    Reads the config fresh per request so flipping the flag on a
+    hosted box takes effect on the next inbound request without
+    needing a restart.
+    """
+    # FastAPI wires the Depends graph; pull the store from app.state
+    # because the get_store helper is closure-captured inside create_app
+    # and we can't import it cleanly into a module-level Depends.
+    state: AppState = request.app.state.mnemo_state
+    assert state.store is not None
+    store: Store = state.store
+
+    cfg = config.load()
+    if not cfg.hosted_auth_enabled:
+        return None
+
+    client_host = request.client.host if request.client else None
+    if _is_loopback(client_host):
+        return None
+
+    auth = request.headers.get("authorization", "")
+    if not auth.startswith("Bearer "):
+        raise HTTPException(
+            status_code=401,
+            detail="Missing Authorization: Bearer <key>; hosted-auth is enabled.",
+            headers={"WWW-Authenticate": 'Bearer realm="mnemo"'},
+        )
+    raw_key = auth[len("Bearer ") :].strip()
+    key_id = store.verify_api_key(raw_key)
+    if key_id is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or revoked API key.",
+            headers={"WWW-Authenticate": 'Bearer realm="mnemo", error="invalid_token"'},
+        )
+    return key_id
+
+
 def create_app(*, store: Store | None = None, embedder: Embedder | None = None) -> FastAPI:
     """Build a FastAPI app. ``store`` and ``embedder`` may be injected for tests.
 
@@ -1043,6 +1117,12 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
         body: QueryIn,
         s: Store = Depends(get_store),
         e: Embedder = Depends(get_embedder),
+        # Phase 3b / Task 2.3: no-op when Config.hosted_auth_enabled is
+        # False (default); loopback stays exempt even when on; returns
+        # the api_key.id when key-authenticated (consumed by the Phase
+        # 3b metering hook in Task 2.4). Self-host loopback behavior
+        # is unchanged.
+        api_key_id: str | None = Depends(api_key_or_local),  # noqa: ARG001
     ) -> QueryOut:
         # v2.6 phase 10.1: workspaces drive retrieval scope. The resolver
         # walks: explicit -> legacy field -> active workspace -> legacy
