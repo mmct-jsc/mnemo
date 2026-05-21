@@ -2,6 +2,129 @@
 
 All notable changes to mnemo are documented here.
 
+## [4.7.0] - 2026-05-21
+
+The substrate + benchmark + hosted-tier release. Bundles 22
+commits across Phase 1 / Phase 2 / Phase 3 of the enterprise
+execution plan into a single minor bump. Every change preserved
+the same anti-goal: the free local-first plugin stays fully
+capable, byte-for-byte unchanged for self-host loopback users.
+
+### Phase 1 — MCP substrate hardening (8 commits)
+
+- **Locked the 26-tool MCP surface as a contract test**
+  (`daemon/tests/unit/test_mcp_tool_surface_contract.py`). Rename
+  or removal of any published tool now fails CI.
+- **Cursor 5-minute mount guide** (`docs/integrations/cursor.md`)
+  + integration smoke test. One `mcp.json` block, window reload,
+  done.
+- **OpenAI Agents SDK 5-minute mount guide**
+  (`docs/integrations/openai-agents-sdk.md`) with Python +
+  TypeScript snippets using `MCPServerStdio`. Demonstrates mnemo
+  working cleanly inside OpenAI's flagship agent runtime.
+- **Provider-neutral positioning in README** + new
+  `docs/integrations/` index linking the picks + the selection
+  rubric in `PICKS.md` (rubric + deferred candidates documented:
+  Continue, Zed, Gemini CLI, LangGraph).
+- **Typed `Risk = Literal["safe", "confirm", "danger"]`** + the
+  `ALL_RISKS` constant as the single source of truth for the
+  tool-risk taxonomy.
+- **Wire-schema snapshot test** — byte-for-byte JSON snapshot of
+  `tool_list()` at `daemon/tests/unit/_snapshots/mcp_tool_list.json`
+  (528 lines, 26 tools), `MNEMO_UPDATE_SNAPSHOTS=1` regen-gated.
+  `docs/integrations/wire-schema.md` documents the contract.
+
+### Phase 2 — Open agent-memory benchmark + ROI surface (6 commits)
+
+- **CC-BY-4.0 spec** for the agent-memory benchmark
+  (`docs/benchmark/agent-memory-spec-v0.md`) — 8 tasks (T1–T8),
+  4 metrics (re-derivation rate, tokens-to-answer, citation
+  precision, answer correctness), 2 reference baselines, `Memory`
+  Protocol, fixture format, roadmap to v1.0. First reproducible
+  benchmark for typed Graph-RAG agent memory in the public
+  domain.
+- **MIT harness** at new top-level `bench/` package. Zero runtime
+  deps in the core; mnemo HTTP adapter via the `[mnemo]` extra.
+- **T1 answer-follow-up task** end-to-end with vanilla + mnemo
+  baselines. The strict invariant
+  `vanilla.rederivation_rate > mnemo.rederivation_rate` is a
+  CI-enforced contract.
+- **`GET /v1/roi/summary` endpoint** + `RoiSummaryOut` schema +
+  `Store.roi_summary()` aggregator. 5 fields:
+  `queries_total`, `rederivations_avoided`, `tokens_saved_est`,
+  `thumbs_up_ratio`, `auto_tune_iterations`.
+- **Dashboard ROI summary card** (server-rendered Jinja, no
+  client-side flash on page load).
+- **First case study** from the dogfooded install:
+  `docs/case-studies/2026-05-mnemo-self-host.md`. Real numbers:
+  310 queries / 11.4 days / 12,494 nodes / 11 sources / ~62K
+  tokens-saved (lower-bound estimate). Honest framing —
+  `thumbs_up_ratio = 0.0` reported as-is.
+
+### Phase 3a — Hosted-tier operator surface (3 commits)
+
+- **`api_key` + `quota` + `usage_period` schema** as an additive
+  `SCHEMA_SQL` block (FK CASCADE + composite PKs + UNIQUE on
+  hash). Harmless on installs that never enable hosted mode.
+- **`mnemo key {create,list,revoke}` CLI** — 32-byte
+  `secrets.token_urlsafe` raw key + per-key 16-byte
+  `secrets.token_hex` salt + salted SHA-256 hash. Raw key
+  printed ONCE; only the hash + salt persisted.
+- **`mnemo billing report --period YYYY-MM` CLI** emitting
+  stable-header CSV (`key_name,queries,tokens,quota_queries,
+  quota_tokens,over_quota`). Aggregator joins api_key +
+  usage_period + quota with `over_quota` per-dimension.
+- **`docs/hosted/deploying.md`** — full operator guide
+  (reverse-proxy template, key issuance flow, backup hygiene,
+  anti-goals callout).
+
+### Phase 3b — Hosted-tier runtime (3 commits)
+
+- **`Config.hosted_auth_enabled: bool = False`** + the
+  `api_key_or_local` FastAPI dependency on `/v1/query`. Loopback
+  (127.0.0.1 / ::1 / localhost) stays exempt EVEN when the flag
+  is on, so local UI / CLI / plugin keeps working on hosted
+  deployments. Config read fresh per request (flag flip takes
+  effect on the next inbound request — no daemon restart).
+- **Per-request metering hook** writes to `usage_period` via
+  `Store.record_usage` UPSERT (`ON CONFLICT (api_key_id, period)
+  DO UPDATE` — atomic, no race). UTC `YYYY-MM` period so DST +
+  zone drift can't shift billing attribution.
+- **Pre-handler quota enforcement** returns HTTP 429 with
+  `Retry-After: <seconds-to-next-UTC-month>` when the key is at
+  or over its monthly limit. Strict `>=` (exactly `max_queries`
+  successful requests before rejection). No-quota-row =
+  open-billing posture.
+- **47/47 existing query-related tests pass WITHOUT setting the
+  new flag** — anti-goal verified in CI.
+
+### Phase 3 follow-ups (2 commits)
+
+- **`docs/hosted/deploying.md`** updated to reflect Phase 3b
+  shipped (flag-flip recipe + 429 contract + decision matrix).
+- **`mnemo key set-quota <id> --max-queries N --max-tokens N`
+  CLI** — closes the last Phase 3 feature gap (replaces the
+  SQLite-direct workaround). Idempotent UPSERT via
+  `ON CONFLICT DO UPDATE`.
+
+### Test suite
+
+- **+113 tests since v4.6.5** (1132 → 1245 unit pass + 1 skip).
+- Cross-platform on Linux, macOS, Windows.
+- Zero anti-goal regressions: every change preserved the
+  self-host loopback path byte-for-byte.
+
+### Anti-goals (still in force, codified in CI)
+
+- The free local-first plugin stays fully capable. No feature
+  was removed or gated.
+- The daemon binds 127.0.0.1 only; the reverse proxy is what
+  exposes it on the public interface.
+- Hosted tier is operator convenience for shared deployments,
+  not a paywall on the local plugin.
+- Provider-neutrality is shipped, not aspirational: Cursor +
+  OpenAI Agents SDK both consume the same 26-tool MCP surface.
+
 ## [4.6.5] - 2026-05-20
 
 ### Security
