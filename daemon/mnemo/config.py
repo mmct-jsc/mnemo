@@ -105,6 +105,14 @@ class Config:
             "proactive": True,
             "proactive_pages": ["nebula", "node"],
             "proactive_frequency": "normal",
+            # v5 phase 5: when the prompt-architect skill's retrieval
+            # excludes any local_only nodes, the dock surfaces a banner
+            # ("N local-only excluded; verify before pasting"). Default
+            # ON because the prompt-architect output is paste-bound to
+            # foreign LLMs -- safer to remind by default, let power
+            # users opt out via Settings if their memory has no
+            # local-only nodes worth warning about.
+            "warn_on_local_only_exclusion": True,
         }
     )
     chat_history_retention_days: int | None = None
@@ -258,6 +266,10 @@ def _apply(cfg: Config, raw: dict) -> None:
             cfg.companion["proactive_pages"] = [str(x) for x in comp["proactive_pages"]]
         if comp.get("proactive_frequency") in ("minimal", "normal", "chatty"):
             cfg.companion["proactive_frequency"] = comp["proactive_frequency"]
+        # v5 phase 5: pre-emit local-only warning toggle. Default True
+        # (set by the dataclass factory); persisted by the Settings UI.
+        if isinstance(comp.get("warn_on_local_only_exclusion"), bool):
+            cfg.companion["warn_on_local_only_exclusion"] = comp["warn_on_local_only_exclusion"]
     if "chat_history_retention_days" in raw:
         rd = raw["chat_history_retention_days"]
         if rd is None or isinstance(rd, int):

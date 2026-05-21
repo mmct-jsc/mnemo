@@ -56,6 +56,15 @@
       // unchanged. The /chat page surface does NOT expose this toggle
       // in v5.0 (per design doc Q3 -- dock is the primary surface).
       architectMode: false,
+      // v5 phase 5: dock pre-emit warning state. Set by the SSE
+      // handler when the architect skill's retrieval reports a
+      // non-zero local_only_excluded count; the composer-area banner
+      // binds to this value and the warn_on_local_only_exclusion
+      // companion setting to decide visibility. The full SSE event
+      // wiring lands in v5.x -- v5.0 ships the surface + the dismiss
+      // path so dogfood can opt into the future-wiring already.
+      localOnlyExcluded: 0,
+      warnLocalOnly: true,
       streaming: false,
       thinking: false,
       working: false, // drives the orbiting-dots "working" animation
