@@ -1,0 +1,11 @@
+{
+  "relevant_node_ids": ["mqtt-auth-1", "mqtt-auth-2", "mqtt-auth-3"],
+  "acceptance_criteria_keywords": [
+    "CONNACK",
+    "paho",
+    "WSS",
+    "do not add Redis"
+  ],
+  "invariant": "mnemo > vanilla on answer_correctness (architected prompt explicitly cites acceptance criteria the raw prompt omits)",
+  "notes": "v5.0 stub fixture (4 nodes, 1 prompt). The full T9 set per the design doc has 30 prompts across high/medium/low confidence; v5.x expands."
+}
