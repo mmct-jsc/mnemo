@@ -2,6 +2,143 @@
 
 All notable changes to mnemo are documented here.
 
+## [5.0.0] - 2026-05-22
+
+Mnem the prompt architect. The companion's next chapter: the user
+types a quick or vague prompt into the dock; Mnem analyses it
+against the typed Graph-RAG memory + code graph; Mnem emits a
+polished, context-rich, paste-ready prompt the user copies into
+any IDE AI agent (Cursor, Claude Code, Continue, GitHub Copilot).
+The host LLM receives the same context Mnem has -- without
+needing mnemo's MCP server itself.
+
+Built on the v4.7.0 substrate: every change reuses the existing
+companion + tool surface + skill loader. No new MCP tools, no new
+top-level endpoints -- the prompt-architect is a SKILL invoked
+through the existing `mnemo_run_skill` path, and the dock surface
+rides the existing `/v1/chat/<id>/message` SSE channel.
+
+Anti-goal preserved byte-for-byte: the free local-first plugin
+stays fully capable. v5 ships zero hosted dependency; hosted-quota
+users get v5 through the existing Phase 3b API at no new cost.
+No new SKU.
+
+### Phase 1 -- local_only node flag + retrieval filter
+
+- New `nodes.local_only` column via additive `_ensure_columns`
+  migration. Legacy DBs grow the column with default 0 on first
+  reopen; the v4.7.0 anti-goal holds.
+- Three input paths flag a node as local_only: frontmatter
+  `local_only: true`, any `_private` path segment, or a body
+  starting with `[LOCAL ONLY]`. Explicit `local_only: false`
+  wins over the path heuristic.
+- `retrieve.query(exclude_local_only=True)` filters flagged
+  nodes; `RetrievalResult.local_only_excluded` carries the count
+  so the dock can warn before paste.
+
+### Phase 2 -- `mnemo-prompt-architect` skill
+
+- New `skills/mnemo-prompt-architect/SKILL.md` follows the
+  `mnemo:doc` pattern: single markdown + frontmatter, invocable
+  via the existing `mnemo_run_skill` MCP tool. ANY MCP-capable
+  host (Cursor, OpenAI Agents SDK, Claude Desktop) gets v5's
+  wedge for free without mnemo's UI.
+- Confidence formula encoded in the skill markdown:
+  retrieval-derived (top_hit_score + hit_density +
+  structural_bonus); threshold 0.6 for single-turn vs <=2
+  clarifying questions.
+- Output shape: six sections (Problem / Context / Files /
+  Acceptance / Anti-patterns / Prompt) the dock parses for its
+  copy-buttons. `[mnemo:<id>]` citation tags are opaque to the
+  host LLM but signal provenance.
+
+### Phase 3 -- dock entry-point for skill pre-load
+
+- `MessageCreateIn` grows `use_skill` (optional). The dock
+  passes `"mnemo-prompt-architect"`; legacy callers omit it and
+  see no behaviour change.
+- `AgentLoop.run(use_skill=...)` pre-loads the skill via the
+  same `_skill` sentinel format the mid-loop handler already
+  uses, so provider translators see one consistent shape.
+- Backward compat: omitting `use_skill` runs the loop exactly
+  as before; no extra event, no extra user-role turn.
+
+### Phase 4 -- dock architect-mode toggle
+
+- New "Architect" pill left of the dock textarea. Click flips
+  `architectMode` in the chat factory; sendMessage attaches
+  `use_skill: 'mnemo-prompt-architect'` to the POST.
+- Dock-only per design Q3. The `/chat` page surface stays
+  uncluttered in v5.0; cross-surface convenience is v5.x.
+- The textarea placeholder changes when architect mode is on so
+  a keyboard user hears the mode flip via the placeholder text
+  in addition to the visual pill.
+- Provider-neutrality preserved: the architected output is
+  paste-bound markdown that renders cleanly in Cursor / Claude
+  Code / Continue / Copilot.
+
+### Phase 5 -- pre-emit local-only warning + Settings toggle
+
+- Warning banner above the dock composer when the architect
+  retrieval reports a non-zero `local_only_excluded` count.
+- Configurable in Companion Settings as
+  `warn_on_local_only_exclusion` (default **True**, because the
+  output is paste-bound to a foreign LLM).
+- Defense-in-depth: the standing rule about `docs/_private/`
+  confidential content is enforced at the schema level, not
+  just by reviewer attention.
+
+### Phase 6 -- T9 benchmark task + locked invariant
+
+- New T9 in `bench/agent_memory_bench/tasks/prompt_architect.py`.
+  Vanilla raw prompt to host LLM vs mnemo-architected prompt to
+  same host. Metric: acceptance-criteria satisfaction (M4).
+- Strict invariant locked in CI:
+  `mnemo.answer_correctness > vanilla.answer_correctness`. This
+  mirrors T1's `vanilla > mnemo` on rederivation rate, but in
+  the opposite direction.
+- v5.0 stub scope: 4 corpus nodes, 1 high-confidence prompt.
+  v0.1 expansion to 30 prompts + LLM judge is on the public
+  roadmap.
+
+### Phase 7 -- dock thumbs feedback (in-place)
+
+- Existing v1.2 `mnemo_thumbs_feedback` surface auto-applies to
+  the architect output; aggregates feed the v1.2
+  coordinate-descent tuner so the architect's confidence
+  weights self-tune as dogfood data accumulates.
+
+### Phase 8 -- docs + spec extension (CC-BY-4.0)
+
+- T9 appended to `docs/benchmark/agent-memory-spec-v0.md` so
+  external implementers see the locked invariant alongside T1's
+  mirror.
+
+### Anti-goal verification
+
+Every change shipped without altering the v4.7.0 baseline byte
+for byte for the legacy paths:
+
+- 1259 -> 1275 unit tests passing (+16 net new; 1 skipped
+  unchanged).
+- 18 -> 24 bench tests passing (+6 T9; 1 skipped HTTP gate).
+- `architectMode` defaults False on every dock instance; the
+  dock POST is unchanged when the user hasn't opted in.
+- `use_skill` is optional on `MessageCreateIn`; every pre-v5
+  caller runs the loop with zero behaviour difference.
+- The 47/47 existing `/v1/query` tests still pass without
+  setting `hosted_auth_enabled`; the v4.7.0 hosted-tier
+  contract is unchanged.
+
+### Strategic positioning
+
+v5 = Angle #6 (NEW; not in the original strategy doc). PARALLELS
+the shipped Angles 1-3 (substrate / hosted API / benchmark);
+does NOT supersede the dormant Angles 4-5 (team SaaS /
+enterprise daemon -- those stay demand-pull). T9 in the open
+benchmark adds to the sponsor narrative for the Anthropic /
+OpenAI / Google grant follow-ons.
+
 ## [4.7.0] - 2026-05-21
 
 The substrate + benchmark + hosted-tier release. Bundles 22
