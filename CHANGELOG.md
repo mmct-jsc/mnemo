@@ -2,6 +2,61 @@
 
 All notable changes to mnemo are documented here.
 
+## [5.5.0] - 2026-05-22
+
+MCP substrate reach: four new "5-minute mount" guides + smoke
+tests for the most-asked-for MCP-capable hosts so the same
+`mnemo mcp` stdio server is documented end to end across the
+ecosystem.
+
+### Features
+
+**Four new mount guides (`docs/integrations/`).** Each follows
+the Phase 1 flagship pattern (`cursor.md` / `openai-agents-sdk.md`)
+verbatim — prerequisites, config block, verify, try-a-query,
+troubleshooting:
+
+- `claude-desktop.md` — Anthropic's canonical first-party MCP
+  host. `mcpServers` shape in `claude_desktop_config.json`. Quit
+  + relaunch (the menu-bar app keeps running otherwise).
+- `continue.md` — open-source VS Code + JetBrains assistant.
+  Different shape: `experimental.modelContextProtocolServers`
+  list, each entry's command wrapped in a `transport` object.
+- `windsurf.md` — Cascade panel; same `mcpServers` shape as
+  Cursor / Claude Desktop, in `mcp_config.json`.
+- `zed.md` — Rust-native editor; `context_servers` with each
+  entry's command wrapped in a `command` object (`path` + `args`).
+  Tools surface as `/mnemo-*` slash commands in the Assistant.
+
+**Four parallel smoke tests (`daemon/tests/integration/`).**
+Each test parses the first fenced ```json``` block in the doc,
+asserts the mnemo entry invokes `mcp`, and verifies
+`python -m mnemo.cli mcp --help` exits 0 (the silent-failure
+mode the cursor test was designed around). The Zed test owns
+its own `context_servers` shape; the other three share the
+`mcpServers` shape.
+
+### Documentation
+
+- `docs/integrations/PICKS.md` — three formerly-deferred
+  candidates (Continue / Zed / Windsurf) marked
+  **LANDED v5.5.0** with backlinks; Claude Desktop added as a
+  net-new "canonical first-party" row.
+- `docs/integrations/README.md` — new "v5.5.0 Reach" subsection
+  with all four mount links + an updated "what's still deferred"
+  table (Gemini CLI + LangGraph remain deferred).
+- `README.md` What's-new — v5 chapter gains a v5.5.0 bullet at
+  the top: "one `mnemo mcp` stdio server, six documented hosts,
+  one tool surface."
+
+### Anti-goal preserved
+
+No new MCP wire-protocol changes; the 26-tool surface contract
+test stays byte-stable. Every mount runs the **identical**
+`mnemo mcp` stdio server. Self-hosters get the same surface as
+sponsor / hosted-tier users (anti-goal #1: free local-first
+plugin stays fully capable, byte-for-byte unchanged).
+
 ## [5.4.0] - 2026-05-22
 
 Three mobile-UX polish fixes (user-reported on the live dock) +
