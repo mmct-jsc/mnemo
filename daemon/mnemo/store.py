@@ -680,6 +680,46 @@ CREATE TABLE IF NOT EXISTS chat_bookmarks (
 
 CREATE INDEX IF NOT EXISTS idx_chat_bm_conv
   ON chat_bookmarks(conversation_id, message_seq);
+
+-- Phase 3 / Angle #2 (hosted context API): API key + per-key quota +
+-- per-period usage metering. The hosted tier is OFF by default at the
+-- endpoint layer (a config flag enables api-key auth on /v1/query;
+-- self-host loopback stays unauthenticated). Tables ship in v0.1 of
+-- Phase 3 / Task 2.1; the issuance CLI (Task 2.2), auth dependency
+-- (Task 2.3), metering hook (Task 2.4), and quota enforcement
+-- (Task 2.5) consume them. The schema is harmless for any install
+-- that does not enable hosted mode.
+
+CREATE TABLE IF NOT EXISTS api_key (
+  id          TEXT PRIMARY KEY,
+  hash        TEXT NOT NULL UNIQUE,
+  name        TEXT NOT NULL,
+  created_at  INTEGER NOT NULL,
+  revoked_at  INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_api_key_hash ON api_key(hash);
+
+CREATE TABLE IF NOT EXISTS quota (
+  api_key_id   TEXT NOT NULL
+               REFERENCES api_key(id) ON DELETE CASCADE,
+  period       TEXT NOT NULL,
+  max_queries  INTEGER NOT NULL,
+  max_tokens   INTEGER NOT NULL,
+  PRIMARY KEY (api_key_id, period)
+);
+
+CREATE TABLE IF NOT EXISTS usage_period (
+  api_key_id  TEXT NOT NULL
+              REFERENCES api_key(id) ON DELETE CASCADE,
+  period      TEXT NOT NULL,
+  queries     INTEGER NOT NULL DEFAULT 0,
+  tokens      INTEGER NOT NULL DEFAULT 0,
+  updated_at  INTEGER NOT NULL,
+  PRIMARY KEY (api_key_id, period)
+);
+
+CREATE INDEX IF NOT EXISTS idx_usage_period_key ON usage_period(api_key_id);
 """
 
 
@@ -755,6 +795,17 @@ class Store:
             {
                 "embedding": "BLOB",
                 "score_components": "TEXT",
+            },
+        )
+        # Phase 3 / Task 2.2: api_key.salt for per-key salted SHA-256
+        # hashing. Each key has its own random 16-byte salt; verify
+        # iterates the (small) active-key set + recomputes the hash.
+        # Additive migration -- old empty rows (there are none in the
+        # wild yet, but defense-in-depth) get NULL salt.
+        self._ensure_columns(
+            "api_key",
+            {
+                "salt": "TEXT",
             },
         )
         # v2.0 phase 1: per-edge uncertainty. Existing v1.x edges back-fill
@@ -1712,6 +1763,166 @@ class Store:
             )
             for r in rows
         ]
+
+    # --- API keys (Phase 3 / Task 2.2) ------------------------------------
+
+    @staticmethod
+    def _hash_api_key(salt: str, raw_key: str) -> str:
+        """The salted-SHA-256 the api_key.hash column stores.
+
+        Salt + raw_key concatenated then hashed. Per-key salt means
+        no rainbow table works across keys; small active-key set
+        means the O(N) verify-iteration is acceptable for v0.1.
+        """
+        import hashlib
+
+        return hashlib.sha256((salt + raw_key).encode("utf-8")).hexdigest()
+
+    def create_api_key(self, name: str) -> tuple[str, str]:
+        """Mint a new api_key. Returns ``(raw_key, key_id)``.
+
+        The raw_key is NEVER persisted -- only its salted hash. The
+        caller (the issuance CLI in :mod:`mnemo.cli`) prints the raw
+        key ONCE to stdout and never sees it again.
+
+        ``name`` is a free-form human label (e.g.
+        ``"design-partner-A"``) used by ``list_api_keys`` + the
+        billing report.
+        """
+        import secrets
+        import time
+        import uuid
+
+        raw_key = secrets.token_urlsafe(32)
+        salt = secrets.token_hex(16)
+        h = self._hash_api_key(salt, raw_key)
+        key_id = uuid.uuid4().hex
+        now = int(time.time())
+        with self._lock:
+            self.conn.execute(
+                "INSERT INTO api_key (id, hash, salt, name, created_at) VALUES (?, ?, ?, ?, ?)",
+                (key_id, h, salt, name, now),
+            )
+            self.conn.commit()
+        return raw_key, key_id
+
+    def list_api_keys(self, *, include_revoked: bool = False) -> list[dict]:
+        """List api_keys, newest-created first.
+
+        Default excludes revoked keys; ``include_revoked=True`` shows
+        everything (billing CLI uses this to attribute usage to keys
+        that were active during a billing period but revoked since).
+        Raw keys and hashes are intentionally NOT returned.
+        """
+        where = "" if include_revoked else "WHERE revoked_at IS NULL"
+        with self._lock:
+            rows = self.conn.execute(
+                f"SELECT id, name, created_at, revoked_at FROM api_key "
+                f"{where} ORDER BY created_at DESC, id ASC"
+            ).fetchall()
+        return [
+            {
+                "id": r["id"],
+                "name": r["name"],
+                "created_at": r["created_at"],
+                "revoked_at": r["revoked_at"],
+            }
+            for r in rows
+        ]
+
+    def revoke_api_key(self, key_id: str) -> bool:
+        """Mark a key as revoked. Returns True if a row was updated
+        (the key was active before this call); False if the key does
+        not exist OR was already revoked. Idempotent."""
+        import time
+
+        now = int(time.time())
+        with self._lock:
+            cur = self.conn.execute(
+                "UPDATE api_key SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL",
+                (now, key_id),
+            )
+            self.conn.commit()
+        return cur.rowcount > 0
+
+    def verify_api_key(self, raw_key: str) -> str | None:
+        """Validate a raw key against the active-key set.
+
+        Returns the ``api_key.id`` on a match; None otherwise. O(N)
+        in the number of ACTIVE keys (revoked keys are skipped at the
+        SQL level via the WHERE clause). Acceptable for the v0.1
+        hosted tier; v0.2 may add an indexed prefix-lookup hint.
+        """
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT id, hash, salt FROM api_key WHERE revoked_at IS NULL"
+            ).fetchall()
+        for r in rows:
+            if r["salt"] is None:
+                continue  # NULL-salt legacy row (none in the wild today)
+            if self._hash_api_key(r["salt"], raw_key) == r["hash"]:
+                return r["id"]
+        return None
+
+    # --- Billing report (Phase 3 / Task 2.6) ------------------------------
+
+    def billing_report(self, period: str) -> list[dict]:
+        """Per-key usage + quota + over-quota flag for a billing period.
+
+        ``period`` is the usage-period identifier (``YYYY-MM`` for
+        monthly). Joins:
+
+        - ``api_key`` (all keys -- revoked included; we bill keys
+          that were active during the period even if revoked since).
+        - ``usage_period`` for that exact period (zero if no usage).
+        - ``quota`` with granularity ``'monthly'`` (zero if unset --
+          the over_quota flag is then False, no division-by-zero
+          blow-up).
+
+        Returns rows ordered by ``key_name`` so the CSV output is
+        deterministic for diffing across periods.
+        """
+        with self._lock:
+            rows = self.conn.execute(
+                """
+                SELECT
+                  ak.id            AS key_id,
+                  ak.name          AS key_name,
+                  COALESCE(up.queries, 0) AS queries,
+                  COALESCE(up.tokens, 0)  AS tokens,
+                  COALESCE(q.max_queries, 0) AS quota_queries,
+                  COALESCE(q.max_tokens, 0)  AS quota_tokens
+                FROM api_key ak
+                LEFT JOIN usage_period up
+                  ON up.api_key_id = ak.id AND up.period = ?
+                LEFT JOIN quota q
+                  ON q.api_key_id = ak.id AND q.period = 'monthly'
+                ORDER BY ak.name ASC, ak.id ASC
+                """,
+                (period,),
+            ).fetchall()
+        out: list[dict] = []
+        for r in rows:
+            queries = int(r["queries"])
+            tokens = int(r["tokens"])
+            quota_queries = int(r["quota_queries"])
+            quota_tokens = int(r["quota_tokens"])
+            # over_quota = quota set AND any dimension exceeded.
+            over_quota = (quota_queries > 0 and queries > quota_queries) or (
+                quota_tokens > 0 and tokens > quota_tokens
+            )
+            out.append(
+                {
+                    "key_id": r["key_id"],
+                    "key_name": r["key_name"],
+                    "queries": queries,
+                    "tokens": tokens,
+                    "quota_queries": quota_queries,
+                    "quota_tokens": quota_tokens,
+                    "over_quota": bool(over_quota),
+                }
+            )
+        return out
 
     # --- ROI summary (Phase 2 / Task 3.4) ---------------------------------
 
