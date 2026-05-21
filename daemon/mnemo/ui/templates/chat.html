@@ -518,7 +518,7 @@
       box-shadow var(--transition), opacity var(--transition); }
   .send .send-ic { display: block; } /* place-items centers it; no nudge */
   .send:disabled { background: var(--panel); color: var(--fg-dim);
-    box-shadow: none; opacity: .6; cursor: not-allowed; }
+    box-shadow: none; opacity: .6; cursor: url("/static/cursors/mnem-cursor-not-allowed.svg") 16 16, not-allowed; }
   .send:not(:disabled):hover { background: var(--accent-hover);
     transform: translateY(-2px); box-shadow: 0 6px 18px -4px var(--accent); }
   .send:not(:disabled):active { transform: translateY(0); }
@@ -559,7 +559,7 @@
     background: var(--accent); color: #06201e; border: 0;
     border-radius: 999px; font-weight: 600; font-size: .8rem;
     cursor: pointer; }
-  .chat-error .ce-retry:disabled { opacity: .5; cursor: not-allowed; }
+  .chat-error .ce-retry:disabled { opacity: .5; cursor: url("/static/cursors/mnem-cursor-not-allowed.svg") 16 16, not-allowed; }
   .chat-error .ce-x { flex-shrink: 0; background: none; border: 0;
     color: var(--fg-dim); font-size: 1.1rem; line-height: 1;
     cursor: pointer; }
