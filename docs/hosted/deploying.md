@@ -1,34 +1,38 @@
 # Deploying mnemo as a hosted-tier service
 
-> **Status: Phase 3a (operator surface only).** Key issuance + billing
-> ship in v0.1; the API-key authentication on `/v1/query`, the
-> metering hook, and the quota-enforcement 429s land in Phase 3b
-> (Tasks 2.3-2.5).
+> **Status: Phase 3 of the hosted-tier roadmap fully shipped** — issuance + billing + deploying doc (Phase 3a, PRs #89 / #15) and the runtime trio of auth + metering + quota enforcement on `/v1/query` (Phase 3b, PRs #90 / #16). The hosted tier is OFF by default; an operator opt-in via `Config.hosted_auth_enabled = true` activates it. Self-host loopback behavior is unchanged byte-for-byte.
 
 This guide is for operators running mnemo as a hosted service for
 multiple consumers — not for solo self-host users. Self-host stays
 **fully free + fully capable** without any of the steps below.
 
-## What's shipped today (Phase 3a)
+## What's shipped (Phase 3a + 3b)
 
 - `mnemo key {create,list,revoke}` — issue + lifecycle API keys.
 - `mnemo billing report --period YYYY-MM` — CSV billing rollup.
+- `Config.hosted_auth_enabled` config flag (default `false`).
+- `api_key_or_local` FastAPI dependency on `POST /v1/query` —
+  flag-gated; loopback exempt even when flag is on.
+- Per-request metering hook writes to `usage_period`
+  (atomic UPSERT, UTC `YYYY-MM` period).
+- Pre-handler quota check returns HTTP 429 with
+  `Retry-After: <seconds-to-next-month-UTC>` header when
+  a key exceeds its monthly limit.
 - Tables: `api_key`, `quota`, `usage_period` (harmless for any
   install that never enables hosted mode).
 
-## What's NOT shipped yet (Phase 3b — coming)
+## What's NOT shipped yet
 
-- Optional `Depends(api_key_or_local)` on `/v1/query` gated by a
-  config flag (defaults OFF; self-host stays unauthenticated).
-- Metering hook that writes to `usage_period` post-request.
-- Quota enforcement (HTTP 429 with `Retry-After` when a key
-  exceeds its monthly quota).
-
-Until those land, the keys + quotas you set with this Phase 3a
-surface are inert at the request path. You can stage operations
-(issue real keys, set quotas, generate reports against
-manually-seeded usage rows) but the daemon does NOT yet
-authenticate or meter requests by api-key.
+- **`mnemo key set-quota` CLI** — quotas are still set via direct
+  SQLite (see Step 3 below). The set-quota CLI is the only Phase
+  3 gap and will likely land in the next minor release.
+- Per-key prefix-indexed verify (v0.1 verifies via O(N) over the
+  active-key set; acceptable for ≤ ~1,000 keys; v0.2 if you need
+  more).
+- Daily quota granularity (v0.1 is monthly only).
+- Implicit-signal aggregation in ROI metrics (Phase 2 / v0.1
+  surface; v0.2 plumbs `inferred_requery` + `cite_copied` into
+  the dashboard's `rederivations_avoided`).
 
 ## Prerequisites
 
@@ -64,22 +68,66 @@ Hand the raw key to the partner via your secure-comms channel of
 choice. The daemon never sees the raw key again — only its salted
 SHA-256 hash and the per-key 16-byte salt are persisted.
 
-## Step 2 — Set a quota for the key
+## Step 2 — Turn on hosted-tier authentication
 
-> **Phase 3a limitation**: there is no `mnemo key set-quota`
-> command yet. Set quotas via the daemon's SQLite directly:
+Flip the config flag to require API keys for non-loopback requests:
 
 ```bash
-sqlite3 ~/.claude/mnemo/mnemo.db <<SQL
+# Quickest: jq one-liner against ~/.claude/mnemo/settings.json
+jq '.hosted_auth_enabled = true' ~/.claude/mnemo/settings.json \
+   > ~/.claude/mnemo/settings.json.tmp \
+   && mv ~/.claude/mnemo/settings.json.tmp ~/.claude/mnemo/settings.json
+```
+
+The daemon reads the flag fresh on every request, so the change
+takes effect **on the next inbound request — no restart needed.**
+
+**What the flag does:**
+
+| Request shape | Flag OFF (default) | Flag ON |
+|---|---|---|
+| Loopback (127.0.0.1 / ::1 / localhost) | Accepted, no auth | Accepted, no auth (loopback exemption — local UI / CLI / plugin keeps working) |
+| Non-loopback, no `Authorization` header | Accepted (no key required) | **401 with `WWW-Authenticate: Bearer realm="mnemo"`** |
+| Non-loopback, `Authorization: Bearer <invalid>` | Accepted (header ignored when flag off) | **401 with `WWW-Authenticate: Bearer realm="mnemo", error="invalid_token"`** |
+| Non-loopback, `Authorization: Bearer <valid>` | Accepted (header ignored) | Accepted + the request is metered against the key |
+
+## Step 3 — Set a quota for the key (SQLite directly)
+
+> **Phase 3 gap**: there is no `mnemo key set-quota` command yet.
+> Set quotas via the daemon's SQLite directly. A future
+> `mnemo key set-quota` subcommand will wrap this.
+
+```bash
+sqlite3 ~/.claude/mnemo/mnemo.db <<'SQL'
 INSERT INTO quota (api_key_id, period, max_queries, max_tokens)
 VALUES ('<key_id from create output>', 'monthly', 10000, 2000000);
 SQL
 ```
 
-A future `mnemo key set-quota` subcommand will wrap this; until
-then the SQL is stable + documented.
+When a key hits either dimension (`queries >= max_queries` OR
+`tokens >= max_tokens`), the next `/v1/query` request returns:
 
-## Step 3 — Run the billing report monthly
+```http
+HTTP/1.1 429 Too Many Requests
+Retry-After: 1234567
+Content-Type: application/json
+
+{"detail": "Monthly quota exceeded: queries quota exceeded for period"}
+```
+
+`Retry-After` is seconds-to-next-UTC-month, so the client knows
+exactly when their bucket resets.
+
+**Strict-`>=` semantics**: the user gets exactly `max_queries`
+successful requests before the next one is rejected. Tokens may
+overshoot by one request's worth (we don't know upfront how many
+tokens a request will use); this is documented v0.1 slack.
+
+**Open-billing posture**: leave a key quota-less (no row in
+`quota`) to track usage without ever rejecting. The billing
+report's `over_quota` column stays `false` for quota-less keys.
+
+## Step 4 — Run the billing report monthly
 
 ```bash
 mnemo billing report --period 2026-05 > billing-2026-05.csv
@@ -103,17 +151,18 @@ Keys with zero usage in the period are included as zero rows.
 Revoked keys still appear if they were active during the period
 (revenue attribution survives mid-period revocations).
 
-## Step 4 — Revoke a key
+## Step 5 — Revoke a key
 
 ```bash
 mnemo key revoke <key_id>
 ```
 
-The key is no longer accepted (when Phase 3b auth lands).
-Existing usage rows are preserved for historical billing.
+The key is no longer accepted (the next `verify_api_key` call
+against it returns `None`, the request 401s). Existing usage
+rows are preserved for historical billing.
 
-Cascade behavior — when an api_key row is deleted (not revoked;
-hard delete, e.g. via `sqlite3` directly):
+Cascade behavior — when an api_key row is **deleted** (not revoked;
+hard delete via `sqlite3` directly):
 - All `quota` rows for that key are removed.
 - All `usage_period` rows for that key are removed.
 
@@ -138,16 +187,17 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto https;
 
-        # SSE keeps connections open. Match the daemon's tolerance.
+        # Pass the partner's Authorization: Bearer <key> through unchanged.
+        # Do not strip; the daemon's api_key_or_local dependency reads it.
+        # SSE keeps connections open -- match the daemon's tolerance.
         proxy_buffering off;
         proxy_read_timeout 1h;
     }
 }
 ```
 
-When Phase 3b lands, partners will pass their key as
-`Authorization: Bearer <raw_key>`; the proxy passes the header
-through unchanged.
+The proxy forwards `Authorization: Bearer <raw_key>` verbatim;
+the daemon does the verification.
 
 ## Operational hygiene
 
@@ -161,6 +211,14 @@ through unchanged.
 - **Restart on upgrade**: gotcha-32 — kill the real `:7373` PID
   via `netstat` before `mnemo daemon start`. The pidfile is
   per-port but the listener can outlive a poorly-stopped run.
+  The hosted-auth flag itself reads fresh per request, so most
+  config changes don't require restart — only daemon version
+  upgrades do.
+- **Loopback exemption is by-IP, not by-account**: if you run a
+  Tailscale / WireGuard mesh that exposes the daemon to peers,
+  those peers do NOT count as loopback (their IP is non-loopback)
+  and will need a key when the flag is on. This is intentional —
+  the loopback exemption is for the local machine only.
 
 ## Anti-goals (non-negotiable per the strategy doc)
 
@@ -170,11 +228,17 @@ through unchanged.
   central deployment, not a **paywall** for the local plugin.
 - The daemon **never binds `0.0.0.0`** directly. The reverse
   proxy is always in the way.
+- **`hosted_auth_enabled = true` does NOT affect the loopback
+  path.** Verified by the unit test suite. If a future change
+  ever breaks this, the
+  `test_query_loopback_exempt_when_flag_on`
+  test fails loudly.
 
 ## Next
 
-- Phase 3b (Tasks 2.3 + 2.4 + 2.5) — auth + metering + quota
-  enforcement on `/v1/query`. This file will be updated with the
-  config-flag name + the request shape.
-- v0.2 of the hosted surface — `mnemo key set-quota` CLI; daily
-  quota granularity; `Authorization: Bearer` header standard.
+- `mnemo key set-quota` CLI to remove the SQLite step.
+- Daily quota granularity for finer billing periods.
+- Implicit-signal aggregation in the ROI dashboard's
+  `rederivations_avoided` (Phase 2 v0.2 follow-up).
+- Indexed prefix lookup for `verify_api_key` at scale (only
+  matters above ~1,000 active keys).
