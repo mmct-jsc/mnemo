@@ -6,16 +6,11 @@ retrieval quality, polish, and platform support.
 
 ## Hard rules
 
-- **No `Co-Authored-By` trailers on commits.** Drop the entire trailer line
-  from every commit message. This applies to every branch in this repo.
 - **No emojis** in code, docs, or commit messages unless explicitly asked.
 - Commit messages use conventional prefixes: `feat:` / `fix:` / `chore:` /
   `docs:` / `test:` / `refactor:` / `perf:`.
 - Commits use HEREDOC for multi-line messages (no `git commit -m "line1\nline2"`).
 - mnemo binds to `127.0.0.1` only. Never `0.0.0.0`.
-
-If a tool tries to inject a co-author trailer, strip it before pushing.
-PRs that include the trailer will be asked to amend.
 
 ## Setup
 
@@ -113,7 +108,7 @@ mnemo/                            (repo root)
    will be asked to add one.
 4. **Run `ruff check .`, `ruff format .`, and `pytest`** before pushing.
 5. **Commit messages**: conventional prefix, imperative mood, focused on
-   the *why* in the body. No co-author trailer.
+   the *why* in the body.
 6. **PR description** should answer: what changed, why, what was tested.
 
 ## Where to start

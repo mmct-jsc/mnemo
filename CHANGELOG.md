@@ -2,6 +2,101 @@
 
 All notable changes to mnemo are documented here.
 
+## [5.4.0] - 2026-05-22
+
+Three mobile-UX polish fixes (user-reported on the live dock) +
+a documentation rule scrub.
+
+### Bug fixes
+
+**Mobile nav drawer auto-close on click.** Clicking any nav link
+inside the mobile off-canvas drawer left the drawer open: the
+browser navigated to the new page, the new page's
+`navDrawer().init()` re-read `localStorage.mnemo.nav.open = '1'`
+(the user's last interaction had opened it), and the drawer
+re-appeared on the new page covering content. Fix: every
+`<a>` in `.nav-drawer nav` now calls `close()` on click before
+navigation, so localStorage flips to `'0'` first and the new
+page loads with the drawer hidden. Desktop is unaffected (the
+drawer is `display: contents` there; open/closed has no visual
+effect). Live-verified at 375px viewport: click flips
+`drawer.open` to false + `localStorage` to `'0'`.
+
+**Nodes-page filter layout below `--bp-md`.** The `.section-head`
+was a `display: flex; justify-content: space-between` row with
+the H2 left + a 2-select filter form right. Below 60rem the
+H2 took most of the width and the filters wrapped awkwardly
+into a narrow right column. Fix: at `max-width: 60rem`, stack
+`.section-head` vertically + let `.filters` span 100% width +
+let each `<select>` flex 1:1 so both selects are roughly equal
+width with a small "clear" button. Live-verified at 375px:
+section-head flex-direction = `column`, filters = 335px wide,
+each select = 136px.
+
+**Reindex progress bar visible on tab re-entry.** Click reindex
+on `/sources`, navigate to a different mnemo page, come back to
+`/sources` — the progress bar was gone (the client-only
+`progress.active` flag wiped on page reload), even though the
+daemon was still mid-reindex. Fix: `_checkReindexStatus` now
+sets `progress.active = true` with placeholder text
+("reindexing in background...") whenever the daemon reports
+`running: true`, so the bar reappears on re-entry. Per-file
+numbers aren't backfilled (would need a second SSE subscription
+that the existing endpoint would 'busy'-out), but the user
+sees the indeterminate bar until `_pollReindex` detects
+completion and reloads. A real backfill via a stateful
+`/v1/reindex/status?include_progress=1` is the v5.x follow-up
+this fix points at.
+
+### Documentation: hard-rule scrub
+
+Removed the **"No `Co-Authored-By` trailers on commits"** rule
+from the prescriptive doc tree per owner direction. Files
+touched:
+
+- `CLAUDE.md` — deleted the rule line.
+- `CONTRIBUTING.md` — deleted the two rule entries + the
+  trailing "If a tool tries to inject a co-author trailer..."
+  paragraph + the "No co-author trailer." trailing remark in
+  the commit-message guidance.
+- `.github/PULL_REQUEST_TEMPLATE.md` — deleted the
+  `[ ] No Co-Authored-By trailers anywhere in commits` checklist
+  item.
+- `daemon/tests/unit/test_docs.py` — renamed/inverted
+  `test_contributing_calls_out_no_co_author_rule` to
+  `test_contributing_calls_out_no_emojis_rule` so the docs
+  test now anchors on the remaining hard rule.
+- Test fixtures + scripts that used "no co-author trailer" /
+  "Co-Authored-By trailer" as sample text were replaced with
+  "no emojis in code/commit messages" (the remaining hard
+  rule), preserving the test's structural intent. Touched:
+  `test_store.py`, `test_ingest.py`, `test_intent.py`,
+  `test_embed_real.py`, `test_retrieve_real.py`, `bench.py`,
+  `smoke_ingest.py`, `retrieve.py`, `nodes.html` placeholder.
+
+Historical design docs under `docs/plans/` are left untouched
+(closed-state retrospectives).
+
+### Anti-goal preserved
+
+- 47/47 existing `/v1/query` tests still pass without
+  `hosted_auth_enabled`.
+- Nav drawer click handler is additive; desktop layout
+  unchanged.
+- Filter-layout media query is scoped under `max-width: 60rem`;
+  desktop layout unchanged.
+- Reindex progress fix is purely client-side; no daemon API
+  change.
+
+### Tests
+
+`test_ui.py::test_node_page_highlights_nodes_navbar` regex
+relaxed from `\s+` between `href` and `class` to `[^>]*` so
+the new `@click="close()"` attribute between them passes.
+Other test-fixture renames (no-co-author → no-emojis) ride
+through cleanly. Suite 1318 / 1 skip + 1 still-passing change
+= 1319 / 1 skip total after the v5.3.0 baseline.
+
 ## [5.3.0] - 2026-05-22
 
 Cursor variant pack. v5.1.1 shipped two themed cursors (default

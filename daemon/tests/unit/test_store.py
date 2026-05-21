@@ -42,12 +42,12 @@ def _make_node(**overrides: object) -> Node:
 
 
 def test_upsert_and_get_node(store: Store) -> None:
-    n = _make_node(name="commit-style", body="No co-author trailers.")
+    n = _make_node(name="commit-style", body="No emojis in code or docs.")
     store.upsert_node(n)
     got = store.get_node(n.id)
     assert got is not None
     assert got.name == "commit-style"
-    assert got.body == "No co-author trailers."
+    assert got.body == "No emojis in code or docs."
     assert got.type == "memory_feedback"
 
 

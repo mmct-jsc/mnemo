@@ -27,10 +27,10 @@ def _seed_memory(tmp_path: Path) -> Path:
             """\
             ---
             name: commit-style
-            description: Never include Co-Authored-By trailers in commits
+            description: No emojis in code or commit messages
             type: feedback
             ---
-            Hard rule: drop the Co-Authored-By line. No exceptions.
+            Hard rule: never commit emoji glyphs in source or commit text.
             """
         ),
         encoding="utf-8",
@@ -82,7 +82,7 @@ def test_query_returns_relevant_top_hit(embedder: Embedder, store: Store, tmp_pa
     store.register_source(str(src), "memory_dir")
     ingest.reindex(store, embedder=embedder)
 
-    result = retrieve.query(store, embedder, "should I add a Co-Authored-By trailer to commits?")
+    result = retrieve.query(store, embedder, "should I add emoji glyphs to commit messages?")
 
     assert len(result.hits) >= 1
     top = result.hits[0]

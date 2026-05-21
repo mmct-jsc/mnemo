@@ -107,7 +107,10 @@ def test_node_page_highlights_nodes_navbar(client: TestClient, tmp_path: Path) -
     r = client.get(f"/node/{nid}")
     assert r.status_code == 200
     # When on /node/<id>, the navbar 'Nodes' link should be marked active.
-    assert re.search(r'href="/nodes-page"\s+class="active"', r.text)
+    # v5.4.0: the nav link grew an @click="close()" handler between href
+    # and class for the mobile auto-close fix, so the regex must allow
+    # any attributes between them rather than just whitespace.
+    assert re.search(r'href="/nodes-page"[^>]*class="active"', r.text)
 
 
 def test_settings_page_renders(client: TestClient) -> None:

@@ -55,7 +55,7 @@ def main() -> None:
             )
 
             queries = [
-                "no co-author trailer in commit messages",
+                "no emojis in commit messages",
                 "MQTT broker authentication credentials",
                 "godot child timer cinematic safety",
                 "where do we keep deployment files",
