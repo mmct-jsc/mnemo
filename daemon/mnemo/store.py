@@ -1864,6 +1864,44 @@ class Store:
                 return r["id"]
         return None
 
+    def set_quota(
+        self,
+        api_key_id: str,
+        *,
+        max_queries: int,
+        max_tokens: int,
+        period: str = "monthly",
+    ) -> None:
+        """Upsert a quota for a key (Phase 3 / set-quota CLI follow-up).
+
+        Wraps the SQLite step Phase 3a's docs/hosted/deploying.md used
+        to require. Idempotent via ``ON CONFLICT (api_key_id, period)
+        DO UPDATE`` -- calling set_quota a second time updates the
+        limits in place rather than failing on the composite PK.
+
+        Raises ``sqlite3.IntegrityError`` if ``api_key_id`` does not
+        exist (the FK on api_key(id) catches it cleanly). The CLI
+        wrapper turns that into a friendly "no key with id X" error.
+
+        ``period`` defaults to ``"monthly"`` -- the only granularity
+        Phase 3b's check_quota currently recognizes; v0.2 may add
+        ``"daily"`` for finer-grained billing.
+        """
+        if max_queries < 0 or max_tokens < 0:
+            raise ValueError(
+                f"quota limits must be >= 0; got max_queries={max_queries}, max_tokens={max_tokens}"
+            )
+        with self._lock:
+            self.conn.execute(
+                """INSERT INTO quota (api_key_id, period, max_queries, max_tokens)
+                   VALUES (?, ?, ?, ?)
+                   ON CONFLICT (api_key_id, period) DO UPDATE SET
+                       max_queries = excluded.max_queries,
+                       max_tokens = excluded.max_tokens""",
+                (api_key_id, period, max_queries, max_tokens),
+            )
+            self.conn.commit()
+
     # --- Usage metering (Phase 3 / Task 2.4) ------------------------------
 
     def record_usage(
