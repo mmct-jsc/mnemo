@@ -191,6 +191,42 @@ agent's final output.
 - **Metric drivers**: tokens-to-answer (≤ 800 hard cap;
   budget-compliant or not), answer correctness.
 
+### T9 — Prompt architect satisfies more acceptance criteria
+
+- **Setup**: corpus contains 3-5 memory nodes carrying the
+  acceptance criteria + an anti-pattern note for a specific
+  coding task.
+- **Prompt**: a short raw user prompt ("fix the MQTT auth bug")
+  that omits the criteria.
+- **Two arms compared**:
+  - *Vanilla*: send the raw prompt directly to a host LLM. The
+    host has no access to the corpus.
+  - *Mnemo (prompt-architect)*: the typed Graph-RAG memory
+    assembles a sectioned markdown block (Problem / Context /
+    Files / Acceptance / Anti-patterns / Prompt) with explicit
+    citations, then sends THAT to the same host LLM.
+- **Metric drivers**: acceptance-criteria satisfaction (M4) +
+  citation precision (M3). The raw arm cannot surface criteria
+  it never saw; the architected arm explicitly inlines them.
+- **Strict invariant** (mirror of T1's locked invariant in the
+  opposite direction):
+
+  ```
+  mnemo.answer_correctness > vanilla.answer_correctness
+  ```
+
+  T1 says "vanilla re-derives MORE"; T9 says "the architected
+  output satisfies MORE acceptance criteria". If either
+  inverts, the substrate framing ("typed Graph-RAG context is
+  the wedge") has broken.
+
+- **v0 stub** scope: 4 corpus nodes, 1 high-confidence prompt.
+- **v0.1 expansion**: 30 prompts (10 high / 10 medium / 10 low
+  confidence) + opt-in LLM judge for M4. The prompt-architect's
+  confidence-heuristic + clarification budget become visible at
+  this scale (low-confidence prompts trigger ≤2 clarifying
+  questions).
+
 ## Metrics (4)
 
 All four are computed per-task and aggregated to a single per-agent

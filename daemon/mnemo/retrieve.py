@@ -58,6 +58,14 @@ class RetrievalResult:
     intent_tags: list[str]
     tokens_used: int
     query_id: str
+    # v5 phase 1: count of nodes that were dropped because they
+    # carried the ``local_only`` flag AND the caller passed
+    # ``exclude_local_only=True``. The prompt-architect dock surfaces
+    # this in a pre-emit warning ("X local-only excluded; verify
+    # before pasting"). 0 when the filter is off, which is the
+    # backward-compatible default for every non-prompt-architect
+    # caller.
+    local_only_excluded: int = 0
 
 
 def query(
@@ -69,6 +77,7 @@ def query(
     k: int | None = None,
     active_project: str | None = None,
     update_graph: bool = True,
+    exclude_local_only: bool = False,
 ) -> RetrievalResult:
     cfg = config.load()
     if k is None:
@@ -110,6 +119,10 @@ def query(
     nodes_by_id = store.get_nodes_by_ids(candidate_ids)
     isolation_mode = getattr(cfg, "project_isolation_mode", "strict")
     scored: list[ScoredHit] = []
+    # v5 phase 1: track local_only drops so the prompt-architect can
+    # surface a "N excluded" warning. The filter only fires when the
+    # caller opts in (default False = legacy behaviour).
+    local_only_excluded = 0
     # v1.2 phase 5: capture unweighted 6-term components per candidate
     # so the auto-tuner can rescore with alternative weights without
     # rerunning the embedder. Logged with the audit row below.
@@ -117,6 +130,9 @@ def query(
     for nid in candidate_ids:
         node = nodes_by_id.get(nid)
         if node is None:
+            continue
+        if exclude_local_only and node.local_only:
+            local_only_excluded += 1
             continue
         # v1.1 BASE / project-isolation hard-filter. v1.2.1 fix: treat
         # ``project_key is None`` as cross-cutting (it survives the
@@ -256,7 +272,13 @@ def query(
         score_components=components_log,
     )
 
-    return RetrievalResult(hits=hits, intent_tags=sorted(tags), tokens_used=used, query_id=qid)
+    return RetrievalResult(
+        hits=hits,
+        intent_tags=sorted(tags),
+        tokens_used=used,
+        query_id=qid,
+        local_only_excluded=local_only_excluded,
+    )
 
 
 # --- Score helpers ---------------------------------------------------------

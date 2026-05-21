@@ -651,9 +651,16 @@ class ChatPatchIn(BaseModel):
 
 
 class MessageCreateIn(BaseModel):
-    """``POST /v1/chat/<id>/message`` body."""
+    """``POST /v1/chat/<id>/message`` body.
+
+    v5 phase 3: ``use_skill`` lets the dock prime the agent with a
+    named skill's guidance BEFORE the model sees the user text. Used
+    by the prompt-architect dock surface (set to
+    ``"mnemo-prompt-architect"``); legacy chat callers omit it.
+    """
 
     text: str = Field(min_length=1)
+    use_skill: str | None = None
 
 
 class ChatMessageOut(BaseModel):

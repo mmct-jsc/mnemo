@@ -81,6 +81,11 @@ class ParsedFile:
     # the same file get distinct nodes. For v1.x source kinds it stays
     # None and reindex falls back to the path-as-string default.
     source_path: str | None = None
+    # v5 phase 1: local_only nodes are excluded from prompt-architect
+    # output. Set by frontmatter ``local_only: true``, a ``_private``
+    # path segment, or a body starting with ``[LOCAL ONLY]``. Default
+    # False so existing memory files stay fully visible.
+    local_only: bool = False
 
 
 @dataclass
@@ -223,6 +228,7 @@ def parse_file(path: Path, *, kind: str, project_key: str | None = None) -> Pars
         source_kind=kind,
         project_key=_resolve_project_key(fm, path, project_key),
         base=_resolve_base_flag(fm),
+        local_only=_resolve_local_only_flag(fm, body, path),
     )
 
 
@@ -305,6 +311,32 @@ def _resolve_base_flag(fm: dict[str, object]) -> bool:
         return val
     s = str(val).strip().lower()
     return s in ("true", "yes", "1", "y", "on")
+
+
+def _resolve_local_only_flag(fm: dict[str, object], body: str, path: Path) -> bool:
+    """v5 phase 1: decide whether a node is local_only.
+
+    Precedence (so an explicit ``local_only: false`` in frontmatter
+    wins over the path heuristic):
+
+    1. Frontmatter ``local_only`` (any truthy / falsy literal). When
+       the key is PRESENT the value is authoritative -- even False.
+    2. Any ``_private`` segment in the path (matches the standing
+       rule's ``docs/_private/`` convention without hard-coding the
+       leading ``docs`` segment).
+    3. Body starts with the literal marker ``[LOCAL ONLY]``.
+
+    Falls through to False when no signal fires.
+    """
+    if "local_only" in fm:
+        val = fm.get("local_only")
+        if isinstance(val, bool):
+            return val
+        s = str(val).strip().lower()
+        return s in ("true", "yes", "1", "y", "on")
+    if "_private" in path.parts:
+        return True
+    return bool(body) and body.lstrip().startswith("[LOCAL ONLY]")
 
 
 # --- Scanning --------------------------------------------------------------
@@ -636,6 +668,7 @@ def reindex_events(
                             frontmatter_json=parsed.frontmatter_json,
                             hash=parsed.hash,
                             base=parsed.base,
+                            local_only=parsed.local_only,
                         )
                         store.upsert_node(new_node)
                         if embedder is not None:
@@ -655,6 +688,7 @@ def reindex_events(
                         existing.frontmatter_json = parsed.frontmatter_json
                         existing.hash = parsed.hash
                         existing.base = parsed.base
+                        existing.local_only = parsed.local_only
                         existing.updated_at = int(time.time())
                         store.upsert_node(existing)
                         if embedder is not None:

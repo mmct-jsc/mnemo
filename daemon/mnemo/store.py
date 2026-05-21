@@ -229,6 +229,12 @@ class Node:
     # active project. Frontmatter `base: true` sets it on parse; the
     # node detail UI exposes a toggle.
     base: bool = False
+    # v5 phase 1: local_only nodes are excluded from pasteable prompts
+    # (the prompt-architect output may land in a foreign LLM). Set on
+    # parse via frontmatter ``local_only: true``, a ``_private`` path
+    # segment, or a body starting with ``[LOCAL ONLY]``. Default False
+    # so legacy rows stay fully visible.
+    local_only: bool = False
 
     @classmethod
     def new(
@@ -244,6 +250,7 @@ class Node:
         frontmatter_json: str | None = None,
         hash: str = "",
         base: bool = False,
+        local_only: bool = False,
     ) -> Node:
         if type not in NODE_TYPES:
             raise ValueError(f"unknown node type: {type!r}")
@@ -264,6 +271,7 @@ class Node:
             created_at=now,
             updated_at=now,
             base=base,
+            local_only=local_only,
         )
 
 
@@ -780,6 +788,12 @@ class Store:
             "nodes",
             {
                 "base": "INTEGER NOT NULL DEFAULT 0",
+                # v5 phase 1: local_only flag excludes nodes from
+                # pasteable prompt-architect output. Additive migration
+                # so legacy DBs grow the column with default 0 on first
+                # reopen; the prompt-architect's retrieve.query call
+                # passes ``exclude_local_only=True`` to filter them.
+                "local_only": "INTEGER NOT NULL DEFAULT 0",
             },
         )
         # v1.2 phase 2: store the query embedding alongside the audit row
@@ -872,8 +886,9 @@ class Store:
                 """
                 INSERT INTO nodes
                   (id, type, name, description, body, source_path, source_kind,
-                   project_key, frontmatter_json, hash, created_at, updated_at, base)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   project_key, frontmatter_json, hash, created_at, updated_at, base,
+                   local_only)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                   type             = excluded.type,
                   name             = excluded.name,
@@ -885,7 +900,8 @@ class Store:
                   frontmatter_json = excluded.frontmatter_json,
                   hash             = excluded.hash,
                   updated_at       = excluded.updated_at,
-                  base             = excluded.base
+                  base             = excluded.base,
+                  local_only       = excluded.local_only
                 """,
                 (
                     node.id,
@@ -901,6 +917,7 @@ class Store:
                     node.created_at,
                     node.updated_at,
                     1 if node.base else 0,
+                    1 if node.local_only else 0,
                 ),
             )
             self.conn.commit()
@@ -1093,11 +1110,15 @@ class Store:
         # `base` column was added by an idempotent migration; rows from
         # databases that haven't been re-opened since the migration have
         # the column as 0. Defensive get() so test fixtures with bare
-        # SELECT * still work.
+        # SELECT * still work. Same defense for v5's local_only column.
         try:
             base_val = bool(row["base"])
         except (KeyError, IndexError):
             base_val = False
+        try:
+            local_only_val = bool(row["local_only"])
+        except (KeyError, IndexError):
+            local_only_val = False
         return Node(
             id=row["id"],
             type=row["type"],
@@ -1112,6 +1133,7 @@ class Store:
             created_at=row["created_at"],
             updated_at=row["updated_at"],
             base=base_val,
+            local_only=local_only_val,
         )
 
     # --- Edges -------------------------------------------------------------

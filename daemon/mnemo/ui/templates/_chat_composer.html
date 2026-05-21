@@ -6,8 +6,44 @@
    shift-enter; dock = .mc-composer/.mc-send, compact). #}
 {% if chat_surfaces[surface].composer %}
 {% if surface == 'dock' %}
+{# v5 phase 5: pre-emit local-only warning. Visible when the
+   prompt-architect retrieval reports ``local_only_excluded > 0``
+   AND the user has the companion ``warn_on_local_only_exclusion``
+   setting on. The user can dismiss in-place (sets the count back to
+   0); the Settings toggle is the durable opt-out. #}
+<div class="mc-localonly-warn" x-show="localOnlyExcluded > 0 && warnLocalOnly" x-cloak>
+  <svg viewBox="0 0 24 24" width="14" height="14" fill="none"
+       stroke="currentColor" stroke-width="2.2" stroke-linecap="round"
+       stroke-linejoin="round" aria-hidden="true">
+    <path d="M12 9v4M12 17h.01M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+  </svg>
+  <span>
+    Architected prompt drew on local-only nodes <strong
+      x-text="localOnlyExcluded"></strong>
+    excluded. Verify before pasting.
+  </span>
+  <button type="button" @click="localOnlyExcluded = 0" aria-label="Dismiss">&times;</button>
+</div>
+{# v5 phase 4: prompt-architect toggle. Dock-only per design Q3.
+   Flips architectMode; sendMessage adds use_skill='mnemo-prompt-architect'
+   when true so the agent loop pre-loads the skill before the user
+   text reaches the model. The placeholder + aria signal the mode
+   change so blind / motor users hear/see the difference. #}
 <form class="mc-composer" @submit.prevent="sendMessage()">
-  <textarea x-ref="draft" x-model="draft" rows="1" placeholder="Ask Mnem…"
+  <button type="button" class="mc-architect"
+          :class="{ 'on': architectMode }"
+          :title="architectMode ? 'Architect mode ON — emits paste-ready prompt' : 'Architect mode OFF — regular Mnem chat'"
+          :aria-pressed="architectMode ? 'true' : 'false'"
+          @click="architectMode = !architectMode">
+    <svg viewBox="0 0 24 24" width="14" height="14" fill="none"
+         stroke="currentColor" stroke-width="2.2" stroke-linecap="round"
+         stroke-linejoin="round" aria-hidden="true">
+      <path d="M4 4h16v4H4zM4 12h16v4H4zM4 20h10"/>
+    </svg>
+    <span>Architect</span>
+  </button>
+  <textarea x-ref="draft" x-model="draft" rows="1"
+            :placeholder="architectMode ? 'Describe the task; Mnem will architect a paste-ready prompt…' : 'Ask Mnem…'"
             :disabled="streaming"
             @keydown.enter.prevent="if (!$event.shiftKey) sendMessage()"></textarea>
   <button class="mc-send" :disabled="streaming || !draft.trim()"
