@@ -680,6 +680,46 @@ CREATE TABLE IF NOT EXISTS chat_bookmarks (
 
 CREATE INDEX IF NOT EXISTS idx_chat_bm_conv
   ON chat_bookmarks(conversation_id, message_seq);
+
+-- Phase 3 / Angle #2 (hosted context API): API key + per-key quota +
+-- per-period usage metering. The hosted tier is OFF by default at the
+-- endpoint layer (a config flag enables api-key auth on /v1/query;
+-- self-host loopback stays unauthenticated). Tables ship in v0.1 of
+-- Phase 3 / Task 2.1; the issuance CLI (Task 2.2), auth dependency
+-- (Task 2.3), metering hook (Task 2.4), and quota enforcement
+-- (Task 2.5) consume them. The schema is harmless for any install
+-- that does not enable hosted mode.
+
+CREATE TABLE IF NOT EXISTS api_key (
+  id          TEXT PRIMARY KEY,
+  hash        TEXT NOT NULL UNIQUE,
+  name        TEXT NOT NULL,
+  created_at  INTEGER NOT NULL,
+  revoked_at  INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_api_key_hash ON api_key(hash);
+
+CREATE TABLE IF NOT EXISTS quota (
+  api_key_id   TEXT NOT NULL
+               REFERENCES api_key(id) ON DELETE CASCADE,
+  period       TEXT NOT NULL,
+  max_queries  INTEGER NOT NULL,
+  max_tokens   INTEGER NOT NULL,
+  PRIMARY KEY (api_key_id, period)
+);
+
+CREATE TABLE IF NOT EXISTS usage_period (
+  api_key_id  TEXT NOT NULL
+              REFERENCES api_key(id) ON DELETE CASCADE,
+  period      TEXT NOT NULL,
+  queries     INTEGER NOT NULL DEFAULT 0,
+  tokens      INTEGER NOT NULL DEFAULT 0,
+  updated_at  INTEGER NOT NULL,
+  PRIMARY KEY (api_key_id, period)
+);
+
+CREATE INDEX IF NOT EXISTS idx_usage_period_key ON usage_period(api_key_id);
 """
 
 
