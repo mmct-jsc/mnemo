@@ -2,6 +2,87 @@
 
 All notable changes to mnemo are documented here.
 
+## [5.1.0] - 2026-05-22
+
+Prompt-architect end-to-end polish. Two v5.0 surfaces shipped
+without the connecting wire; v5.1.0 closes that loop and adds
+the section-aware copy affordance the design doc S12 named as
+the v5.x convenience expansion.
+
+### Phase 1 -- `local_only_excluded` traveling through the full pipe
+
+v5.0 wired the retrieval-level filter (Phase 1) and the dock UI
+surface + Settings toggle (Phase 5) -- but the bridge between
+them was never implemented. `mnemo_query` didn't accept
+`exclude_local_only`, and its result dict didn't carry the
+count. The dock's banner state `localOnlyExcluded` always stayed
+at 0; the warning was invisible in practice.
+
+Changes:
+
+- `mnemo_query` grows `exclude_local_only` (optional, default
+  False, advertised in the tool schema for any MCP host to
+  discover). The prompt-architect skill already names this
+  parameter in its analysis steps -- v5.1.0 makes the param
+  real instead of a no-op.
+- The tool result dict carries `local_only_excluded` (the count
+  from `RetrievalResult.local_only_excluded`). Always present;
+  0 when the filter is off. Wire-schema snapshot regenerated
+  to reflect the new field.
+- `chat.js` tool_result SSE handler reads
+  `d.result.local_only_excluded`, accumulates into
+  `self.localOnlyExcluded` whenever the count is non-zero.
+  Multi-query architect runs aggregate drops across calls.
+
+End-to-end flow now: architect skill invokes mnemo_query with
+`exclude_local_only=True` -> retrieval drops N local_only nodes
+-> result includes `local_only_excluded: N` -> SSE tool_result
+event carries that -> dock factory's `localOnlyExcluded` reaches
+N -> the v5.0 banner template `x-show=" localOnlyExcluded > 0
+&& warnLocalOnly"` fires -> user sees the warning before paste.
+
+### Phase 2 -- section-aware copy buttons on architected output
+
+The dock now exposes TWO copy affordances on assistant messages
+that look architected (contain a `## Prompt` heading):
+
+- The existing `mc-copy` button (whole message; for Claude Code
+  / Continue where the host has room for the cited context).
+- A NEW `mc-copy-prompt` button (just the `## Prompt` section;
+  for Cursor / Copilot where context budget is tight).
+
+`chat.js` grows two helpers:
+
+- `looksArchitected(text)` -- regex match for `(^|\n)##\s*Prompt\s*\n`.
+- `extractPromptSection(text)` -- pulls the body of the
+  `## Prompt` heading: everything from after the heading line
+  to either the next `##`-level heading or EOF.
+
+Non-architected assistant messages (regular chat) get only the
+existing whole-message copy button; the second affordance is
+gated on `looksArchitected(m.content.text)`.
+
+### Tests
+
+- +4 unit (`test_local_only_sse_wiring.py`) -- schema, result
+  field, legacy backward-compat, chat.js handler.
+- +6 unit (`test_architect_copy_buttons.py`) -- both JS helpers
+  + dock template wiring + gate predicate.
+- Full suite **1300 / 1 skip** (+19 from v5.0.1's 1281+4).
+- Wire-schema snapshot regenerated (1 file changed; reflects
+  the new `exclude_local_only` field on the mnemo_query schema).
+
+### Anti-goal preserved
+
+- `exclude_local_only` defaults False; every pre-v5.1 caller
+  sees identical byte-for-byte mnemo_query output (only the
+  additive `local_only_excluded` field is new, and it's 0 for
+  them).
+- 47/47 existing `/v1/query` tests still pass without
+  `hosted_auth_enabled`; v4.7.0 hosted contract unchanged.
+- `mc-copy-prompt` button is hidden by default (gated on
+  `looksArchitected`); regular chat bubbles look the same.
+
 ## [5.0.1] - 2026-05-22
 
 Hotfix: graph node drag breaks subsequent click-to-focus.
