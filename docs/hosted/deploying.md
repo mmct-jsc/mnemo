@@ -23,9 +23,6 @@ multiple consumers — not for solo self-host users. Self-host stays
 
 ## What's NOT shipped yet
 
-- **`mnemo key set-quota` CLI** — quotas are still set via direct
-  SQLite (see Step 3 below). The set-quota CLI is the only Phase
-  3 gap and will likely land in the next minor release.
 - Per-key prefix-indexed verify (v0.1 verifies via O(N) over the
   active-key set; acceptable for ≤ ~1,000 keys; v0.2 if you need
   more).
@@ -91,18 +88,17 @@ takes effect **on the next inbound request — no restart needed.**
 | Non-loopback, `Authorization: Bearer <invalid>` | Accepted (header ignored when flag off) | **401 with `WWW-Authenticate: Bearer realm="mnemo", error="invalid_token"`** |
 | Non-loopback, `Authorization: Bearer <valid>` | Accepted (header ignored) | Accepted + the request is metered against the key |
 
-## Step 3 — Set a quota for the key (SQLite directly)
-
-> **Phase 3 gap**: there is no `mnemo key set-quota` command yet.
-> Set quotas via the daemon's SQLite directly. A future
-> `mnemo key set-quota` subcommand will wrap this.
+## Step 3 — Set a quota for the key
 
 ```bash
-sqlite3 ~/.claude/mnemo/mnemo.db <<'SQL'
-INSERT INTO quota (api_key_id, period, max_queries, max_tokens)
-VALUES ('<key_id from create output>', 'monthly', 10000, 2000000);
-SQL
+mnemo key set-quota <key_id> --max-queries 10000 --max-tokens 2000000
 ```
+
+Re-running `set-quota` with new values updates the existing row in
+place (UPSERT on `(api_key_id, period)`); no need to delete first.
+`--period` defaults to `monthly` (the only granularity v0.1
+recognizes). Setting both limits to `0` is valid — it stages a key
+as "exists but rejects every request" until you raise the limits.
 
 When a key hits either dimension (`queries >= max_queries` OR
 `tokens >= max_tokens`), the next `/v1/query` request returns:
@@ -236,7 +232,6 @@ the daemon does the verification.
 
 ## Next
 
-- `mnemo key set-quota` CLI to remove the SQLite step.
 - Daily quota granularity for finer billing periods.
 - Implicit-signal aggregation in the ROI dashboard's
   `rederivations_avoided` (Phase 2 v0.2 follow-up).

@@ -693,6 +693,60 @@ def key_revoke(key_id: str) -> None:
         store.close()
 
 
+@key_app.command("set-quota")
+def key_set_quota(
+    key_id: str,
+    max_queries: int = typer.Option(
+        ...,
+        "--max-queries",
+        help="Maximum queries per period (>=0).",
+    ),
+    max_tokens: int = typer.Option(
+        ...,
+        "--max-tokens",
+        help="Maximum tokens per period (>=0).",
+    ),
+    period: str = typer.Option(
+        "monthly",
+        "--period",
+        help="Quota granularity (v0.1: 'monthly' only).",
+    ),
+) -> None:
+    """Set or update the quota for an API key.
+
+    Wraps the SQLite step that docs/hosted/deploying.md used to
+    require for Phase 3a. Idempotent: re-running with new limits
+    updates them in place. The Phase 3b enforcement on /v1/query
+    reads this row to decide whether to 429.
+    """
+    import sqlite3
+
+    store = _open_store()
+    try:
+        try:
+            store.set_quota(
+                key_id,
+                max_queries=max_queries,
+                max_tokens=max_tokens,
+                period=period,
+            )
+        except sqlite3.IntegrityError as exc:
+            typer.echo(
+                f"No key with id {key_id!r} (cascade FK refused).",
+                err=True,
+            )
+            raise typer.Exit(code=1) from exc
+        except ValueError as exc:
+            typer.echo(f"Invalid quota: {exc}", err=True)
+            raise typer.Exit(code=2) from exc
+        typer.echo(
+            f"Quota set for {key_id}: period={period}, "
+            f"max_queries={max_queries}, max_tokens={max_tokens}"
+        )
+    finally:
+        store.close()
+
+
 # --- mnemo billing report (Phase 3 / Task 2.6) ----------------------------
 #
 # CSV-out per-key billing report. Columns are stable + documented in
