@@ -3,8 +3,8 @@
 [![CI](https://github.com/mmct-jsc/mnemo/actions/workflows/ci.yml/badge.svg)](https://github.com/mmct-jsc/mnemo/actions/workflows/ci.yml)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-4.6.2-blue.svg)](CHANGELOG.md)
-[![Tests](https://img.shields.io/badge/tests-1245_passing-brightgreen.svg)](daemon/tests/)
+[![Version](https://img.shields.io/badge/version-5.1.0-blue.svg)](CHANGELOG.md)
+[![Tests](https://img.shields.io/badge/tests-1300_passing-brightgreen.svg)](daemon/tests/)
 [![ruff](https://img.shields.io/badge/lint-ruff-orange.svg)](https://github.com/astral-sh/ruff)
 [![Live demo](https://img.shields.io/badge/live-demo-7ee7e0.svg)](https://mmct-jsc.github.io/mnemo/)
 [![Buy me a coffee](https://img.shields.io/badge/buy_me_a_coffee-FF5E5B?logo=ko-fi&logoColor=white)](https://ko-fi.com/quoctrantrung)
@@ -38,6 +38,13 @@ When you start a session, mnemo injects a memory map. When you submit a prompt, 
 ## What's new
 
 Newest first. The full version-by-version diff is in [CHANGELOG.md](CHANGELOG.md).
+
+### v5 — Mnem the prompt architect
+
+- **Type a quick prompt into the dock; paste a polished prompt into any IDE.** The companion analyses your raw input against the typed Graph-RAG memory + code graph and emits a sectioned-markdown block (Problem / Context / Files / Acceptance / Anti-patterns / Prompt) ready to drop into Cursor / Claude Code / Continue / Copilot. The host LLM receives the same context Mnem has — without needing mnemo's MCP server itself.
+- **`local_only` node flag + retrieval filter** — frontmatter `local_only: true`, any `_private` path segment, or a `[LOCAL ONLY]` body marker auto-flags a node. The prompt-architect skill passes `exclude_local_only=true` so paste-bound output never references locally-scoped notes. The dock surfaces a pre-emit warning whenever a flagged node was dropped before paste.
+- **T9 in the open agent-memory benchmark** locks `mnemo.answer_correctness > vanilla.answer_correctness` in CI — the mirror of T1's `vanilla > mnemo` on rederivation. Both invariants together pin the typed-Graph-RAG substrate wedge.
+- **v4.7.0 substrate** (the foundation v5 builds on) — locked 26-tool MCP contract test, Cursor + OpenAI Agents SDK 5-minute mount guides, flag-gated hosted `/v1/query` with API-key auth + metering + 429 quota enforcement, ROI dashboard card, and the published CC-BY-4.0 [agent-memory benchmark spec v0](docs/benchmark/agent-memory-spec-v0.md) with a reference MIT harness at `bench/`.
 
 ### v4.x — Nebula custom graph engine + design-system + responsive
 
