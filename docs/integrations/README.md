@@ -15,21 +15,38 @@ them — no per-host adapter, no plugin, no bridge.
   using `MCPServerStdio`. Demonstrates mnemo working cleanly inside
   OpenAI's flagship agent runtime.
 
-Both run the exact same `mnemo mcp` stdio MCP server with the same
-26-tool surface. Switching hosts is a config change, not a code change.
+## 5-minute mounts (v5.5.0 Reach)
 
-## Why these two — and what we deferred
+The Phase 1 flagship picks were the visibility win; v5.5.0 promotes
+the substrate framing by adding four more mount guides + smoke tests,
+so the "same `mnemo mcp` works in every MCP-capable host" promise is
+documented end to end:
+
+- **[Claude Desktop](./claude-desktop.md)** — Anthropic's canonical
+  first-party MCP host. Same `mcpServers` shape as Cursor; one
+  config block + relaunch.
+- **[Continue](./continue.md)** — open-source IDE assistant
+  (VS Code + JetBrains). MCP via
+  `experimental.modelContextProtocolServers` in `~/.continue/config.json`.
+- **[Windsurf](./windsurf.md)** — Cascade panel speaks MCP via
+  `mcp_config.json`. Same shape as Cursor.
+- **[Zed](./zed.md)** — Rust-native editor; Assistant panel uses
+  `context_servers` in `settings.json`. Tools are surfaced as
+  `/mnemo-*` slash commands.
+
+All six (Cursor + OpenAI Agents SDK + the four above) run the exact
+same `mnemo mcp` stdio MCP server with the same 26-tool surface.
+Switching hosts is a config change, not a code change.
+
+## Why we picked the Phase 1 flagships — and what's still deferred
 
 The picks live in [PICKS.md](./PICKS.md) with the full rubric
 (MCP-native / active 2026 community / different host shape) and the
-analysis tables for each deferred candidate. Quick summary:
+analysis tables for each candidate. Quick summary as of v5.5.0:
 
-- **Pick A losers (IDE-embedded):**
-  - **Continue** — native MCP, medium user base, open-source. Strong
-    secondary; defer to a later Phase 1.x slot.
-  - **Zed** — partial MCP, smaller user base, growing. Revisit when
-    Zed hits broader adoption.
-- **Pick B losers (agent-loop):**
+- **Pick A alternates (IDE-embedded), now landed:** Continue, Zed —
+  both shipped with v5.5.0 alongside Windsurf.
+- **Pick B alternates (agent-loop), still deferred:**
   - **Gemini CLI** — native MCP, smaller user base. Right slot when
     Google for Startups outreach goes warm.
   - **LangGraph** — large user base via LangChain, but MCP via
