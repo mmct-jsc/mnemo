@@ -1864,6 +1864,66 @@ class Store:
                 return r["id"]
         return None
 
+    # --- Billing report (Phase 3 / Task 2.6) ------------------------------
+
+    def billing_report(self, period: str) -> list[dict]:
+        """Per-key usage + quota + over-quota flag for a billing period.
+
+        ``period`` is the usage-period identifier (``YYYY-MM`` for
+        monthly). Joins:
+
+        - ``api_key`` (all keys -- revoked included; we bill keys
+          that were active during the period even if revoked since).
+        - ``usage_period`` for that exact period (zero if no usage).
+        - ``quota`` with granularity ``'monthly'`` (zero if unset --
+          the over_quota flag is then False, no division-by-zero
+          blow-up).
+
+        Returns rows ordered by ``key_name`` so the CSV output is
+        deterministic for diffing across periods.
+        """
+        with self._lock:
+            rows = self.conn.execute(
+                """
+                SELECT
+                  ak.id            AS key_id,
+                  ak.name          AS key_name,
+                  COALESCE(up.queries, 0) AS queries,
+                  COALESCE(up.tokens, 0)  AS tokens,
+                  COALESCE(q.max_queries, 0) AS quota_queries,
+                  COALESCE(q.max_tokens, 0)  AS quota_tokens
+                FROM api_key ak
+                LEFT JOIN usage_period up
+                  ON up.api_key_id = ak.id AND up.period = ?
+                LEFT JOIN quota q
+                  ON q.api_key_id = ak.id AND q.period = 'monthly'
+                ORDER BY ak.name ASC, ak.id ASC
+                """,
+                (period,),
+            ).fetchall()
+        out: list[dict] = []
+        for r in rows:
+            queries = int(r["queries"])
+            tokens = int(r["tokens"])
+            quota_queries = int(r["quota_queries"])
+            quota_tokens = int(r["quota_tokens"])
+            # over_quota = quota set AND any dimension exceeded.
+            over_quota = (quota_queries > 0 and queries > quota_queries) or (
+                quota_tokens > 0 and tokens > quota_tokens
+            )
+            out.append(
+                {
+                    "key_id": r["key_id"],
+                    "key_name": r["key_name"],
+                    "queries": queries,
+                    "tokens": tokens,
+                    "quota_queries": quota_queries,
+                    "quota_tokens": quota_tokens,
+                    "over_quota": bool(over_quota),
+                }
+            )
+        return out
+
     # --- ROI summary (Phase 2 / Task 3.4) ---------------------------------
 
     # Estimated tokens saved per query vs naive RAG. Documented constant;
