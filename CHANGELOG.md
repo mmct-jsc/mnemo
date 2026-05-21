@@ -2,6 +2,76 @@
 
 All notable changes to mnemo are documented here.
 
+## [5.1.1] - 2026-05-22
+
+Two polish fixes for the Nebula graph + a themed cursor across
+the whole UI surface.
+
+### Bug fix: scroll-zoom anchored to the cursor again
+
+**User report**: scroll-zooming on `/graph` landed the target
+opposite the cursor; at certain galactic-rotation angles the
+zoom seemed to "reverse" relative to the cursor position.
+
+**Root cause**: the wheel handler in `nebula-gl.js` read
+``screenToWorld(cursor)`` before AND after the zoom step, then
+applied the delta to `cam.x/cam.y`. But `screenToWorld` applies
+an inverse rotation by `-gA` so the returned point lands in the
+STATIC frame (the frame the nodes + pick index live in).
+`cam.x/cam.y` live in the DISPLAY frame (the shader applies the
+`+gA` rotation AFTER cam). Adding a static-frame delta to a
+display-frame cam rotated the correction by `-gA` — which at
+`gA ≈ π` produces an exact reversal (the "got reverted"
+symptom), and at intermediate angles produces the apparent
+rotation drift around the cursor.
+
+**Fix**: a new ``screenToCam`` helper returns the DISPLAY-frame
+point (skips the inverse-rotate). The wheel handler uses it
+instead of ``screenToWorld``. The static-frame helper stays
+unchanged for picking + hover + node-drag (those want the
+static frame). The two frames are now used consistently
+per-callsite.
+
+### Feature: themed custom cursor
+
+Adds two C1-themed cursor SVGs under
+`daemon/mnemo/ui/static/cursors/`:
+
+- `mnem-cursor.svg` — default. Soft teal halo + a precise center
+  dot. Carries the C1 accent (`#7ee7e0`).
+- `mnem-cursor-pointer.svg` — interactive variant. Brighter
+  ring + wider halo using `--accent-hover` (`#a5f0eb`); applies
+  to links, buttons, `[role="button"]`, summary, label, the
+  architect pill, the copy buttons, demo-page chips.
+
+Both SVGs are 32×32 with hot spot center (16, 16). `app.css`
+references them with relative URLs (`cursors/...`) so the same
+rule works in BOTH the daemon at `/static/app.css` and the
+demo at `/app.css` (the build copies the cursors directory
+alongside).
+
+Text inputs (`input[type="text"]`, `textarea`, etc.) keep the
+OS text I-beam so caret placement is preserved.
+
+### Tests + anti-goal
+
+- +4 unit (`test_zoom_to_cursor.py`) — `screenToCam` exists +
+  skips the inverse-rotate; wheel handler uses it; static-frame
+  helper is still used by mousedown/pick.
+- +10 unit (`test_themed_cursor.py`) — SVG files exist + parse
+  + use accent palette; `app.css` references both with hot spot
+  `16 16`; text inputs keep `cursor: text`; `build_demo.py`
+  copies the cursors directory.
+- Full suite 1314 / 1 skip.
+
+Anti-goal preserved: pre-v5.1 `screenToWorld` semantics are
+unchanged (pick / hover / node-drag still see the static
+frame); the cursor CSS is additive and falls back to the
+platform cursor when the SVG URL fails to load
+(`url(...) 16 16, auto | pointer` fallback chain). 47/47
+existing `/v1/query` tests still pass without
+`hosted_auth_enabled`.
+
 ## [5.1.0] - 2026-05-22
 
 Prompt-architect end-to-end polish. Two v5.0 surfaces shipped
