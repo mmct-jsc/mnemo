@@ -71,6 +71,29 @@ def _extract_citations(text: str) -> list[str]:
     return seen
 
 
+def _try_preload_skill(store: Store, conv_id: str, skill_name: str) -> str | None:
+    """v5 phase 3: load ``skill_name`` and append its guidance as a
+    pinned user-role turn on ``conv_id``. Returns an error message on
+    failure (unknown skill, malformed SKILL.md), None on success.
+
+    Mirrors the format used by the mid-loop ``_skill`` sentinel
+    handler in ``AgentLoop.run``: ``[active skill: <name>]\\n<guidance>``
+    so all providers see the same shape regardless of whether the
+    skill arrived via the dock pre-load or via a model-issued
+    ``mnemo_run_skill`` call mid-conversation.
+    """
+    out = TOOLS["mnemo_run_skill"].fn(ToolContext(store=store), skill_name=skill_name)
+    if "_skill" not in out:
+        return str(out.get("error") or f"unknown skill: {skill_name!r}")
+    sk = out["_skill"]
+    store.append_message(
+        conv_id,
+        role="user",
+        content={"text": f"[active skill: {sk['name']}]\n{sk['guidance']}"},
+    )
+    return None
+
+
 class AgentLoop:
     def __init__(
         self,
@@ -204,7 +227,28 @@ class AgentLoop:
 
     # --- the loop --------------------------------------------------------
 
-    def run(self, conv_id: str, user_text: str) -> Iterator[dict]:
+    def run(
+        self,
+        conv_id: str,
+        user_text: str,
+        *,
+        use_skill: str | None = None,
+    ) -> Iterator[dict]:
+        # v5 phase 3: dock-mode pre-load. If the caller named a skill,
+        # pin its guidance as a user-role turn BEFORE the user's text
+        # so the model has the architect playbook on its first
+        # iteration. Mirrors the existing mid-loop _skill sentinel
+        # handling at the same role/format. An unknown skill surfaces
+        # as an `error` event AND short-circuits the run -- silently
+        # dropping a typo'd skill name leads to the model trying to
+        # architect without the playbook, which fails worse than
+        # showing the user the error.
+        if use_skill:
+            err = _try_preload_skill(self._store, conv_id, use_skill)
+            if err is not None:
+                yield {"type": "error", "message": err}
+                return
+            yield {"type": "skill_loaded", "name": use_skill}
         # Persist the user turn FIRST -- survives a provider failure.
         self._store.append_message(conv_id, role="user", content={"text": user_text})
         pmsgs = self._history_to_provider(conv_id)

@@ -1593,8 +1593,10 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
                 },
             )
         # Stash the user's text; the SSE GET runs the loop (which
-        # persists the user message + streams the run).
-        state.chat_pending[conv_id] = body.text
+        # persists the user message + streams the run). v5 phase 3:
+        # a dock-mode POST may name a skill to pre-load -- the GET
+        # passes it through to AgentLoop.run(use_skill=...).
+        state.chat_pending[conv_id] = (body.text, body.use_skill)
         return MessageAcceptedOut(stream_url=stream_url, conversation_id=conv_id)
 
     @v1.get("/chat/{conv_id}/events")
@@ -1622,6 +1624,12 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
                 if pending is None:
                     yield encode("idle", {"conversation_id": conv_id})
                     return
+                # Backward-compat: legacy callers stored just the text
+                # string; v5 dock-mode stores ``(text, use_skill)``.
+                if isinstance(pending, tuple):
+                    pending_text, pending_use_skill = pending
+                else:
+                    pending_text, pending_use_skill = pending, None
                 try:
                     provider = _chat_provider(state, conv.provider)
                 except Exception as exc:  # key/construction failure
@@ -1646,7 +1654,7 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
                     project_key=conv.project_key,
                     permission_cb=permission_cb,
                 )
-                for ev in loop.run(conv_id, pending):
+                for ev in loop.run(conv_id, pending_text, use_skill=pending_use_skill):
                     yield encode(ev["type"], ev)
                     if cancel.is_set():
                         yield encode("cancelled", {"type": "cancelled"})
