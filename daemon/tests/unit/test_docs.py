@@ -37,11 +37,11 @@ def test_sample_queries_doc_exists() -> None:
 # --- Content invariants --------------------------------------------------
 
 
-def test_contributing_calls_out_no_co_author_rule() -> None:
+def test_contributing_calls_out_no_emojis_rule() -> None:
     text = (REPO_ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
-    assert "Co-Authored-By" in text, "the no-co-author rule must be visible in CONTRIBUTING"
-    # And it must say "no" - not just describe what a co-author is.
-    assert re.search(r"no\s+`?co-authored-by`?", text.lower())
+    assert "No emojis" in text, "the no-emojis rule must be visible in CONTRIBUTING"
+    # And it must call out that the rule applies to commit messages.
+    assert re.search(r"no\s+emojis.*(commit|code|docs)", text, re.IGNORECASE | re.DOTALL)
 
 
 def test_contributing_documents_lint_and_test_commands() -> None:

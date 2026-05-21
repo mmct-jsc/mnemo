@@ -22,20 +22,20 @@ def _write(path: Path, content: str) -> Path:
 
 def test_parse_file_with_full_frontmatter(tmp_path: Path) -> None:
     p = _write(
-        tmp_path / "feedback_commit_style.md",
+        tmp_path / "feedback_no_emojis.md",
         """\
         ---
-        name: feedback-commit-style
-        description: No co-author trailers on commits
+        name: feedback-no-emojis
+        description: No emojis in code or commit messages
         type: feedback
         ---
-        Hard rule: never include Co-Authored-By trailer.
+        Hard rule: never include emoji glyphs in committed code.
         """,
     )
     parsed = ingest.parse_file(p, kind="memory_dir", project_key="P1")
     assert parsed.type == "memory_feedback"
-    assert parsed.name == "feedback-commit-style"
-    assert parsed.description == "No co-author trailers on commits"
+    assert parsed.name == "feedback-no-emojis"
+    assert parsed.description == "No emojis in code or commit messages"
     assert "Hard rule" in parsed.body
     assert parsed.project_key == "P1"
     assert parsed.hash  # 64-char hex

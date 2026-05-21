@@ -48,7 +48,7 @@ DEFAULT_K = 20
 DEFAULT_BUDGET_TOKENS = 800
 
 # Lexical scorer: tokenize alpha-word-ish things of >= 3 chars. Substring
-# match (not exact) so "co-auth" matches "co-authored-by".
+# match (not exact) so "emo" matches "emojis" / "emoji".
 _TOKEN_RE = re.compile(r"[a-zA-Z][a-zA-Z0-9-]+")
 
 

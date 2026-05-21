@@ -1632,6 +1632,32 @@ dl.meta dd { margin: 0; color: var(--fg); min-width: 0; overflow-wrap: anywhere;
 .filters {
   display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;
 }
+
+/* v5.4.0: mobile layout for the section-head + filters row. Below
+   --bp-md the H2 and the two-select filter form were sitting on
+   one row (.section-head is flex/space-between), which squeezed
+   the selects into a narrow strip on the right and made them
+   wrap awkwardly under the H2. Stack vertically + let the filters
+   span full width + let each select breathe. */
+@media (max-width: 60rem) {
+  .section-head {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.6rem;
+  }
+  .section-head .filters {
+    width: 100%;
+    flex-wrap: nowrap;
+    gap: 0.4rem;
+  }
+  .section-head .filters select {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+  .section-head .filter-clear {
+    flex: 0 0 auto;
+  }
+}
 /* .filters select is defined globally above (with the themed caret).
    Don't redefine background here -- the shorthand would wipe the SVG. */
 

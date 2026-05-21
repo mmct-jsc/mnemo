@@ -15,7 +15,7 @@ def test_debug_pattern() -> None:
 
 def test_feedback_recall_pattern() -> None:
     assert "feedback-recall" in classify_intent("user always prefers tabs over spaces")
-    assert "feedback-recall" in classify_intent("hard rule: no co-author trailer")
+    assert "feedback-recall" in classify_intent("hard rule: no emojis in commit messages")
     assert "feedback-recall" in classify_intent("reminder: this user prefers terse output")
 
 
