@@ -82,6 +82,18 @@
         <option>minimal</option><option>normal</option><option>chatty</option>
       </select>
     </div>
+    {# v5 phase 5: warn before pasting an architected prompt that
+       drew on confidential context. Default ON. Power users with
+       no local-only nodes can flip it off. #}
+    <div class="row"><label>Warn on local-only exclusion</label>
+      <input type="checkbox"
+             x-model="data.companion.warn_on_local_only_exclusion"
+             aria-describedby="warn_local_only_help"></div>
+    <p class="hint" id="warn_local_only_help" style="margin: -.3rem 0 .8rem 180px;">
+      Show a banner above the architect output when nodes were
+      excluded for being <code>local_only</code> (the standing rule's
+      <code>docs/_private/</code> convention).
+    </p>
     <button class="primary" @click="saveCompanion()">Save companion</button>
     <span class="ok" x-show="saved" x-cloak>saved</span>
   </section>
