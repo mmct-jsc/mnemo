@@ -2,6 +2,56 @@
 
 All notable changes to mnemo are documented here.
 
+## [5.2.0] - 2026-05-22
+
+Cross-surface prompt-architect. The architect pill that v5.0
+shipped dock-only (per design Q3) now also appears on the
+`/chat` page surface, matching the design doc S12 phased
+roadmap that named cross-surface as the v5.x convenience
+expansion.
+
+### Changes
+
+- `_chat_composer.html` page branch grows the same
+  `mc-architect` toggle button + the same pre-emit
+  `mc-localonly-warn` banner the dock has. Both surfaces share
+  the `architectMode` factory state, so flipping it in one place
+  isn't observable on the other (each chat-shell instance owns
+  its own toggle, but they all flow through the same
+  `sendMessage` -> POST -> `use_skill` wire).
+- `chat.js` drops the `self.surface === 'dock'` guard inside
+  the message-POST body assembly. When `architectMode` is true
+  on EITHER surface, the POST carries `use_skill:
+  'mnemo-prompt-architect'` so the phase-3 server-side
+  entry-point pre-loads the skill before the model sees the
+  user text.
+- The page-surface placeholder also flips ("Describe the task;
+  Mnem will architect a paste-ready prompt..." vs "Ask Mnem
+  anything...") so keyboard / motor users hear the mode change
+  via the placeholder text in addition to the visual pill.
+
+### Anti-goal preserved
+
+- `architectMode` still defaults False on every chat-shell
+  instance. Legacy callers see byte-identical behaviour until
+  they opt in.
+- `use_skill` is still optional on `MessageCreateIn`; pre-v5
+  POSTs are unaffected.
+- 47/47 existing `/v1/query` tests still pass without
+  `hosted_auth_enabled`.
+- Dock-only restriction is lifted intentionally per the design
+  doc; the cross-surface behaviour is the expected v5.x
+  convenience.
+
+### Tests
+
+- `test_architect_toggle_only_on_dock_surface` renamed +
+  inverted to `test_architect_toggle_on_both_surfaces` — both
+  branches of `_chat_composer.html` must carry the toggle.
+- All existing dock-side tests still pass (the dock branch is
+  unchanged).
+- Suite stays at 1314 / 1 skip.
+
 ## [5.1.1] - 2026-05-22
 
 Two polish fixes for the Nebula graph + a themed cursor across

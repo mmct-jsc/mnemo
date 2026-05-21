@@ -41,19 +41,24 @@ def test_dock_composer_has_architect_toggle() -> None:
     assert "mc-architect" in html, "_chat_composer.html should mark the architect toggle"
 
 
-def test_architect_toggle_only_on_dock_surface() -> None:
-    """v5.0 ships the toggle on the dock only (per design Q3). The
-    page surface gets it as a v5.x convenience expansion."""
+def test_architect_toggle_on_both_surfaces() -> None:
+    """v5.0 shipped the toggle dock-only per design Q3. v5.2.0 is
+    the cross-surface convenience expansion the design-doc S12
+    phased roadmap named -- the toggle now lives on BOTH the dock
+    and the /chat page surface. Same architectMode factory state,
+    same .mc-architect class hook, same behaviour."""
     html = _read(COMPOSER_TMPL)
-    # The toggle must be inside the ``{% if surface == 'dock' %}`` branch.
-    dock_block, _, rest = html.partition("{% else %}")
+    dock_block, _, page_block = html.partition("{% else %}")
     assert "architectMode" in dock_block, (
         "architect toggle must be inside the surface=='dock' branch"
     )
-    page_block = rest
-    assert "architectMode" not in page_block, (
-        "v5.0 doesn't ship the architect toggle on the page surface"
+    assert "architectMode" in page_block, (
+        "v5.2.0: architect toggle must ALSO be on the /chat page surface"
     )
+    # The class hook must appear on both branches so CSS styling is
+    # consistent across surfaces.
+    assert dock_block.count("mc-architect") >= 1
+    assert page_block.count("mc-architect") >= 1
 
 
 # --- chat.js contract ----------------------------------------------------
