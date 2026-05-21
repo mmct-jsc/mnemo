@@ -433,7 +433,7 @@ input[type="checkbox"]:focus-visible {
 }
 input[type="checkbox"]:disabled {
   opacity: 0.5;
-  cursor: not-allowed;
+  cursor: url("cursors/mnem-cursor-not-allowed.svg") 16 16, not-allowed;
 }
 
 /* --- Custom select: themed dropdown trigger. We strip the native
@@ -473,7 +473,7 @@ select option {
 }
 select:disabled {
   opacity: 0.5;
-  cursor: not-allowed;
+  cursor: url("cursors/mnem-cursor-not-allowed.svg") 16 16, not-allowed;
 }
 input[type="search"] {
   font-family: var(--mono);
@@ -489,7 +489,7 @@ button:hover {
   border-color: var(--accent);
   color: var(--accent);
 }
-button:disabled { opacity: 0.5; cursor: progress; }
+button:disabled { opacity: 0.5; cursor: url("cursors/mnem-cursor-progress.svg") 16 16, progress; }
 button.primary {
   background: var(--accent);
   color: var(--bg);
@@ -572,7 +572,7 @@ a:hover { color: var(--accent-hover); }
   color: var(--accent); cursor: pointer; font: inherit;
   text-decoration: none; transition: color var(--transition); }
 .link-button:hover { color: var(--accent-hover); }
-.link-button:disabled { opacity: .5; cursor: progress; }
+.link-button:disabled { opacity: .5; cursor: url("cursors/mnem-cursor-progress.svg") 16 16, progress; }
 
 /* Pill-shape base for future convergence of send/mc-send/chat-jump/
    msg-copy/tool-chip (shape only; no element opts in during v4.0). */
@@ -1037,10 +1037,10 @@ tr:hover td { background: var(--panel); }
 }
 .thumb-btn.busy {
   opacity: 0.6;
-  cursor: progress;
+  cursor: url("cursors/mnem-cursor-progress.svg") 16 16, progress;
 }
 .thumb-btn:disabled {
-  cursor: not-allowed;
+  cursor: url("cursors/mnem-cursor-not-allowed.svg") 16 16, not-allowed;
 }
 
 /* --- Autocomplete primitive --------------------------------------- */
@@ -1648,7 +1648,7 @@ dl.meta dd { margin: 0; color: var(--fg); min-width: 0; overflow-wrap: anywhere;
 .filter-clear:hover { background: var(--accent-soft); }
 .filter-clear.is-disabled {
   color: var(--fg-dim);
-  cursor: not-allowed;
+  cursor: url("cursors/mnem-cursor-not-allowed.svg") 16 16, not-allowed;
   pointer-events: none;
   opacity: 0.6;
 }
@@ -1672,7 +1672,7 @@ dl.meta dd { margin: 0; color: var(--fg); min-width: 0; overflow-wrap: anywhere;
 .page-btn:hover { border-color: var(--accent); color: var(--accent); }
 .page-btn.disabled {
   color: var(--fg-dim);
-  cursor: not-allowed;
+  cursor: url("cursors/mnem-cursor-not-allowed.svg") 16 16, not-allowed;
   border-color: var(--border-soft);
 }
 .page-info {
@@ -4485,7 +4485,7 @@ dl.meta dd { margin: 0; color: var(--fg); min-width: 0; overflow-wrap: anywhere;
 .nebula-gutter {
   grid-row: 1 / 2;
   background: linear-gradient(180deg, transparent 0%, rgba(126, 231, 224, 0.12) 50%, transparent 100%);
-  cursor: col-resize;
+  cursor: url("cursors/mnem-cursor-col-resize.svg") 16 16, col-resize;
   position: relative;
   transition: background 240ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }

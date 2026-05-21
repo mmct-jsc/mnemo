@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
+  <!--
+    mnemo v5.3.0 not-allowed cursor (disabled buttons, blocked
+    actions). Warn-tone halo (var warn #d97757) + a circle with a
+    diagonal slash through it. Hot spot center (16, 16).
+  -->
+  <circle cx="16" cy="16" r="11" fill="rgba(217, 119, 87, 0.10)"/>
+  <circle cx="16" cy="16" r="8" fill="rgba(217, 119, 87, 0.15)"
+          stroke="#d97757" stroke-width="2"/>
+  <line x1="9.5" y1="9.5" x2="22.5" y2="22.5"
+        stroke="#d97757" stroke-width="2" stroke-linecap="round"/>
+</svg>
