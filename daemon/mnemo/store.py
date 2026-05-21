@@ -1864,6 +1864,90 @@ class Store:
                 return r["id"]
         return None
 
+    # --- Usage metering (Phase 3 / Task 2.4) ------------------------------
+
+    def record_usage(
+        self,
+        api_key_id: str,
+        period: str,
+        *,
+        queries: int,
+        tokens: int,
+    ) -> None:
+        """Atomic per-key per-period usage upsert (Phase 3 / Task 2.4).
+
+        Called post-request by the /v1/query metering hook with the
+        delta (default 1 query + the request's tokens_used). The
+        composite primary key ``(api_key_id, period)`` makes this an
+        idempotent UPSERT via SQLite's ``ON CONFLICT DO UPDATE`` --
+        no read-modify-write race even under concurrent requests
+        against the same key.
+
+        ``period`` is the billing-period identifier (``YYYY-MM`` for
+        monthly billing); the metering hook computes it from UTC so
+        DST / timezone drift can't shift attribution.
+        """
+        import time
+
+        now = int(time.time())
+        with self._lock:
+            self.conn.execute(
+                """INSERT INTO usage_period
+                       (api_key_id, period, queries, tokens, updated_at)
+                   VALUES (?, ?, ?, ?, ?)
+                   ON CONFLICT (api_key_id, period) DO UPDATE SET
+                       queries = queries + excluded.queries,
+                       tokens = tokens + excluded.tokens,
+                       updated_at = excluded.updated_at""",
+                (api_key_id, period, queries, tokens, now),
+            )
+            self.conn.commit()
+
+    # --- Quota enforcement (Phase 3 / Task 2.5) ---------------------------
+
+    def check_quota(self, api_key_id: str, period: str) -> tuple[bool, str | None]:
+        """Per-key per-period quota check.
+
+        Returns ``(allowed, reason_if_blocked)``:
+
+        - No ``quota`` row for the key -> ``(True, None)``. Hosted-tier
+          operator can leave keys quota-less for "open billing"
+          (track usage but never reject); the billing report's
+          over_quota stays False because ``COALESCE(q.max_*, 0)`` is
+          treated as "unset" by the >0 guards.
+        - Quota set + ``queries >= max_queries`` or
+          ``tokens >= max_tokens`` -> ``(False, "<reason>")``. The
+          /v1/query handler turns this into a 429 with a
+          ``Retry-After`` header pointing at the start of the next
+          UTC month.
+
+        Strict ``>=`` (not ``>``): the user gets EXACTLY ``max_queries``
+        successful requests before the next one is rejected. Tokens
+        may overshoot the limit by one request's worth (we don't
+        know a request's tokens until it runs); that's acceptable
+        slack for v0.1 and documented in
+        ``docs/hosted/deploying.md``.
+        """
+        with self._lock:
+            q_row = self.conn.execute(
+                "SELECT max_queries, max_tokens FROM quota "
+                "WHERE api_key_id = ? AND period = 'monthly'",
+                (api_key_id,),
+            ).fetchone()
+            u_row = self.conn.execute(
+                "SELECT queries, tokens FROM usage_period WHERE api_key_id = ? AND period = ?",
+                (api_key_id, period),
+            ).fetchone()
+        if q_row is None:
+            return True, None
+        queries = u_row["queries"] if u_row else 0
+        tokens = u_row["tokens"] if u_row else 0
+        if queries >= q_row["max_queries"]:
+            return False, "queries quota exceeded for period"
+        if tokens >= q_row["max_tokens"]:
+            return False, "tokens quota exceeded for period"
+        return True, None
+
     # --- Billing report (Phase 3 / Task 2.6) ------------------------------
 
     def billing_report(self, period: str) -> list[dict]:

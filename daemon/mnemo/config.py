@@ -108,6 +108,15 @@ class Config:
         }
     )
     chat_history_retention_days: int | None = None
+    # Phase 3b / Task 2.3: optional API-key auth on /v1/query.
+    # **False by default** so self-host installs are entirely
+    # unaffected. When True, requests from non-loopback clients
+    # must present a valid `Authorization: Bearer <key>` header;
+    # loopback (127.0.0.1 / ::1 / localhost) stays exempt so the
+    # local UI + CLI + plugin keep working without keys. The
+    # hosted-deployment doc (`docs/hosted/deploying.md`) is the
+    # canonical operator reference for flipping this on.
+    hosted_auth_enabled: bool = False
 
 
 # --- Load / save ----------------------------------------------------------
