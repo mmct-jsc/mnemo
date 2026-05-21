@@ -61,6 +61,32 @@
 * { box-sizing: border-box; }
 [x-cloak] { display: none !important; }
 
+/* v5.1.1: themed custom cursor.
+   Two SVG assets in cursors/ — the default carries a soft teal halo
+   that matches the C1 --accent, and the pointer variant brightens for
+   interactive targets. Relative URL (cursors/...) resolves the same
+   way from /static/app.css in the daemon AND from /app.css in the
+   demo Pages build (the build copies the cursors dir alongside). The
+   ``, auto`` / ``, pointer`` fallback keeps the platform default if
+   a UA refuses the SVG cursor for any reason.
+   Hot spot is the center (16, 16) — see the SVG headers. */
+body {
+  cursor: url("cursors/mnem-cursor.svg") 16 16, auto;
+}
+a, button, [role="button"], summary, label,
+input[type="submit"], input[type="button"], input[type="checkbox"],
+input[type="radio"], select,
+.mc-architect, .mc-copy, .mc-copy-prompt,
+.mc-tab, .demo-chip, .clickable {
+  cursor: url("cursors/mnem-cursor-pointer.svg") 16 16, pointer;
+}
+/* Restore the OS text I-beam for typing surfaces — the custom
+   cursor would obscure caret placement otherwise. */
+input[type="text"], input[type="password"], input[type="email"],
+input[type="search"], input:not([type]), textarea {
+  cursor: text;
+}
+
 /* --- Scrollbar (custom, cross-browser) --------------------------- */
 
 * {
