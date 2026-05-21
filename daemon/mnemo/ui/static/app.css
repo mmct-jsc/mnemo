@@ -633,6 +633,23 @@ a:hover { color: var(--accent-hover); }
   border-color: var(--accent); }
 .mc-architect svg { flex: 0 0 auto; }
 
+/* v5 phase 5: pre-emit local-only warning banner. Sits above the
+   composer in the dock. Amber (not red) -- a hint, not an error.
+   The dismiss control is a plain "x" so screen readers announce
+   "Dismiss" via aria-label. */
+.mc-localonly-warn { display: flex; align-items: center; gap: .4rem;
+  padding: .35rem .55rem; margin: .2rem .25rem .4rem;
+  font-size: .76rem; color: var(--warn);
+  background: rgba(217, 119, 87, 0.08);
+  border: 1px solid rgba(217, 119, 87, 0.3);
+  border-radius: var(--radius); }
+.mc-localonly-warn svg { flex: 0 0 auto; }
+.mc-localonly-warn span { flex: 1 1 auto; line-height: 1.35; }
+.mc-localonly-warn button { background: transparent; border: 0;
+  color: var(--warn); cursor: pointer; font-size: 1rem; padding: 0 .15rem;
+  line-height: 1; }
+.mc-localonly-warn button:hover { color: var(--fg); }
+
 /* C3 (v4.3): dock welcome + suggested-questions (shared
    _chat_examples partial). Dock-scoped + self-sufficient (renders off
    /chat where chat.html's .welcome CSS is absent); compact for the
