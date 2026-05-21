@@ -8,7 +8,6 @@ Full v1 design: [docs/plans/2026-05-09-mnemo-design.md](docs/plans/2026-05-09-mn
 
 ## Hard rules (do not violate)
 
-- **No `Co-Authored-By` trailers on commits.** Ever. Drop the line entirely from commit messages. This applies to every commit on every branch in this repo.
 - **No emojis** in code, docs, or commit messages unless the user explicitly asks for them.
 - Commit messages use conventional prefixes: `feat:` / `fix:` / `chore:` / `docs:` / `test:` / `refactor:`.
 - Use HEREDOC for multi-line commit messages.

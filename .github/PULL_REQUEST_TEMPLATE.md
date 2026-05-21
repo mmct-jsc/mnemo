@@ -14,7 +14,6 @@
 
 ## Hard rules (CONTRIBUTING.md)
 
-- [ ] No `Co-Authored-By` trailers anywhere in commits
 - [ ] No emojis in code, docs, or commit messages (unless explicitly requested)
 - [ ] Conventional commit prefix: `feat:` / `fix:` / `chore:` / `docs:` / `test:` / `refactor:` / `perf:`
 - [ ] Multi-line commit messages used HEREDOC (no `git commit -m "line1\nline2"`)

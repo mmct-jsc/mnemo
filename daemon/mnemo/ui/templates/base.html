@@ -563,15 +563,21 @@
     </a>
 
     <div class="nav-drawer" id="nav-drawer" :class="{ open }">
+    {# v5.4.0: every nav link calls close() so the mobile drawer
+       auto-collapses on click before the page navigates. The
+       new page reads localStorage='0' on init() so the drawer
+       stays hidden -- previously the user had to hand-close it
+       on every nav. Desktop is unaffected (the drawer is
+       display:contents there; open/closed has no visual effect). #}
     <nav>
-      <a href="/"             class="{% if page == 'dashboard' %}active{% endif %}">Dashboard</a>
-      <a href="/nodes-page"        class="{% if page == 'nodes' %}active{% endif %}">Nodes</a>
-      <a href="/graph"        class="{% if page == 'graph' %}active{% endif %}">Nebula</a>
-      <a href="/code"         class="{% if page == 'code' %}active{% endif %}">Code</a>
-      <a href="/chat"         class="{% if page == 'chat' %}active{% endif %}">Chat</a>
-      <a href="/sources-page" class="{% if page == 'sources' %}active{% endif %}">Sources</a>
-      <a href="/audit-page"   class="{% if page == 'audit' %}active{% endif %}">Audit</a>
-      <a href="/settings"     class="{% if page == 'settings' %}active{% endif %}">Settings</a>
+      <a href="/"             @click="close()" class="{% if page == 'dashboard' %}active{% endif %}">Dashboard</a>
+      <a href="/nodes-page"   @click="close()" class="{% if page == 'nodes' %}active{% endif %}">Nodes</a>
+      <a href="/graph"        @click="close()" class="{% if page == 'graph' %}active{% endif %}">Nebula</a>
+      <a href="/code"         @click="close()" class="{% if page == 'code' %}active{% endif %}">Code</a>
+      <a href="/chat"         @click="close()" class="{% if page == 'chat' %}active{% endif %}">Chat</a>
+      <a href="/sources-page" @click="close()" class="{% if page == 'sources' %}active{% endif %}">Sources</a>
+      <a href="/audit-page"   @click="close()" class="{% if page == 'audit' %}active{% endif %}">Audit</a>
+      <a href="/settings"     @click="close()" class="{% if page == 'settings' %}active{% endif %}">Settings</a>
     </nav>
       <span class="help">
         <a href="https://github.com/mmct-jsc/mnemo" target="_blank" rel="noopener">docs</a>

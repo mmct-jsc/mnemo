@@ -26,8 +26,8 @@ from mnemo.store import Store
 # Each tuple: (prompt, predicate, "what we expect")
 QUERIES: list[tuple[str, callable, str]] = [
     (
-        "no co-author trailer in commit messages",
-        lambda t: "commit-style" in t or "co-author" in t,
+        "no emojis in commit messages",
+        lambda t: "commit-style" in t or "emoji" in t,
         "commit-style feedback",
     ),
     (

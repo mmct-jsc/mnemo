@@ -474,7 +474,33 @@ function sourcesPage() {
         const data = await r.json();
         if (data.running) {
           this.running = true;
-          window.toast('A reindex is already in progress on the daemon. Waiting for it to finish...', 'info');
+          // v5.4.0: also surface the progress bar in indeterminate
+          // mode so the user sees that something IS still running.
+          // Previously the bar was hidden on tab re-entry (the
+          // client-only progress object was wiped on page reload)
+          // -- the user clicked reindex, navigated, came back, and
+          // saw nothing happening even though the daemon was busy.
+          // We don't have per-file numbers without re-opening the
+          // SSE (which would 'busy'-out), so the bar shows the
+          // 'reindexing in background' state until _pollReindex
+          // detects completion and reloads.
+          this.progress = {
+            active: true,
+            done: false,
+            idx: 0,
+            total: 0,
+            currentFile: 'reindexing in background...',
+            added: 0,
+            updated: 0,
+            unchanged: 0,
+            removed: 0,
+            errors: [],
+            durationMs: 0,
+          };
+          window.toast(
+            'A reindex is in progress on the daemon. Waiting for it to finish...',
+            'info',
+          );
           this._pollReindex();
         }
       } catch (_) { /* daemon offline; nothing to do */ }

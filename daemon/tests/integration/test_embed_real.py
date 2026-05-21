@@ -28,7 +28,7 @@ def test_dim_is_384(embedder: Embedder) -> None:
 
 
 def test_embed_text_returns_float_vector(embedder: Embedder) -> None:
-    v = embedder.embed_text("Hard rule: no co-author trailers on commits.")
+    v = embedder.embed_text("Hard rule: no emojis in code or commit messages.")
     assert isinstance(v, list)
     assert len(v) == DEFAULT_DIM
     assert all(isinstance(x, float) for x in v)
