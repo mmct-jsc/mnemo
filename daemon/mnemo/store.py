@@ -1713,6 +1713,46 @@ class Store:
             for r in rows
         ]
 
+    # --- ROI summary (Phase 2 / Task 3.4) ---------------------------------
+
+    # Estimated tokens saved per query vs naive RAG. Documented constant;
+    # v0.2 plumbs per-query budget_tokens deltas through the audit log so
+    # this becomes a real measurement.
+    ROI_TOKENS_SAVED_PER_QUERY: int = 200
+
+    def roi_summary(self, project_key: str | None = None) -> dict[str, float | int]:
+        """Aggregate the v0.1 ROI fields from the existing telemetry.
+
+        ``project_key`` is accepted for forward compatibility but is
+        currently a no-op: the ``queries`` table has no project column
+        (v0.2 of this endpoint plumbs it through).
+        """
+        _ = project_key  # forward-compat placeholder
+
+        with self._lock:
+            queries_total = self.conn.execute("SELECT COUNT(*) FROM queries").fetchone()[0]
+            thumbs_up = self.conn.execute(
+                "SELECT COUNT(*) FROM feedback_event WHERE reason = 'thumbs_up'"
+            ).fetchone()[0]
+            thumbs_down = self.conn.execute(
+                "SELECT COUNT(*) FROM feedback_event WHERE reason = 'thumbs_down'"
+            ).fetchone()[0]
+
+        explicit_total = thumbs_up + thumbs_down
+        thumbs_up_ratio = (thumbs_up / explicit_total) if explicit_total > 0 else 0.0
+
+        return {
+            "queries_total": int(queries_total),
+            # Proxy: each thumbs_up = "I didn't have to re-derive
+            # this." v0.2 ties to the inferred-requery detector for
+            # implicit avoidances too.
+            "rederivations_avoided": int(thumbs_up),
+            "tokens_saved_est": int(queries_total) * self.ROI_TOKENS_SAVED_PER_QUERY,
+            "thumbs_up_ratio": float(thumbs_up_ratio),
+            # No retune history table yet; v0.2 lands it.
+            "auto_tune_iterations": 0,
+        }
+
     # --- Vector index (sqlite-vec) ----------------------------------------
 
     def ensure_vec(self) -> None:

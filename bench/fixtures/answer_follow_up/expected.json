@@ -1,0 +1,11 @@
+{
+  "task_id": "answer_follow_up",
+  "spec_task": "T1",
+  "relevant_node_ids": ["mqtt-auth-1", "mqtt-auth-2", "mqtt-auth-3"],
+  "required_keywords_final_turn": ["paho", "mqtt", "connack"],
+  "rubric": {
+    "turn_1": "Surface at least 2 of the 3 corpus nodes; cite each.",
+    "turn_2": "Reference the paho-mqtt + CONNACK testing approach from corpus node mqtt-auth-3. A no-memory baseline must re-query the corpus to find this; a memory-equipped agent should NOT re-query because turn-1's retrieval already covered it."
+  },
+  "rederivation_invariant": "A memory-equipped agent must score lower rederivation_rate than a no-memory baseline on this task. The strict invariant: vanilla.rederivation_rate > mnemo.rederivation_rate."
+}
