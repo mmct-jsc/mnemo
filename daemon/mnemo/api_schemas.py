@@ -294,6 +294,42 @@ class HealthOut(BaseModel):
     embedding_loaded: bool
 
 
+# --- ROI summary (Phase 2 / Task 3.4) -------------------------------------
+
+
+class RoiSummaryOut(BaseModel):
+    """Aggregated ROI telemetry for the dashboard card + the
+    open-benchmark case studies.
+
+    All five fields are non-negative numerics so a fresh install
+    (empty DB) returns a valid response the dashboard can render
+    without special-casing.
+
+    Field semantics (v0.1; v0.2 documented as TODO inline):
+
+    - ``queries_total`` -- COUNT(*) of the ``queries`` audit log.
+    - ``rederivations_avoided`` -- proxy: number of explicit
+      thumbs_up signals (user said "this retrieval was useful, I
+      didn't have to re-derive"). Refinement in v0.2 ties to the
+      inferred-requery detector to capture implicit avoidances.
+    - ``tokens_saved_est`` -- queries_total * 200 (rough per-query
+      saving vs naive RAG). Documented constant; v0.2 plumbs the
+      actual per-query budget_tokens deltas.
+    - ``thumbs_up_ratio`` -- thumbs_up / (thumbs_up + thumbs_down).
+      0.0 when no explicit feedback exists (no division-by-zero
+      blow-up; dashboard renders as "No feedback yet").
+    - ``auto_tune_iterations`` -- count of completed retune passes.
+      v0.1: always 0 (no history table yet); v0.2 lands the
+      ``retune_history`` table.
+    """
+
+    queries_total: int = Field(ge=0)
+    rederivations_avoided: int = Field(ge=0)
+    tokens_saved_est: int = Field(ge=0)
+    thumbs_up_ratio: float = Field(ge=0.0, le=1.0)
+    auto_tune_iterations: int = Field(ge=0)
+
+
 # --- Project resolution + active project (v1.1) ---------------------------
 
 

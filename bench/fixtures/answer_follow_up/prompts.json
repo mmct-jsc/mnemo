@@ -1,0 +1,8 @@
+{
+  "task_id": "answer_follow_up",
+  "spec_task": "T1",
+  "prompts": [
+    "How do we handle MQTT broker auth?",
+    "What's the testing approach for that?"
+  ]
+}
