@@ -689,6 +689,33 @@
         this.error = null;
       },
 
+      // v5.1.0: section-aware copy on architected output. The
+      // prompt-architect skill emits a sectioned markdown block
+      // (Problem / Context / Files / Acceptance / Anti-patterns /
+      // Prompt -- design doc S6); the dock now offers a
+      // ``Copy prompt`` affordance that pulls just the ## Prompt
+      // section for IDEs with tight context budgets (Cursor /
+      // Copilot). The full-message copy stays available for
+      // Claude Code / Continue where the host has the room for
+      // the cited context block too.
+      looksArchitected: function (t) {
+        var s = String(t == null ? '' : t);
+        // The architect skill's output ALWAYS ends with a
+        // ``## Prompt`` section -- that's the paste-ready
+        // deliverable. Looser checks (presence of two
+        // architect-shape headings) help when the model truncates
+        // earlier sections but never the final prompt.
+        return /(^|\n)##\s*Prompt\s*\n/.test(s);
+      },
+      extractPromptSection: function (t) {
+        var s = String(t == null ? '' : t);
+        // Pull the body of the ## Prompt heading: everything from
+        // after the heading line to either the next ##-level
+        // heading or EOF.
+        var m = s.match(/(?:^|\n)##\s*Prompt\s*\n([\s\S]*?)(?:\n##\s|$)/);
+        if (!m) return '';
+        return m[1].trim();
+      },
       copyText: function (t) {
         var s = String(t == null ? '' : t);
         var done = function () {
@@ -865,6 +892,17 @@
         });
         es.addEventListener('tool_result', function (e) {
           var d = JSON.parse(e.data);
+          // v5.1.0: surface the local_only_excluded count from
+          // mnemo_query so the dock's pre-emit warning banner
+          // fires when the prompt-architect skill dropped any
+          // confidential nodes. The field is always present (0
+          // when the filter is off / when the tool wasn't
+          // mnemo_query). Accumulate so multi-query architect
+          // runs aggregate the drops across calls.
+          var r = d && d.result;
+          if (r && typeof r.local_only_excluded === 'number' && r.local_only_excluded > 0) {
+            self.localOnlyExcluded += r.local_only_excluded;
+          }
           self.messages.push({
             key: 'tr' + Date.now(),
             role: 'tool_result',
