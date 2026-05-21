@@ -43,10 +43,16 @@ key_app = typer.Typer(
     "auth flag is on.",
     no_args_is_help=True,
 )
+billing_app = typer.Typer(
+    help="Hosted-tier billing reports. CSV-out so it pipes to your "
+    "spreadsheet / billing system without translation.",
+    no_args_is_help=True,
+)
 app.add_typer(source_app, name="source")
 app.add_typer(node_app, name="node")
 app.add_typer(daemon_app, name="daemon")
 app.add_typer(key_app, name="key")
+app.add_typer(billing_app, name="billing")
 
 
 def _open_store() -> Store:
@@ -685,6 +691,54 @@ def key_revoke(key_id: str) -> None:
             raise typer.Exit(code=1)
     finally:
         store.close()
+
+
+# --- mnemo billing report (Phase 3 / Task 2.6) ----------------------------
+#
+# CSV-out per-key billing report. Columns are stable + documented in
+# docs/hosted/deploying.md so downstream systems can rely on them.
+
+
+@billing_app.command("report")
+def billing_report_cmd(
+    period: str = typer.Option(
+        ...,
+        "--period",
+        help="Billing period in YYYY-MM (e.g. 2026-05). Monthly granularity.",
+    ),
+) -> None:
+    """Emit a CSV billing report for the given period.
+
+    Columns: ``key_name,queries,tokens,quota_queries,quota_tokens,over_quota``.
+    Pipes directly into the billing spreadsheet / CSV-aware tool.
+    Keys with zero usage in the period are included (zero rows).
+    Keys without a quota set show ``0`` for the quota fields +
+    ``over_quota=false``.
+    """
+    import csv
+    import sys
+
+    store = _open_store()
+    try:
+        rows = store.billing_report(period)
+    finally:
+        store.close()
+
+    writer = csv.writer(sys.stdout)
+    writer.writerow(
+        ["key_name", "queries", "tokens", "quota_queries", "quota_tokens", "over_quota"]
+    )
+    for r in rows:
+        writer.writerow(
+            [
+                r["key_name"],
+                r["queries"],
+                r["tokens"],
+                r["quota_queries"],
+                r["quota_tokens"],
+                "true" if r["over_quota"] else "false",
+            ]
+        )
 
 
 def main() -> None:
