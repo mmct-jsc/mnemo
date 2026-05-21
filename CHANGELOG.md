@@ -2,6 +2,54 @@
 
 All notable changes to mnemo are documented here.
 
+## [5.0.1] - 2026-05-22
+
+Hotfix: graph node drag breaks subsequent click-to-focus.
+
+### Bug
+
+User reported on the v5.0.0 live dock: drag a node to a new
+position on `/graph`; then click the same node at its new
+location -- the click is ignored, no focus event fires. The bug
+predates v5.0 (lives in the v4.6 drag handler) but was reported
+against the v5.0.0 build.
+
+### Root cause
+
+`buildPickIndex` (in `daemon/mnemo/ui/static/vendor/nebula-gl.js`)
+bins each node into a uniform world-space grid by its initial
+`(x, y)`. The drag-move handler updates `nodes[i].x/y` in place
+but never re-buckets the node in the spatial index. After the
+drag, the cursor at the node's NEW position computes a different
+grid cell key -- the node isn't in any of the searched buckets
+-- `pick.nearest` returns -1 -- no `clickNode` event fires.
+
+### Fix
+
+The pick index now tracks each node's current cell via a
+`cellOf` Int32Array and exposes a `reindex(id)` method that
+moves a node from its old bucket to the one implied by its
+current `nodes[id].x/y`. The drag-move handler calls
+`pick.reindex(dragId)` immediately after writing the new
+position, BEFORE `invalidate()` so the next frame's hover-pick
+also sees the updated bucket.
+
+Cost: one array `splice` from the old bucket + one push to the
+new -- both O(B) where B is the bucket size (typically much
+less than total). No-op when the cell hasn't crossed a boundary
+(common for sub-cell jitter during a fast drag), so the per-
+frame cost during a continuous drag is dominated by node-position
+writes anyway.
+
+### Tests
+
++4 unit (`daemon/tests/unit/test_pick_reindex_after_drag.py`)
+template-grep asserts pin the structural fix (`reindex` exists +
+is wired to the drag handler + runs before `invalidate()`). A
+live browser test would be more authoritative; the dock has no
+JS test runner today, so the template-grep is the durable
+regression catch.
+
 ## [5.0.0] - 2026-05-22
 
 Mnem the prompt architect. The companion's next chapter: the user
