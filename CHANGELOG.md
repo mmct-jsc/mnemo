@@ -2,6 +2,49 @@
 
 All notable changes to mnemo are documented here.
 
+## [5.5.1] - 2026-05-22
+
+Hotfix found while live-verifying the v5.5.0 Claude Desktop mount.
+
+### Bug fixes
+
+**Cold-embedder timeout on first `mnemo_query`.** Each MCP host
+(Claude Desktop / Cursor / Windsurf / Zed / Continue) spawns its
+own `mnemo mcp` subprocess per conversation. That subprocess held
+its own `Embedder()` instance which lazy-loaded the
+`all-MiniLM-L6-v2` model (~22 MB) on first query — a ~15 s cold
+load. The MCP client's tool-call timeout was shorter than that,
+so the FIRST `mnemo_query` from any fresh conversation always
+timed out (other tools like `mnemo_list_skills` /
+`mnemo_session_nodes` returned instantly because they don't touch
+the embedder).
+
+Fix: new `prepare_stdio_server()` function in
+`daemon/mnemo/mcp_server.py` eager-loads the embedder during the
+MCP handshake (where there's no client-side timeout pressure).
+`serve_stdio()` now calls `prepare_stdio_server()` instead of
+`build_server()` directly, so warmup runs once per process at
+startup and the first user-facing `mnemo_query` is sub-100 ms
+warm. Warmup is wrapped in try/except — if model load fails
+(no network on first install, sentence-transformers cache
+corruption), the MCP server still serves tool calls; only the
+first `mnemo_query` pays the cold-load cost.
+
+### Tests
+
+`daemon/tests/unit/test_mcp_warmup.py`: four contract tests
+locking the warmup behaviour. Asserts (1) `prepare_stdio_server`
+exists, (2) it returns `(server, ctx)`, (3) the returned ctx's
+embedder `_model` is not None (proving the cold load happened
+during prepare, not deferred), (4) `serve_stdio()`'s source
+references `prepare_stdio_server` so the refactor sticks.
+
+### Anti-goal preserved
+
+No MCP wire-protocol changes; the 26-tool surface contract test
+stays byte-stable. No new dependencies. Behaviour is identical
+for callers — only the timing of the cold load shifts.
+
 ## [5.5.0] - 2026-05-22
 
 MCP substrate reach: four new "5-minute mount" guides + smoke
