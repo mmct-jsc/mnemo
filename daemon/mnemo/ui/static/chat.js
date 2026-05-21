@@ -794,12 +794,17 @@
             : Promise.resolve();
           return pre
             .then(function () {
-              // v5 phase 4: when the dock's architect toggle is ON,
-              // send the skill name through to the phase-3 entry-point
-              // so the skill guidance pre-loads before the model
-              // sees the user text. Default OFF -> identical to v4.x.
+              // v5 phase 4 + v5.2.0: when the architect toggle is ON
+              // on EITHER surface (dock or page), send the skill name
+              // through to the phase-3 entry-point so the skill
+              // guidance pre-loads before the model sees the user
+              // text. v5.0.0 shipped this dock-only per design Q3;
+              // v5.2.0 lifts the surface guard for the cross-surface
+              // convenience expansion the design-doc S12 phased
+              // roadmap named. Default OFF -> identical to v4.x for
+              // any caller who never flips the toggle.
               var body = { text: text };
-              if (self.architectMode && self.surface === 'dock') {
+              if (self.architectMode) {
                 body.use_skill = 'mnemo-prompt-architect';
               }
               return fetch('/v1/chat/' + id + '/message', {
