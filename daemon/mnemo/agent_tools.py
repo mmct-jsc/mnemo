@@ -129,7 +129,11 @@ def _obj(props: dict, required: list[str]) -> dict:
     description=(
         "Hybrid Graph-RAG retrieval over memory + code, ranked and "
         "token-budgeted. Use for broad research. Returns ranked hits "
-        "each with a [mnemo:<id>] citation."
+        "each with a [mnemo:<id>] citation. v5: pass "
+        "``exclude_local_only=true`` when the output will be pasted "
+        "into a foreign LLM (the prompt-architect skill does this); "
+        "the result's ``local_only_excluded`` count tells the UI how "
+        "many confidential nodes were dropped pre-paste."
     ),
     parameters=_obj(
         {
@@ -137,6 +141,16 @@ def _obj(props: dict, required: list[str]) -> dict:
             "limit": {"type": "integer", "default": 8},
             "max_tokens": {"type": "integer", "default": 800},
             "project_key": {"type": ["string", "null"], "default": None},
+            "exclude_local_only": {
+                "type": "boolean",
+                "default": False,
+                "description": (
+                    "When true, nodes flagged ``local_only`` (see v5 design) "
+                    "are filtered from the result set. The count of dropped "
+                    "nodes is exposed as ``local_only_excluded`` on the "
+                    "response so the dock can warn before paste."
+                ),
+            },
         },
         ["prompt"],
     ),
@@ -148,6 +162,7 @@ def _mnemo_query(
     limit: int = 8,
     max_tokens: int = 800,
     project_key: str | None = None,
+    exclude_local_only: bool = False,
 ) -> dict:
     res = retrieve.query(
         ctx.store,
@@ -156,6 +171,7 @@ def _mnemo_query(
         budget_tokens=max_tokens,
         k=limit,
         active_project=project_key,
+        exclude_local_only=exclude_local_only,
     )
     return {
         "hits": [
@@ -173,6 +189,11 @@ def _mnemo_query(
         "intent_tags": res.intent_tags,
         "tokens_used": res.tokens_used,
         "query_id": res.query_id,
+        # v5.1.0: always present (0 when the filter is off). The
+        # dock's SSE handler accumulates this into the factory's
+        # ``localOnlyExcluded`` state so the pre-emit warning
+        # banner can fire on real retrieval data.
+        "local_only_excluded": res.local_only_excluded,
     }
 
 
