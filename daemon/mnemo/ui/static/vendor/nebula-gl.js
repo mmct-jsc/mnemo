@@ -37,6 +37,13 @@
   }
 
   // --- CPU uniform-grid spatial index for picking (world space) ----
+  // v5.0.1: re-bucket support. A drag moves nodes[i].x/y in place;
+  // without re-bucketing the grid bin keeps the node at its ORIGINAL
+  // cell, so a click on the new position computes a different cell
+  // key and misses -- the reported "after drag-drop, can't click
+  // again to focus" bug. The pick index now tracks each node's
+  // current cell and exposes ``reindex(id)`` to move a node from its
+  // old bucket to the one implied by its current ``nodes[id].x/y``.
   function buildPickIndex(nodes) {
     var minx = Infinity, miny = Infinity, maxx = -Infinity, maxy = -Infinity;
     for (var i = 0; i < nodes.length; i++) {
@@ -51,11 +58,17 @@
     var spanx = (maxx - minx) || 1, spany = (maxy - miny) || 1;
     var cw = spanx / cells, ch = spany / cells;
     var grid = {};
+    // cellOf[id*2], cellOf[id*2+1] = (cx, cy) the node currently
+    // lives in. Updated by reindex(id) so removals from the old
+    // bucket are O(B) where B is bucket size (typically << total).
+    var cellOf = new Int32Array(nodes.length * 2);
     function key(cx, cy) { return cx + ':' + cy; }
     for (var j = 0; j < nodes.length; j++) {
-      var cx = Math.floor((nodes[j].x - minx) / cw);
-      var cy = Math.floor((nodes[j].y - miny) / ch);
-      var k = key(cx, cy);
+      var jcx = Math.floor((nodes[j].x - minx) / cw);
+      var jcy = Math.floor((nodes[j].y - miny) / ch);
+      cellOf[j * 2] = jcx;
+      cellOf[j * 2 + 1] = jcy;
+      var k = key(jcx, jcy);
       (grid[k] || (grid[k] = [])).push(j);
     }
     return {
@@ -76,6 +89,28 @@
           }
         }
         return best;
+      },
+      // v5.0.1: re-bucket node ``id`` from its old cell to the cell
+      // implied by its current nodes[id].x/y. Cheap: one array
+      // splice from the old bucket + one push to the new. No-op
+      // when the cell hasn't crossed a boundary (the common case
+      // for sub-cell jitter -- a sequence of pointermove events
+      // during a fast drag).
+      reindex: function (id) {
+        var oldCx = cellOf[id * 2];
+        var oldCy = cellOf[id * 2 + 1];
+        var newCx = Math.floor((nodes[id].x - minx) / cw);
+        var newCy = Math.floor((nodes[id].y - miny) / ch);
+        if (oldCx === newCx && oldCy === newCy) return;
+        var oldBucket = grid[key(oldCx, oldCy)];
+        if (oldBucket) {
+          var idx = oldBucket.indexOf(id);
+          if (idx >= 0) oldBucket.splice(idx, 1);
+        }
+        cellOf[id * 2] = newCx;
+        cellOf[id * 2 + 1] = newCy;
+        var newKey = key(newCx, newCy);
+        (grid[newKey] || (grid[newKey] = [])).push(id);
       },
     };
   }
@@ -903,6 +938,13 @@
           nodes[dragId].y = w.y;
           posArr[dragId * 2] = w.x;
           posArr[dragId * 2 + 1] = w.y;
+          // v5.0.1: re-bucket the dragged node in the spatial index
+          // so the next pick (the click after release) finds the
+          // node at its NEW position. Without this, the grid bin
+          // still references the OLD cell and pick.nearest at the
+          // new cursor location returns -1 -- the reported "after
+          // drag-drop, can't click to focus again" bug.
+          pick.reindex(dragId);
           posBuf({ data: posArr });
           rebuildEdges();
           edgeBuf({ data: edgePos });
