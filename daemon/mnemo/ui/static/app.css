@@ -617,6 +617,22 @@ a:hover { color: var(--accent-hover); }
 .mnem-chat .mc-turn:hover .bm-star, .mnem-chat .bm-star.on { opacity: 1; }
 .mnem-chat .bm-star.on, .mnem-chat .bm-star:hover { color: var(--accent); }
 
+/* v5 phase 4: dock-only prompt-architect toggle. Lives left of the
+   textarea in .mc-composer; OFF = quiet outlined pill, ON = accent
+   surface so the mode flip is unmistakable. The textarea placeholder
+   also changes so a keyboard user without the toggle in view still
+   sees that they're in architect mode. */
+.mc-architect { display: inline-flex; align-items: center; gap: .25rem;
+  padding: .2rem .5rem; font-size: .72rem; line-height: 1;
+  background: transparent; color: var(--fg-muted);
+  border: 1px solid var(--border); border-radius: var(--radius-pill);
+  cursor: pointer; transition: background var(--transition),
+  color var(--transition), border-color var(--transition); }
+.mc-architect:hover { color: var(--fg); border-color: var(--accent); }
+.mc-architect.on { background: var(--accent); color: var(--accent-fg);
+  border-color: var(--accent); }
+.mc-architect svg { flex: 0 0 auto; }
+
 /* C3 (v4.3): dock welcome + suggested-questions (shared
    _chat_examples partial). Dock-scoped + self-sufficient (renders off
    /chat where chat.html's .welcome CSS is absent); compact for the
