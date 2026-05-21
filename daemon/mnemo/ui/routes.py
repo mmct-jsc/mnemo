@@ -243,6 +243,11 @@ def mount_ui(
         # Sort the type counts so the bar chart is deterministic.
         sorted_counts = sorted(counts.items(), key=lambda kv: -kv[1])
 
+        # Phase 2 / Task 3.5: ROI summary. Same data as GET /v1/roi/summary
+        # but rendered inline so the dashboard never needs a client-side
+        # fetch (and so the card never flashes empty during page-load).
+        roi = s.roi_summary()
+
         return templates.TemplateResponse(
             request,
             "dashboard.html",
@@ -258,6 +263,7 @@ def mount_ui(
                 recent_nodes=recent_nodes,
                 recent_queries=recent_queries,
                 top_connected=top_with_deg,
+                roi=roi,
                 now=int(time.time()),
             ),
         )
