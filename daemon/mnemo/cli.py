@@ -37,9 +37,16 @@ app = typer.Typer(
 source_app = typer.Typer(help="Manage ingestion sources", no_args_is_help=True)
 node_app = typer.Typer(help="Inspect and edit nodes", no_args_is_help=True)
 daemon_app = typer.Typer(help="Daemon process lifecycle", no_args_is_help=True)
+key_app = typer.Typer(
+    help="Manage hosted API keys (Phase 3). The self-host loopback "
+    "is NOT affected -- keys only matter when the hosted-tier "
+    "auth flag is on.",
+    no_args_is_help=True,
+)
 app.add_typer(source_app, name="source")
 app.add_typer(node_app, name="node")
 app.add_typer(daemon_app, name="daemon")
+app.add_typer(key_app, name="key")
 
 
 def _open_store() -> Store:
@@ -615,6 +622,69 @@ def mcp() -> None:
     from mnemo import mcp_server
 
     mcp_server.serve_stdio()
+
+
+# --- mnemo key {create,list,revoke} (Phase 3 / Task 2.2) ------------------
+#
+# Issuance + lifecycle of hosted-tier API keys. The hosted tier itself
+# (auth on /v1/query, metering, quota enforcement) ships in Tasks 2.3 /
+# 2.4 / 2.5. Self-host installs that never enable hosted mode can
+# ignore this surface entirely -- the schema migration is harmless.
+
+
+@key_app.command("create")
+def key_create(name: str) -> None:
+    """Mint a new API key. The raw key is printed ONCE; copy it now."""
+    store = _open_store()
+    try:
+        raw_key, key_id = store.create_api_key(name)
+        typer.echo("RAW KEY:")
+        typer.echo(f"  {raw_key}")
+        typer.echo(
+            "\n*** IMPORTANT *** copy the raw key NOW. mnemo stores only "
+            "the salted hash; it will NOT be shown again."
+        )
+        typer.echo(f"\nid:   {key_id}")
+        typer.echo(f"name: {name}")
+    finally:
+        store.close()
+
+
+@key_app.command("list")
+def key_list(
+    include_revoked: bool = typer.Option(False, "--include-revoked", help="Show revoked keys too."),
+) -> None:
+    """List API keys. By default excludes revoked keys."""
+    store = _open_store()
+    try:
+        keys = store.list_api_keys(include_revoked=include_revoked)
+        if not keys:
+            typer.echo("(no API keys)")
+            return
+        for k in keys:
+            status = "REVOKED" if k["revoked_at"] else "active"
+            typer.echo(f"{k['id']}  {k['name']}  {status}")
+    finally:
+        store.close()
+
+
+@key_app.command("revoke")
+def key_revoke(key_id: str) -> None:
+    """Revoke an active API key. Idempotent for the not-found /
+    already-revoked case (exits 1 with a hint)."""
+    store = _open_store()
+    try:
+        ok = store.revoke_api_key(key_id)
+        if ok:
+            typer.echo(f"Revoked: {key_id}")
+        else:
+            typer.echo(
+                f"No active key with id {key_id!r} (not found or already revoked).",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+    finally:
+        store.close()
 
 
 def main() -> None:

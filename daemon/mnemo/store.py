@@ -797,6 +797,17 @@ class Store:
                 "score_components": "TEXT",
             },
         )
+        # Phase 3 / Task 2.2: api_key.salt for per-key salted SHA-256
+        # hashing. Each key has its own random 16-byte salt; verify
+        # iterates the (small) active-key set + recomputes the hash.
+        # Additive migration -- old empty rows (there are none in the
+        # wild yet, but defense-in-depth) get NULL salt.
+        self._ensure_columns(
+            "api_key",
+            {
+                "salt": "TEXT",
+            },
+        )
         # v2.0 phase 1: per-edge uncertainty. Existing v1.x edges back-fill
         # to 1.0 (the column DEFAULT) so retrieval scoring stays
         # bit-for-bit identical until later phases start emitting <1.0
@@ -1752,6 +1763,106 @@ class Store:
             )
             for r in rows
         ]
+
+    # --- API keys (Phase 3 / Task 2.2) ------------------------------------
+
+    @staticmethod
+    def _hash_api_key(salt: str, raw_key: str) -> str:
+        """The salted-SHA-256 the api_key.hash column stores.
+
+        Salt + raw_key concatenated then hashed. Per-key salt means
+        no rainbow table works across keys; small active-key set
+        means the O(N) verify-iteration is acceptable for v0.1.
+        """
+        import hashlib
+
+        return hashlib.sha256((salt + raw_key).encode("utf-8")).hexdigest()
+
+    def create_api_key(self, name: str) -> tuple[str, str]:
+        """Mint a new api_key. Returns ``(raw_key, key_id)``.
+
+        The raw_key is NEVER persisted -- only its salted hash. The
+        caller (the issuance CLI in :mod:`mnemo.cli`) prints the raw
+        key ONCE to stdout and never sees it again.
+
+        ``name`` is a free-form human label (e.g.
+        ``"design-partner-A"``) used by ``list_api_keys`` + the
+        billing report.
+        """
+        import secrets
+        import time
+        import uuid
+
+        raw_key = secrets.token_urlsafe(32)
+        salt = secrets.token_hex(16)
+        h = self._hash_api_key(salt, raw_key)
+        key_id = uuid.uuid4().hex
+        now = int(time.time())
+        with self._lock:
+            self.conn.execute(
+                "INSERT INTO api_key (id, hash, salt, name, created_at) VALUES (?, ?, ?, ?, ?)",
+                (key_id, h, salt, name, now),
+            )
+            self.conn.commit()
+        return raw_key, key_id
+
+    def list_api_keys(self, *, include_revoked: bool = False) -> list[dict]:
+        """List api_keys, newest-created first.
+
+        Default excludes revoked keys; ``include_revoked=True`` shows
+        everything (billing CLI uses this to attribute usage to keys
+        that were active during a billing period but revoked since).
+        Raw keys and hashes are intentionally NOT returned.
+        """
+        where = "" if include_revoked else "WHERE revoked_at IS NULL"
+        with self._lock:
+            rows = self.conn.execute(
+                f"SELECT id, name, created_at, revoked_at FROM api_key "
+                f"{where} ORDER BY created_at DESC, id ASC"
+            ).fetchall()
+        return [
+            {
+                "id": r["id"],
+                "name": r["name"],
+                "created_at": r["created_at"],
+                "revoked_at": r["revoked_at"],
+            }
+            for r in rows
+        ]
+
+    def revoke_api_key(self, key_id: str) -> bool:
+        """Mark a key as revoked. Returns True if a row was updated
+        (the key was active before this call); False if the key does
+        not exist OR was already revoked. Idempotent."""
+        import time
+
+        now = int(time.time())
+        with self._lock:
+            cur = self.conn.execute(
+                "UPDATE api_key SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL",
+                (now, key_id),
+            )
+            self.conn.commit()
+        return cur.rowcount > 0
+
+    def verify_api_key(self, raw_key: str) -> str | None:
+        """Validate a raw key against the active-key set.
+
+        Returns the ``api_key.id`` on a match; None otherwise. O(N)
+        in the number of ACTIVE keys (revoked keys are skipped at the
+        SQL level via the WHERE clause). Acceptable for the v0.1
+        hosted tier; v0.2 may add an indexed prefix-lookup hint.
+        """
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT id, hash, salt FROM api_key WHERE revoked_at IS NULL"
+            ).fetchall()
+        for r in rows:
+            if r["salt"] is None:
+                continue  # NULL-salt legacy row (none in the wild today)
+            if self._hash_api_key(r["salt"], raw_key) == r["hash"]:
+                return r["id"]
+        return None
 
     # --- ROI summary (Phase 2 / Task 3.4) ---------------------------------
 
