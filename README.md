@@ -7,6 +7,7 @@
 [![Tests](https://img.shields.io/badge/tests-1245_passing-brightgreen.svg)](daemon/tests/)
 [![ruff](https://img.shields.io/badge/lint-ruff-orange.svg)](https://github.com/astral-sh/ruff)
 [![Live demo](https://img.shields.io/badge/live-demo-7ee7e0.svg)](https://mmct-jsc.github.io/mnemo/)
+[![Buy me a coffee](https://img.shields.io/badge/buy_me_a_coffee-FF5E5B?logo=ko-fi&logoColor=white)](https://ko-fi.com/quoctrantrung)
 
 **▶ [Live interactive demo](https://mmct-jsc.github.io/mnemo/)** — the real Nebula galaxy renderer on a seeded synthetic graph of mnemo's own architecture (static, no backend).
 
