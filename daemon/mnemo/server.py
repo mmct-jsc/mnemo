@@ -83,6 +83,7 @@ from mnemo.api_schemas import (
     ReindexReportSectionsOut,
     RetuneIn,
     RetuneReportOut,
+    RoiSummaryOut,
     SettingsOut,
     SourceIn,
     SourceOut,
@@ -1184,6 +1185,24 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
     @v1.get("/audit", response_model=list[QueryAuditOut])
     def audit(limit: int = 50, s: Store = Depends(get_store)) -> list[QueryAuditOut]:
         return [QueryAuditOut.from_query(q) for q in s.recent_queries(limit=limit)]
+
+    # --- ROI summary (Phase 2 / Task 3.4) --------------------------------
+    #
+    # Public ROI surface for the dashboard card (Task 3.5), the open
+    # benchmark case studies (Task 3.6), and the sponsor application's
+    # "traction" section (Task 1.7). The five fields are locked by
+    # ``test_roi_summary_endpoint.py``; updating them is a wire-contract
+    # change documented in docs/integrations/wire-schema.md.
+
+    @v1.get("/roi/summary", response_model=RoiSummaryOut)
+    def roi_summary(
+        project: str | None = None,
+        s: Store = Depends(get_store),
+    ) -> RoiSummaryOut:
+        """Aggregated ROI telemetry. ``project`` is accepted for
+        forward compatibility (v0.2 plumbs it through the queries
+        table); v0.1 always returns global counts."""
+        return RoiSummaryOut(**s.roi_summary(project_key=project))
 
     # --- Feedback (v1.2 phase 1) -----------------------------------------
 

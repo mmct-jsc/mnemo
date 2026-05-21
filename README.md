@@ -101,6 +101,17 @@ mnemo's MCP server (`mnemo mcp`, stdio) is provider-neutral — same 26-tool sur
 
 See **[docs/integrations/](docs/integrations/README.md)** for the full index, the selection rubric, and the deferred picks (Continue, Zed, Gemini CLI, LangGraph) with the rationale for each defer.
 
+## Benchmark
+
+The [**agent-memory benchmark**](docs/benchmark/agent-memory-spec-v0.md) (CC-BY-4.0) is mnemo's reproducible eval for typed Graph-RAG agent memory — the missing layer every modern AI coding agent reinvents in private. v0 defines 8 tasks (T1 follow-up → T8 budget compliance), 4 metrics (re-derivation rate, tokens-to-answer, citation precision, answer correctness), and 2 reference baselines (vanilla no-memory + reference mnemo).
+
+- Spec: [docs/benchmark/agent-memory-spec-v0.md](docs/benchmark/agent-memory-spec-v0.md)
+- Harness (MIT): [`bench/`](bench/README.md) — `Memory` Protocol, `run_task`, fixtures, baseline agents.
+- First case study: [docs/case-studies/2026-05-mnemo-self-host.md](docs/case-studies/2026-05-mnemo-self-host.md) — real numbers from the dogfooded mnemo install.
+- Live ROI on every install: `GET /v1/roi/summary` + the dashboard "ROI summary" card.
+
+External implementations welcome — open an issue with a new task / metric / non-mnemo agent.
+
 ## Slash commands
 
 - `/mnemo-query <text>` — ad-hoc memory query
