@@ -26,6 +26,43 @@
   </a>
 </section>
 
+<section class="dash-card dash-roi">
+  <div class="dash-card-head">
+    <h2>ROI summary</h2>
+    <a class="link-button" href="/audit-page">audit log</a>
+  </div>
+  <ul class="roi-stats">
+    <li>
+      <span class="stat-num">{{ roi.queries_total }}</span>
+      <span class="stat-label">queries served</span>
+    </li>
+    <li>
+      <span class="stat-num">{{ roi.rederivations_avoided }}</span>
+      <span class="stat-label">re-derivations avoided</span>
+      <span class="hint">thumbs-up signal</span>
+    </li>
+    <li>
+      <span class="stat-num">{{ roi.tokens_saved_est }}</span>
+      <span class="stat-label">tokens saved (est.)</span>
+      <span class="hint">vs naive RAG</span>
+    </li>
+    <li>
+      {% if roi.thumbs_up_ratio > 0.0 %}
+        <span class="stat-num">{{ (roi.thumbs_up_ratio * 100) | round | int }}%</span>
+        <span class="stat-label">thumbs-up ratio</span>
+      {% else %}
+        <span class="stat-num">&mdash;</span>
+        <span class="stat-label">no feedback yet</span>
+      {% endif %}
+    </li>
+  </ul>
+  <p class="hint">
+    Aggregated from the audit log + feedback events. The same numbers are
+    exposed at <code>GET /v1/roi/summary</code> for case studies + sponsor
+    applications.
+  </p>
+</section>
+
 <section class="dash-row">
   <div class="dash-card dash-types">
     <div class="dash-card-head">
