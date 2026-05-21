@@ -270,9 +270,14 @@
     "risk": "danger"
   },
   {
-    "description": "Hybrid Graph-RAG retrieval over memory + code, ranked and token-budgeted. Use for broad research. Returns ranked hits each with a [mnemo:<id>] citation. (risk: safe)",
+    "description": "Hybrid Graph-RAG retrieval over memory + code, ranked and token-budgeted. Use for broad research. Returns ranked hits each with a [mnemo:<id>] citation. v5: pass ``exclude_local_only=true`` when the output will be pasted into a foreign LLM (the prompt-architect skill does this); the result's ``local_only_excluded`` count tells the UI how many confidential nodes were dropped pre-paste. (risk: safe)",
     "inputSchema": {
       "properties": {
+        "exclude_local_only": {
+          "default": false,
+          "description": "When true, nodes flagged ``local_only`` (see v5 design) are filtered from the result set. The count of dropped nodes is exposed as ``local_only_excluded`` on the response so the dock can warn before paste.",
+          "type": "boolean"
+        },
         "limit": {
           "default": 8,
           "type": "integer"

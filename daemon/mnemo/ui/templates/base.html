@@ -850,6 +850,25 @@
                          stroke="currentColor" stroke-width="2" stroke-linecap="round"
                          stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
                   </button>
+                  {# v5.1.0: section-aware second copy button for
+                     architect output. Only shown when the bubble
+                     looks architected (has a ## Prompt heading).
+                     Pulls just the prompt section -- useful for
+                     IDEs with tight context budgets. The full-
+                     message mc-copy above stays for Claude Code /
+                     Continue where the cited context is welcome. #}
+                  <button class="mc-copy-prompt" type="button"
+                          x-show="looksArchitected(m.content.text)"
+                          @click="copyText(extractPromptSection(m.content.text || ''))"
+                          title="Copy prompt only"
+                          aria-label="Copy just the Prompt section">
+                    <svg viewBox="0 0 24 24" width="13" height="13" fill="none"
+                         stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                         stroke-linejoin="round" aria-hidden="true">
+                      <path d="M4 4h8M4 9h12M4 14h8M4 19h12"/>
+                      <path d="M16 4l4 4-4 4"/>
+                    </svg>
+                  </button>
                 </div>
               </template>
               <template x-if="m.role === 'tool_call'">
@@ -1382,6 +1401,17 @@
         color var(--transition); }
     .mc-asst-wrap:hover .mc-copy, .mc-copy:focus { opacity: 1; }
     .mc-copy:hover { color: var(--accent); }
+    /* v5.1.0: prompt-only copy on architected output. Sits next to
+       .mc-copy, slightly inset; same hover-reveal pattern so the
+       bubble stays uncluttered until the user moves over it. */
+    .mc-copy-prompt { position: absolute; top: -2px; right: 26px;
+      display: grid; place-items: center; width: 24px; height: 24px;
+      padding: 0; color: var(--fg-dim); background: var(--panel);
+      border: 1px solid var(--border-soft); border-radius: 7px;
+      cursor: pointer; opacity: 0; transition: opacity var(--transition),
+        color var(--transition); }
+    .mc-asst-wrap:hover .mc-copy-prompt, .mc-copy-prompt:focus { opacity: 1; }
+    .mc-copy-prompt:hover { color: var(--accent); }
 
     /* scroll-to-latest (floats just above the composer) */
     .mc-jump { position: absolute; left: 50%; bottom: 58px;
