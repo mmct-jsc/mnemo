@@ -14,12 +14,22 @@ lazily-imported wiring.
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 from mnemo import paths
 from mnemo.agent_tools import TOOLS, ToolContext
 
-__all__ = ["ToolContext", "tool_list", "call_tool", "build_server", "serve_stdio"]
+__all__ = [
+    "ToolContext",
+    "tool_list",
+    "call_tool",
+    "build_server",
+    "prepare_stdio_server",
+    "serve_stdio",
+]
+
+log = logging.getLogger(__name__)
 
 
 def tool_list() -> list[dict]:
@@ -94,13 +104,55 @@ def build_server(ctx: ToolContext | None = None) -> Any:
     return server
 
 
+def prepare_stdio_server() -> tuple[Any, ToolContext]:
+    """Build the MCP server **and eagerly warm the embedder**.
+
+    Returns ``(server, ctx)``. Splits out the synchronous setup so
+    :func:`serve_stdio` stays a thin wrapper around ``anyio.run`` but
+    the warming step is testable without spinning up the stdio
+    JSON-RPC loop.
+
+    v5.5.1 cold-start fix: each MCP host (Claude Desktop / Cursor /
+    Windsurf / Zed / Continue) spawns its own ``mnemo mcp``
+    subprocess per conversation, and that subprocess holds its own
+    :class:`~mnemo.embed.Embedder` instance. The sentence-transformer
+    model load takes ~15s on a cold cache — longer than the typical
+    MCP-client tool-call timeout — so without this warmup, the first
+    ``mnemo_query`` from a fresh conversation always times out. By
+    eager-loading here, the cold load happens during the MCP
+    handshake (no client timeout pressure) and the first user-facing
+    query is sub-100ms warm.
+
+    The warmup is wrapped in ``try/except``: if model load fails for
+    any reason (no network on first install, sentence-transformers
+    cache corruption), we log + continue. The MCP server still serves
+    tool calls; the first ``mnemo_query`` is then the slow path the
+    user would have hit anyway.
+    """
+    ctx = make_context()
+    try:
+        # Trigger Embedder._load() via a no-op embed call. The result
+        # is discarded; we only care about the side-effect of
+        # populating ctx.embedder._model.
+        ctx.embedder.embed_text("warmup")
+        log.info("MCP server: embedder warmed (cold-load complete)")
+    except Exception as exc:  # noqa: BLE001 -- intentional broad catch
+        log.warning(
+            "MCP server: embedder warmup failed (%s); first mnemo_query "
+            "will pay the cold-load cost",
+            exc,
+        )
+    server = build_server(ctx)
+    return server, ctx
+
+
 def serve_stdio() -> None:  # pragma: no cover -- exercised by phase-12 live smoke
     """Run the MCP server over stdio (the transport Cursor / Claude
     Desktop / Codex / Windsurf use)."""
     import anyio
     from mcp.server.stdio import stdio_server
 
-    server = build_server()
+    server, _ctx = prepare_stdio_server()
 
     async def _main() -> None:
         async with stdio_server() as (read, write):
