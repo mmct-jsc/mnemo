@@ -303,6 +303,109 @@ def _chat_provider(state: AppState, name: str):
     return providers.get_provider(name, api_key=api_key)
 
 
+# --- Phase 3b / Task 2.3: api_key auth on /v1/query (flag-gated) ----------
+#
+# Anti-goal: the free local-first plugin stays fully capable. The auth
+# dependency is a no-op when ``Config.hosted_auth_enabled`` is False
+# (default); loopback (127.0.0.1 / ::1 / localhost) stays exempt even
+# when the flag is on, so self-host clients on the same machine never
+# need a key.
+
+LOOPBACK_HOSTS: frozenset[str] = frozenset({"127.0.0.1", "::1", "localhost"})
+
+
+def _seconds_until_next_month_utc() -> int:
+    """Seconds remaining until 00:00 UTC on the 1st of next month.
+    The /v1/query 429 ``Retry-After`` header uses this so quota-
+    blocked clients know exactly when their monthly bucket resets."""
+    import datetime
+
+    now = datetime.datetime.now(datetime.UTC)
+    if now.month == 12:
+        next_month = now.replace(
+            year=now.year + 1,
+            month=1,
+            day=1,
+            hour=0,
+            minute=0,
+            second=0,
+            microsecond=0,
+        )
+    else:
+        next_month = now.replace(
+            month=now.month + 1,
+            day=1,
+            hour=0,
+            minute=0,
+            second=0,
+            microsecond=0,
+        )
+    return max(1, int((next_month - now).total_seconds()))
+
+
+def _is_loopback(host: str | None) -> bool:
+    """True for the well-known loopback identifiers FastAPI / uvicorn
+    surface in ``request.client.host``. Extracted for testability."""
+    return host in LOOPBACK_HOSTS
+
+
+def api_key_or_local(request: Request) -> str | None:
+    """Auth gate for /v1/query (Phase 3b / Task 2.3).
+
+    Returns the validated ``api_key.id`` on a key-authenticated
+    request; None when the request was let through unauthenticated
+    (flag off OR loopback exemption). The returned value is consumed
+    by the Phase 3b metering hook (Task 2.4) for usage attribution.
+
+    Decision matrix:
+
+    - ``hosted_auth_enabled == False`` (default) -> allow, return None.
+      Self-host stays exactly as today.
+    - ``hosted_auth_enabled == True`` AND request from loopback -> allow,
+      return None. Loopback exemption preserves the local UI / CLI /
+      plugin path even on hosted deployments running on the same box.
+    - ``hosted_auth_enabled == True`` AND non-loopback AND no/invalid/
+      revoked key -> 401 Unauthorized with a hint header.
+    - ``hosted_auth_enabled == True`` AND non-loopback AND valid key ->
+      allow, return ``api_key.id``.
+
+    Reads the config fresh per request so flipping the flag on a
+    hosted box takes effect on the next inbound request without
+    needing a restart.
+    """
+    # FastAPI wires the Depends graph; pull the store from app.state
+    # because the get_store helper is closure-captured inside create_app
+    # and we can't import it cleanly into a module-level Depends.
+    state: AppState = request.app.state.mnemo_state
+    assert state.store is not None
+    store: Store = state.store
+
+    cfg = config.load()
+    if not cfg.hosted_auth_enabled:
+        return None
+
+    client_host = request.client.host if request.client else None
+    if _is_loopback(client_host):
+        return None
+
+    auth = request.headers.get("authorization", "")
+    if not auth.startswith("Bearer "):
+        raise HTTPException(
+            status_code=401,
+            detail="Missing Authorization: Bearer <key>; hosted-auth is enabled.",
+            headers={"WWW-Authenticate": 'Bearer realm="mnemo"'},
+        )
+    raw_key = auth[len("Bearer ") :].strip()
+    key_id = store.verify_api_key(raw_key)
+    if key_id is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or revoked API key.",
+            headers={"WWW-Authenticate": 'Bearer realm="mnemo", error="invalid_token"'},
+        )
+    return key_id
+
+
 def create_app(*, store: Store | None = None, embedder: Embedder | None = None) -> FastAPI:
     """Build a FastAPI app. ``store`` and ``embedder`` may be injected for tests.
 
@@ -1043,7 +1146,26 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
         body: QueryIn,
         s: Store = Depends(get_store),
         e: Embedder = Depends(get_embedder),
+        # Phase 3b / Task 2.3: no-op when Config.hosted_auth_enabled is
+        # False (default); loopback stays exempt even when on; returns
+        # the api_key.id when key-authenticated. Self-host loopback
+        # behavior is unchanged.
+        api_key_id: str | None = Depends(api_key_or_local),
     ) -> QueryOut:
+        # Phase 3b / Task 2.5: pre-handler quota enforcement. Reject
+        # the request BEFORE doing the retrieval work so the operator
+        # isn't paying compute for over-quota requests. No-op when
+        # api_key_id is None (flag off / loopback exemption); no-op
+        # when the key has no quota row (open-billing posture).
+        if api_key_id is not None:
+            period = time.strftime("%Y-%m", time.gmtime())
+            allowed, reason = s.check_quota(api_key_id, period)
+            if not allowed:
+                raise HTTPException(
+                    status_code=429,
+                    detail=f"Monthly quota exceeded: {reason}",
+                    headers={"Retry-After": str(_seconds_until_next_month_utc())},
+                )
         # v2.6 phase 10.1: workspaces drive retrieval scope. The resolver
         # walks: explicit -> legacy field -> active workspace -> legacy
         # active_project pointer. See _resolve_query_project.
@@ -1056,6 +1178,15 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
             k=body.k,
             active_project=proj,
         )
+        # Phase 3b / Task 2.4: meter per-key usage when key-authenticated.
+        # api_key_id is None for flag-off OR loopback exemption -- the
+        # self-host loopback path never writes a usage row, preserving
+        # anti-goal #1 (free local-first plugin stays fully free).
+        # Period is UTC YYYY-MM so DST + timezone drift can't shift
+        # billing attribution.
+        if api_key_id is not None:
+            period = time.strftime("%Y-%m", time.gmtime())
+            s.record_usage(api_key_id, period, queries=1, tokens=result.tokens_used)
         return QueryOut.from_result(result)
 
     # --- Projects (v1.1) --------------------------------------------------
