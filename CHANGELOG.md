@@ -2,6 +2,65 @@
 
 All notable changes to mnemo are documented here.
 
+## [5.10.0] - 2026-05-22
+
+macOS + Linux autostart, closing the open invitation in v5.8.1's
+`docs/autostart-windows.md` anti-goal section. All three platforms
+now share one contract: wrapper script polls `/v1/health`, structured
+log file, auto-retry on failure, idempotent install + clean
+uninstall.
+
+### Features
+
+**macOS launchd autostart.** New `scripts/macos-autostart/`:
+- `mnemo-autostart.sh` — bash wrapper polling `/v1/health` for up to
+  60 s, logging to `~/Library/Logs/mnemo/autostart.log`.
+- `com.mnemo.daemon.plist.template` — launchd user agent template
+  with `RunAtLoad=true` + `KeepAlive` (respawns on unexpected exit).
+- `install-launchd.sh` — renders the template into
+  `~/Library/LaunchAgents/com.mnemo.daemon.plist`, calls
+  `launchctl load`. Idempotent.
+- `uninstall-launchd.sh` — `launchctl unload` + rm.
+- `docs/autostart-macos.md` — full operator guide.
+
+**Linux systemd-user autostart.** New `scripts/linux-autostart/`:
+- `mnemo-autostart.sh` — bash wrapper polling `/v1/health` for up to
+  60 s, logging to `$XDG_STATE_HOME/mnemo/logs/autostart.log`.
+- `mnemo-daemon.service.template` — systemd-user unit template with
+  `Type=oneshot` + `RemainAfterExit=true` + `Restart=on-failure`
+  (60 s retry interval).
+- `install-systemd.sh` — renders the template into
+  `~/.config/systemd/user/mnemo-daemon.service`, calls
+  `systemctl --user daemon-reload + enable + start`. Idempotent.
+- `uninstall-systemd.sh` — `systemctl --user stop + disable` + rm.
+- `docs/autostart-linux.md` — full operator guide, plus a note on
+  `loginctl enable-linger` for headless setups.
+
+**Cross-platform parity.** `docs/autostart-windows.md`'s anti-goal
+section is replaced by a parity table listing all three platforms +
+their canonical service identifiers (`mnemo-daemon-autostart` /
+`com.mnemo.daemon` / `mnemo-daemon.service`) and the one-liner to
+look each up.
+
+### Tests
+
+- `tests/unit/test_macos_autostart_scripts.py` (7 tests).
+- `tests/unit/test_linux_autostart_scripts.py` (7 tests).
+
+Same content-based assertions as v5.8.1's
+`test_windows_autostart_scripts.py` (file presence + canonical
+strings); the CI runners can't execute launchctl / systemctl, so the
+test surface verifies structure rather than behaviour. Full suite
+1479 passed / 2 skipped (+14 vs v5.9.0).
+
+### Anti-goals preserved
+
+- The 26-tool MCP surface contract test stays byte-stable.
+- No new daemon dependencies (the new scripts are pure shell).
+- Behaviour identical for existing callers — the new autostart paths
+  are opt-in via the per-platform installer scripts.
+- Windows autostart from v5.8.1 unchanged byte-for-byte.
+
 ## [5.9.0] - 2026-05-22
 
 Closes the v5.4.0 bug 3 carry-forward properly. The "reindex
