@@ -117,13 +117,30 @@ def query(
     budget: int = typer.Option(800, "--budget", help="Token budget"),
     json_out: bool = typer.Option(False, "--json", help="Emit JSON instead of human text"),
     project: str | None = typer.Option(None, "--project", help="Active project key"),
+    exclude_local_only: bool = typer.Option(
+        False,
+        "--exclude-local-only",
+        help=(
+            "Filter out local_only-flagged nodes (frontmatter local_only=true, "
+            "any _private path segment, or [LOCAL ONLY] body marker). Use "
+            "this when the retrieval result will be pasted into a foreign LLM "
+            "(Cursor / Claude Code / Continue / Copilot). The v5.8.0 "
+            "/mnemo-prompt slash command always passes this."
+        ),
+    ),
 ) -> None:
     """One-shot retrieval. Hooks call this to fetch context."""
     store = _open_store()
     try:
         embedder = Embedder()
         result = retrieve.query(
-            store, embedder, prompt, k=k, budget_tokens=budget, active_project=project
+            store,
+            embedder,
+            prompt,
+            k=k,
+            budget_tokens=budget,
+            active_project=project,
+            exclude_local_only=exclude_local_only,
         )
         if json_out:
             typer.echo(

@@ -2,6 +2,57 @@
 
 All notable changes to mnemo are documented here.
 
+## [5.8.0] - 2026-05-22
+
+Third surface for the v5 prompt-architect: the Claude Code slash
+command `/mnemo-prompt`. Plus a CLI flag the slash command needs.
+
+### Features
+
+**`/mnemo-prompt` slash command** (`commands/mnemo-prompt.md`).
+Drives the `mnemo:prompt-architect` skill (defined at
+`skills/mnemo-prompt-architect/SKILL.md`) from inside Claude Code
+so users can architect a paste-ready prompt without leaving the
+IDE. Documents the four-phase flow inline (score confidence →
+expand retrieval → emit sectioned block → citation discipline)
+plus a "Provider-neutrality" section explaining that the skill is
+shipped to every MCP host: Cursor, Claude Desktop, Continue,
+Windsurf, Zed, Gemini CLI, OpenAI Agents SDK. All four surfaces
+(slash command + dock pill + `/chat` pill + `mnemo_run_skill`)
+converge on the same skill definition.
+
+**`mnemo query --exclude-local-only` CLI flag.** Mirrors the same
+flag on the MCP `mnemo_query` tool + the dock's architect-mode
+POST body. The slash command always invokes retrieval with this
+flag set because the architected prompt is paste-bound to a
+foreign LLM and `local_only`-flagged nodes must never reach the
+output.
+
+**Plugin manifest version bump** — `.claude-plugin/plugin.json`
+finally syncs to the daemon's `__version__` (was stuck at 4.6.1).
+
+### Tests
+
+`daemon/tests/unit/test_mnemo_prompt_slash_command.py` — 5 new
+unit tests locking the slash-command + CLI-flag contract:
+- `mnemo-prompt.md` exists with frontmatter (description +
+  argument-hint)
+- Command body references the `mnemo-prompt-architect` skill
+- Command body invokes `--exclude-local-only`
+- `mnemo query --help` exposes `--exclude-local-only`
+- `test_plugin_manifest.py::test_all_slash_commands_present`
+  updated to include `mnemo-prompt` in `expected_stems`
+
+Full suite: **1455 passed / 2 skipped** (+5 vs v5.7.0). Ruff +
+ruff format clean.
+
+### Anti-goal preserved
+
+The slash command is a Claude Code surface, but the underlying
+workflow is provider-neutral (skill shipped to all MCP hosts).
+The 26-tool MCP contract test stays byte-stable; no new wire-
+protocol features.
+
 ## [5.7.0] - 2026-05-22
 
 Substrate reach: Gemini CLI joins the documented MCP-host roster
