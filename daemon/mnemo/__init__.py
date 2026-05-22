@@ -1,3 +1,3 @@
 """mnemo - Local-first knowledge memory system for Claude Code."""
 
-__version__ = "5.9.0"
+__version__ = "5.10.0"

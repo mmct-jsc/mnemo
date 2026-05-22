@@ -114,9 +114,19 @@ When you see a FATAL line, check:
    pid is recoverable via `mnemo daemon stop` (v5.6.0 made stop()
    target the actual listener, not the stale pid-file pid).
 
-## Anti-goal
+## Parallel autostart on macOS / Linux
 
-This file documents Windows-only autostart. macOS / Linux users
-typically wire mnemo into their existing user-service manager (launchd
-on macOS, systemd-user on Linux). PRs welcome for parallel scripts at
-`scripts/macos-autostart/` and `scripts/linux-autostart/`.
+v5.10.0 ships matching scripts for the other two platforms following
+the same contract (wrapper polls `/v1/health`, structured log file,
+auto-retry on failure, idempotent install + clean uninstall):
+
+- **macOS**: `scripts/macos-autostart/` + [docs/autostart-macos.md](autostart-macos.md) (launchd user agent, `KeepAlive` for retry).
+- **Linux**: `scripts/linux-autostart/` + [docs/autostart-linux.md](autostart-linux.md) (systemd-user unit, `Restart=on-failure`).
+
+The canonical service identifiers across platforms:
+
+| Platform | Identifier | Lookup |
+|---|---|---|
+| Windows | `mnemo-daemon-autostart` (Task Scheduler task name) | `Get-ScheduledTask mnemo-daemon-autostart` |
+| macOS | `com.mnemo.daemon` (launchd Label) | `launchctl list \| grep com.mnemo.daemon` |
+| Linux | `mnemo-daemon.service` (systemd-user unit) | `systemctl --user status mnemo-daemon.service` |

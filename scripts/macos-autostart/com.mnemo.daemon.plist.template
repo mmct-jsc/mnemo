@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  mnemo daemon autostart (v5.10.0) - launchd user agent template.
+
+  The install-launchd.sh installer renders this template into
+  ~/Library/LaunchAgents/com.mnemo.daemon.plist by substituting:
+
+    @WRAPPER@        absolute path to scripts/macos-autostart/mnemo-autostart.sh
+    @MNEMO_BIN@      absolute path to the mnemo CLI (e.g. ~/.local/bin/mnemo)
+    @LOG_DIR@        absolute path to ~/Library/Logs/mnemo
+
+  Why launchd over a login item:
+    - Fires before Finder + Dock are ready (login items wait for shell init).
+    - KeepAlive=true respawns the agent on crash / transient failure.
+    - Visible via 'launchctl list | grep mnemo' for diagnosis.
+    - Survives Finder + Dock crash + restart.
+    - Decouples from the per-user login-item registry, which Spotlight + Time
+      Machine occasionally lose track of.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.mnemo.daemon</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>@WRAPPER@</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>MNEMO_BIN</key>
+        <string>@MNEMO_BIN@</string>
+        <key>PATH</key>
+        <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <key>ThrottleInterval</key>
+    <integer>60</integer>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <key>StandardOutPath</key>
+    <string>@LOG_DIR@/launchd-stdout.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>@LOG_DIR@/launchd-stderr.log</string>
+</dict>
+</plist>
