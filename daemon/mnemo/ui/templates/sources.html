@@ -469,32 +469,29 @@ function sourcesPage() {
 
     async _checkReindexStatus() {
       try {
-        const r = await fetch('/v1/reindex/status');
+        // v5.9.0: ?include_progress=1 returns the latest per-file
+        // event from the daemon's reindex loop -- previously this
+        // surface was indeterminate because we didn't have per-file
+        // numbers without re-attaching the SSE (which would 'busy'-
+        // out). Now the bar shows the actual current file + added/
+        // updated/unchanged tallies on tab re-entry.
+        const r = await fetch('/v1/reindex/status?include_progress=1');
         if (!r.ok) return;
         const data = await r.json();
         if (data.running) {
           this.running = true;
-          // v5.4.0: also surface the progress bar in indeterminate
-          // mode so the user sees that something IS still running.
-          // Previously the bar was hidden on tab re-entry (the
-          // client-only progress object was wiped on page reload)
-          // -- the user clicked reindex, navigated, came back, and
-          // saw nothing happening even though the daemon was busy.
-          // We don't have per-file numbers without re-opening the
-          // SSE (which would 'busy'-out), so the bar shows the
-          // 'reindexing in background' state until _pollReindex
-          // detects completion and reloads.
+          const p = data.progress || {};
           this.progress = {
             active: true,
             done: false,
-            idx: 0,
-            total: 0,
-            currentFile: 'reindexing in background...',
-            added: 0,
-            updated: 0,
-            unchanged: 0,
+            idx: p.idx || 0,
+            total: 0,  // total is unknown from the file event; bar stays in indeterminate mode visually
+            currentFile: p.path || 'reindexing in background...',
+            added: p.added || 0,
+            updated: p.updated || 0,
+            unchanged: p.unchanged || 0,
             removed: 0,
-            errors: [],
+            errors: p.errors || [],
             durationMs: 0,
           };
           window.toast(
@@ -509,7 +506,9 @@ function sourcesPage() {
     _pollReindex() {
       const tick = async () => {
         try {
-          const r = await fetch('/v1/reindex/status');
+          // v5.9.0: also poll with include_progress so the per-file
+          // bar updates between SSE-completion + page-reload.
+          const r = await fetch('/v1/reindex/status?include_progress=1');
           if (r.ok) {
             const data = await r.json();
             if (!data.running) {
@@ -517,6 +516,16 @@ function sourcesPage() {
               window.toastAfterReload('Reindex finished', 'success');
               location.reload();
               return;
+            }
+            // Live-update the progress bar with the latest per-file
+            // numbers while the reindex is still running.
+            if (data.progress) {
+              const p = data.progress;
+              this.progress.idx = p.idx || this.progress.idx;
+              this.progress.currentFile = p.path || this.progress.currentFile;
+              this.progress.added = p.added || this.progress.added;
+              this.progress.updated = p.updated || this.progress.updated;
+              this.progress.unchanged = p.unchanged || this.progress.unchanged;
             }
           }
         } catch (_) { /* keep trying */ }
