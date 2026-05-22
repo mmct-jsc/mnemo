@@ -1,5 +1,36 @@
 {
   "prompts": [
-    "fix the MQTT auth bug"
+    {"id": "mqtt-auth-h1", "confidence": "high", "text": "fix the MQTT auth bug"},
+    {"id": "daemon-stop-h1", "confidence": "high", "text": "mnemo daemon stop reports not-running but the port is still bound"},
+    {"id": "mcp-timeout-h1", "confidence": "high", "text": "mnemo_query times out from Claude Desktop on the first call"},
+    {"id": "base-flag-h1", "confidence": "high", "text": "explain how BASE-flagged nodes bypass project isolation in retrieval"},
+    {"id": "mmr-tune-h1", "confidence": "high", "text": "tune the MMR rerank knobs from accumulated thumbs feedback"},
+    {"id": "release-h1", "confidence": "high", "text": "walk me through the phased commit release pipeline for a minor version"},
+    {"id": "docs-ci-h1", "confidence": "high", "text": "CI red on a docs-only commit; the README link test failed"},
+    {"id": "cy-empty-h1", "confidence": "high", "text": "empty canvas tap doesnt deselect in the graph view"},
+    {"id": "pulse-h1", "confidence": "high", "text": "pulse animation lagging again on the cytoscape graph"},
+    {"id": "preview-h1", "confidence": "high", "text": "how should mnemoRenderBody branch the node preview by type"},
+
+    {"id": "mqtt-fail-m1", "confidence": "medium", "text": "MQTT connect is failing intermittently after a reprovision"},
+    {"id": "daemon-orphan-m1", "confidence": "medium", "text": "I think we have a daemon orphan issue again"},
+    {"id": "mcp-tools-m1", "confidence": "medium", "text": "MCP isnt registering my tools the way I expected"},
+    {"id": "retrieve-off-m1", "confidence": "medium", "text": "retrieval feels off lately; results are noisier than I remember"},
+    {"id": "release-struct-m1", "confidence": "medium", "text": "how should I structure my release for the next minor version"},
+    {"id": "ci-fail-m1", "confidence": "medium", "text": "tests failing in CI on some jobs but not others"},
+    {"id": "graph-broken-m1", "confidence": "medium", "text": "graph view feels broken; something is wrong with the interaction layer"},
+    {"id": "preview-render-m1", "confidence": "medium", "text": "preview not rendering correctly for some node types"},
+    {"id": "redact-story-m1", "confidence": "medium", "text": "whats the secret-redaction story for paste-bound output"},
+    {"id": "bind-question-m1", "confidence": "medium", "text": "I have a question about how the daemon binds the listening port"},
+
+    {"id": "fix-it-l1", "confidence": "low", "text": "fix it"},
+    {"id": "wrong-l1", "confidence": "low", "text": "something is wrong"},
+    {"id": "faster-l1", "confidence": "low", "text": "make it faster"},
+    {"id": "broken-l1", "confidence": "low", "text": "broken"},
+    {"id": "no-work-l1", "confidence": "low", "text": "doesnt work"},
+    {"id": "help-l1", "confidence": "low", "text": "help"},
+    {"id": "review-l1", "confidence": "low", "text": "review"},
+    {"id": "stuck-l1", "confidence": "low", "text": "I am stuck"},
+    {"id": "issue-l1", "confidence": "low", "text": "whats the issue"},
+    {"id": "huh-l1", "confidence": "low", "text": "??"}
   ]
 }

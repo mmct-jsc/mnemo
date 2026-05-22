@@ -1,11 +1,266 @@
 {
-  "relevant_node_ids": ["mqtt-auth-1", "mqtt-auth-2", "mqtt-auth-3"],
-  "acceptance_criteria_keywords": [
-    "CONNACK",
-    "paho",
-    "WSS",
-    "do not add Redis"
-  ],
-  "invariant": "mnemo > vanilla on answer_correctness (architected prompt explicitly cites acceptance criteria the raw prompt omits)",
-  "notes": "v5.0 stub fixture (4 nodes, 1 prompt). The full T9 set per the design doc has 30 prompts across high/medium/low confidence; v5.x expands."
+  "invariant": "mnemo > vanilla on aggregate answer_correctness (architected prompt dynamically lifts per-prompt acceptance criteria the raw prompt omits)",
+  "notes": "v5.11.0 fixture (18 nodes, 30 prompts across 10/10/10 confidence tiers, opt-in LLM judge for M4). The v0 stub kept flat top-level relevant_node_ids + acceptance_criteria_keywords; this version keys them per prompt under 'by_prompt'.",
+  "by_prompt": {
+    "mqtt-auth-h1": {
+      "relevant_node_ids": ["mqtt-auth-1", "mqtt-auth-2", "mqtt-auth-3"],
+      "acceptance_criteria_keywords": ["CONNACK", "paho", "WSS", "do not add Redis"],
+      "rubric": [
+        {"name": "names paho-mqtt direct connect probe", "weight": 1.0},
+        {"name": "identifies WSS port-443 path at /api/v1/mqtt-ws", "weight": 1.0},
+        {"name": "warns against re-introducing Redis", "weight": 1.0}
+      ],
+      "expected_clarifications": 0
+    },
+    "daemon-stop-h1": {
+      "relevant_node_ids": ["daemon-1", "daemon-2"],
+      "acceptance_criteria_keywords": ["psutil", "listener", "orphaned"],
+      "rubric": [
+        {"name": "explains os.kill(pid, 0) unreliability on Windows", "weight": 1.0},
+        {"name": "names psutil as the authoritative source for listener pid", "weight": 1.0},
+        {"name": "describes the two-source-of-truth lifecycle", "weight": 1.0}
+      ],
+      "expected_clarifications": 0
+    },
+    "mcp-timeout-h1": {
+      "relevant_node_ids": ["daemon-3"],
+      "acceptance_criteria_keywords": ["prepare_stdio_server", "embedder", "handshake"],
+      "rubric": [
+        {"name": "names prepare_stdio_server as the warmup entry", "weight": 1.0},
+        {"name": "explains the MCP timeout regimes (init long, tools short)", "weight": 1.0}
+      ],
+      "expected_clarifications": 0
+    },
+    "base-flag-h1": {
+      "relevant_node_ids": ["retrieve-1"],
+      "acceptance_criteria_keywords": ["BASE-flag", "project isolation", "universal"],
+      "rubric": [
+        {"name": "explains BASE-flag semantics", "weight": 1.0},
+        {"name": "names the universal-vs-isolated split", "weight": 1.0}
+      ],
+      "expected_clarifications": 0
+    },
+    "mmr-tune-h1": {
+      "relevant_node_ids": ["retrieve-3"],
+      "acceptance_criteria_keywords": ["coordinate-descent", "thumbs", "alpha/beta"],
+      "rubric": [
+        {"name": "names the coordinate-descent tuner", "weight": 1.0},
+        {"name": "links thumbs feedback to subsequent query reweighting", "weight": 1.0}
+      ],
+      "expected_clarifications": 0
+    },
+    "release-h1": {
+      "relevant_node_ids": ["build-1", "build-2"],
+      "acceptance_criteria_keywords": ["phased commits", "conventional prefixes", "release branch", "minor version"],
+      "rubric": [
+        {"name": "names conventional commit prefixes (feat:/fix:/chore:/docs:/test:/refactor:)", "weight": 1.0},
+        {"name": "describes one release branch per minor version policy", "weight": 1.0},
+        {"name": "lists the standard sequence: branch -> commit -> push -> PR -> merge -> tag", "weight": 1.0}
+      ],
+      "expected_clarifications": 0
+    },
+    "docs-ci-h1": {
+      "relevant_node_ids": ["build-3"],
+      "acceptance_criteria_keywords": ["pre-commit verification", "ruff", "pytest", "README"],
+      "rubric": [
+        {"name": "names pre-commit pytest + ruff verification", "weight": 1.0},
+        {"name": "explains that README/docs link tests run against README content", "weight": 1.0}
+      ],
+      "expected_clarifications": 0
+    },
+    "cy-empty-h1": {
+      "relevant_node_ids": ["ui-1"],
+      "acceptance_criteria_keywords": ["evt.target === cy", "isNode", "minified", "capability test"],
+      "rubric": [
+        {"name": "identifies the minified-core obfuscation cause", "weight": 1.0},
+        {"name": "names the capability-test fix (typeof t.isNode !== function)", "weight": 1.0}
+      ],
+      "expected_clarifications": 0
+    },
+    "pulse-h1": {
+      "relevant_node_ids": ["ui-2"],
+      "acceptance_criteria_keywords": ["3+ failed fixes", "architecture", "DOM overlay", "CSS @keyframes"],
+      "rubric": [
+        {"name": "applies the 3-failed-fixes architectural-pivot rule", "weight": 1.0},
+        {"name": "recommends the DOM-overlay + CSS @keyframes pattern", "weight": 1.0}
+      ],
+      "expected_clarifications": 0
+    },
+    "preview-h1": {
+      "relevant_node_ids": ["ui-3"],
+      "acceptance_criteria_keywords": ["mnemoRenderBody", "Prism", "marked", "type"],
+      "rubric": [
+        {"name": "names mnemoRenderBody as the single helper", "weight": 1.0},
+        {"name": "describes the type-branching (code_* -> Prism, commit -> escaped pre, else marked)", "weight": 1.0}
+      ],
+      "expected_clarifications": 0
+    },
+
+    "mqtt-fail-m1": {
+      "relevant_node_ids": ["mqtt-auth-1"],
+      "acceptance_criteria_keywords": ["CONNACK", "paho", "reprovision"],
+      "rubric": [
+        {"name": "suggests a direct paho-mqtt connect probe", "weight": 1.0},
+        {"name": "names CONNACK as the verification signal", "weight": 1.0}
+      ],
+      "expected_clarifications": 0
+    },
+    "daemon-orphan-m1": {
+      "relevant_node_ids": ["daemon-1", "daemon-2"],
+      "acceptance_criteria_keywords": ["orphaned", "listener"],
+      "rubric": [
+        {"name": "names the orphaned-daemon recovery pattern", "weight": 1.0},
+        {"name": "recommends listener-authoritative stop()", "weight": 1.0}
+      ],
+      "expected_clarifications": 0
+    },
+    "mcp-tools-m1": {
+      "relevant_node_ids": ["daemon-3"],
+      "acceptance_criteria_keywords": ["warmup", "embedder", "MCP"],
+      "rubric": [
+        {"name": "diagnoses the cold-load timeout symptom", "weight": 1.0}
+      ],
+      "expected_clarifications": 0
+    },
+    "retrieve-off-m1": {
+      "relevant_node_ids": ["retrieve-2", "retrieve-3"],
+      "acceptance_criteria_keywords": ["MMR", "feedback", "thumbs"],
+      "rubric": [
+        {"name": "recommends checking accumulated feedback signals", "weight": 1.0},
+        {"name": "names the MMR re-rank as a tunable knob", "weight": 1.0}
+      ],
+      "expected_clarifications": 0
+    },
+    "release-struct-m1": {
+      "relevant_node_ids": ["build-2"],
+      "acceptance_criteria_keywords": ["one branch per minor version", "release branch"],
+      "rubric": [
+        {"name": "applies the one-branch-per-minor-version policy", "weight": 1.0}
+      ],
+      "expected_clarifications": 0
+    },
+    "ci-fail-m1": {
+      "relevant_node_ids": ["build-3"],
+      "acceptance_criteria_keywords": ["pre-commit verification", "ruff"],
+      "rubric": [
+        {"name": "suggests running full pytest + ruff locally first", "weight": 1.0}
+      ],
+      "expected_clarifications": 0
+    },
+    "graph-broken-m1": {
+      "relevant_node_ids": ["ui-1", "ui-2"],
+      "acceptance_criteria_keywords": ["cytoscape", "interaction"],
+      "rubric": [
+        {"name": "narrows to cytoscape interaction layer", "weight": 1.0}
+      ],
+      "expected_clarifications": 0
+    },
+    "preview-render-m1": {
+      "relevant_node_ids": ["ui-3"],
+      "acceptance_criteria_keywords": ["mnemoRenderBody", "type"],
+      "rubric": [
+        {"name": "investigates per-type branching in mnemoRenderBody", "weight": 1.0}
+      ],
+      "expected_clarifications": 0
+    },
+    "redact-story-m1": {
+      "relevant_node_ids": ["redact-1"],
+      "acceptance_criteria_keywords": ["redact_text", "safeguards", "paste-bound"],
+      "rubric": [
+        {"name": "names redact_text as the canonical entry", "weight": 1.0},
+        {"name": "explains the paste-bound output policy", "weight": 1.0}
+      ],
+      "expected_clarifications": 0
+    },
+    "bind-question-m1": {
+      "relevant_node_ids": ["policy-1"],
+      "acceptance_criteria_keywords": ["127.0.0.1", "local-first"],
+      "rubric": [
+        {"name": "names 127.0.0.1 as the canonical bind address", "weight": 1.0},
+        {"name": "explains the local-first security rationale", "weight": 1.0}
+      ],
+      "expected_clarifications": 0
+    },
+
+    "fix-it-l1": {
+      "relevant_node_ids": ["daemon-1"],
+      "acceptance_criteria_keywords": ["clarify"],
+      "rubric": [
+        {"name": "requests clarification on which area", "weight": 1.0}
+      ],
+      "expected_clarifications": 2
+    },
+    "wrong-l1": {
+      "relevant_node_ids": ["retrieve-2"],
+      "acceptance_criteria_keywords": ["clarify"],
+      "rubric": [
+        {"name": "requests clarification on which symptom", "weight": 1.0}
+      ],
+      "expected_clarifications": 2
+    },
+    "faster-l1": {
+      "relevant_node_ids": ["daemon-3"],
+      "acceptance_criteria_keywords": ["clarify"],
+      "rubric": [
+        {"name": "requests clarification on which path is slow", "weight": 1.0}
+      ],
+      "expected_clarifications": 2
+    },
+    "broken-l1": {
+      "relevant_node_ids": ["ui-1"],
+      "acceptance_criteria_keywords": ["clarify"],
+      "rubric": [
+        {"name": "requests clarification on which surface is broken", "weight": 1.0}
+      ],
+      "expected_clarifications": 2
+    },
+    "no-work-l1": {
+      "relevant_node_ids": ["ui-2"],
+      "acceptance_criteria_keywords": ["clarify"],
+      "rubric": [
+        {"name": "requests clarification on what is being attempted", "weight": 1.0}
+      ],
+      "expected_clarifications": 2
+    },
+    "help-l1": {
+      "relevant_node_ids": ["retrieve-2"],
+      "acceptance_criteria_keywords": ["clarify"],
+      "rubric": [
+        {"name": "requests clarification on the problem domain", "weight": 1.0}
+      ],
+      "expected_clarifications": 2
+    },
+    "review-l1": {
+      "relevant_node_ids": ["build-1"],
+      "acceptance_criteria_keywords": ["clarify"],
+      "rubric": [
+        {"name": "requests clarification on what to review", "weight": 1.0}
+      ],
+      "expected_clarifications": 2
+    },
+    "stuck-l1": {
+      "relevant_node_ids": ["retrieve-3"],
+      "acceptance_criteria_keywords": ["clarify"],
+      "rubric": [
+        {"name": "requests clarification on where the user is stuck", "weight": 1.0}
+      ],
+      "expected_clarifications": 2
+    },
+    "issue-l1": {
+      "relevant_node_ids": ["daemon-2"],
+      "acceptance_criteria_keywords": ["clarify"],
+      "rubric": [
+        {"name": "requests clarification on the symptom", "weight": 1.0}
+      ],
+      "expected_clarifications": 2
+    },
+    "huh-l1": {
+      "relevant_node_ids": ["mqtt-auth-1"],
+      "acceptance_criteria_keywords": ["clarify"],
+      "rubric": [
+        {"name": "requests clarification on the question", "weight": 1.0}
+      ],
+      "expected_clarifications": 2
+    }
+  }
 }
