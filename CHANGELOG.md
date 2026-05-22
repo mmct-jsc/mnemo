@@ -2,6 +2,48 @@
 
 All notable changes to mnemo are documented here.
 
+## [5.7.0] - 2026-05-22
+
+Substrate reach: Gemini CLI joins the documented MCP-host roster
+alongside the v5.5.0 batch.
+
+### Features
+
+**Gemini CLI mount guide** (`docs/integrations/gemini-cli.md`).
+Follows the v5.5.0 pattern (Claude Desktop / Continue / Windsurf /
+Zed) verbatim. Gemini CLI uses the same `mcpServers` shape as
+Cursor / Claude Desktop / Windsurf in its `~/.gemini/settings.json`
+(workspace-scope `.gemini/settings.json` also works). Documents the
+absolute-path PATH-fallback pattern and the optional `timeout` +
+`trust` keys Gemini CLI's settings schema accepts.
+
+**Smoke test** (`daemon/tests/integration/test_mcp_mount_gemini_cli.py`).
+Parses the first fenced ```json``` block, asserts the mnemo entry
+invokes the `mcp` subcommand, verifies `python -m mnemo.cli mcp
+--help` exits 0. Same shape as the four v5.5.0 mount tests.
+
+### Documentation
+
+- `docs/integrations/PICKS.md` — Gemini CLI row marked **LANDED
+  v5.7.0** with a backlink. Updated strategic-fit copy to reflect
+  the substrate-reach push.
+- `docs/integrations/README.md` — new "v5.7.0 Reach" subsection
+  with Gemini CLI; "all seven documented hosts" promise updated.
+- `README.md` What's-new — v5 chapter's v5.5.0 bullet extended to
+  v5.5.0 + v5.7.0, "seven documented hosts" total.
+
+### Anti-goal preserved
+
+No MCP wire-protocol changes; 26-tool surface contract test stays
+byte-stable. No new dependencies. Every mount still runs the
+identical `mnemo mcp` stdio server.
+
+### Carry-forward (still deferred)
+
+LangGraph is the last unlanded entry in PICKS.md — deferred until
+LangGraph ships native MCP (currently via `langchain-mcp-adapters`,
+an adapter not a native surface).
+
 ## [5.6.0] - 2026-05-22
 
 Port-listener becomes the authoritative source of truth for daemon
