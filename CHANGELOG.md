@@ -2,6 +2,76 @@
 
 All notable changes to mnemo are documented here.
 
+## [5.6.0] - 2026-05-22
+
+Port-listener becomes the authoritative source of truth for daemon
+lifecycle. Closes the recurrent orphaned-daemon class of bug
+(v3.2 gotcha #32, v5.5.0 lesson #93) that bit three times in a
+single session.
+
+### Bug fixes
+
+**Orphaned daemon recovery (the v3.2 gotcha #32 / v5.5.0 lesson #93
+loop).** `is_alive(pid)` uses `os.kill(pid, 0)` which on Windows
+returns False for live processes in some edge cases (signal-0
+behavior differs from POSIX; process privileges + Python's signal
+mapping interact). When `is_alive` lies, `daemon.status()` reports
+stale, `daemon.stop()` cleans up the pid file and reports
+"daemon not running", and the actually-listening process becomes
+an orphan that mnemo can no longer manage. Manual workaround was
+`Get-NetTCPConnection`/`Stop-Process`.
+
+Fix: new `_listener_pid_for_port(port)` helper in
+`daemon/mnemo/daemon.py` uses `psutil.net_connections()` to find
+the actual port owner. `status()` now treats the listener pid as
+authoritative — when the pid file disagrees or is missing,
+status returns `running=True` with the listener pid and
+`orphaned=True`. `stop()` terminates the listener pid (not just
+the pid-file pid), recovering the orphan automatically. `start()`
+gains a post-spawn cross-check that the newly-listening pid is
+the spawned daemon's.
+
+### Features
+
+`DaemonStatus.orphaned: bool` — new attribute, defaults False
+for back-compat. True when the pid file disagrees with reality
+(or is missing while something IS bound). CLI status command can
+warn the user when this is set.
+
+### Dependencies
+
+Adds **psutil >= 6.1** for cross-platform port-listener
+enumeration. Replaces the unreliable `os.kill(pid, 0)` Windows
+path. Wheels available for all CI platforms (py3.11/12/13 on
+linux/macos/windows).
+
+### Tests
+
+`daemon/tests/unit/test_daemon_orphan_detection.py` — 5 new unit
+tests locking the orphan-detection contract:
+- `_listener_pid_for_port` returns None for unused port
+- `_listener_pid_for_port` returns os.getpid() when test binds a
+  real socket
+- `DaemonStatus.orphaned` defaults False
+- `status()` detects orphan when pid file and listener disagree
+- `status()` detects orphan when pid file missing but port bound
+
+`tests/conftest.py::isolated_mnemo_home` fixture now auto-stubs
+`_listener_pid_for_port` to None so pid-file-based lifecycle
+tests don't see real OS-level daemons on :7373. Three existing
+daemon tests updated to mock the listener to match their pid-file
+fakes (so they test the v5.6.0 semantics correctly).
+
+Full suite: **1447 passed / 2 skipped** (+5 vs v5.5.1). Ruff +
+ruff format clean.
+
+### Anti-goal preserved
+
+No MCP wire-protocol changes; 26-tool surface contract test
+stays byte-stable. Behaviour is identical for callers in the
+healthy path (pid file agrees with listener); only the
+recovery semantics improve.
+
 ## [5.5.1] - 2026-05-22
 
 Hotfix found while live-verifying the v5.5.0 Claude Desktop mount.
