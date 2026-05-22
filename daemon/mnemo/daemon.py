@@ -78,8 +78,14 @@ def _listener_pid_for_port(port: int) -> int | None:
     bound. See v3.2 gotcha #32 / v5.5.0 lesson #93 for the recurrent
     orphan bug this fixes.
 
-    Implementation: ``psutil.net_connections(kind='inet')`` is the
-    cleanest cross-platform path (vs parsing ``netstat -ano``).
+    Implementation: iterate ``psutil.process_iter()`` and check each
+    process's own ``net_connections()``. This is slower than the
+    system-wide ``psutil.net_connections()`` (~50ms with ~500
+    processes) but works without elevated privileges on every
+    supported platform — macOS in particular restricts system-wide
+    socket enumeration to root since 10.14. Mnemo's daemon CLI runs
+    as a regular user, so the portable path is the right default.
+
     Returns None on any error so callers can fall back to the pid
     file gracefully — never raises into the daemon lifecycle path.
     """
@@ -88,14 +94,21 @@ def _listener_pid_for_port(port: int) -> int | None:
     except ImportError:  # pragma: no cover -- listed as a dep, but be defensive
         return None
     try:
-        for conn in psutil.net_connections(kind="inet"):
-            if conn.status != psutil.CONN_LISTEN:
+        for proc in psutil.process_iter(["pid"]):
+            try:
+                for conn in proc.net_connections(kind="inet"):
+                    if conn.status != psutil.CONN_LISTEN:
+                        continue
+                    laddr = conn.laddr
+                    if not laddr or laddr.port != port:
+                        continue
+                    return proc.info["pid"]
+            except (psutil.AccessDenied, psutil.NoSuchProcess):
+                # Skip processes we can't introspect (other users,
+                # gone-since-iter-started); they're definitively not
+                # our daemon either way.
                 continue
-            laddr = conn.laddr
-            if not laddr or laddr.port != port:
-                continue
-            return conn.pid
-    except (psutil.AccessDenied, OSError):  # pragma: no cover -- permission / xnu edge
+    except (psutil.AccessDenied, OSError):  # pragma: no cover -- top-level safety net
         return None
     return None
 
