@@ -2,6 +2,85 @@
 
 All notable changes to mnemo are documented here.
 
+## [5.11.0] - 2026-05-22
+
+T9 benchmark expansion. The agent-memory-spec-v0 fixture for the
+prompt-architect task grows from the v0 stub (4 corpus nodes + 1
+prompt) to the v0.1 surface promised in the spec (18 corpus nodes
++ 30 prompts across 10/10/10 confidence tiers + per-prompt
+rubric + opt-in LLM judge for M4).
+
+### Features
+
+**30-prompt fixture across confidence tiers.** New
+`bench/fixtures/prompt_architect/{corpus.jsonl,prompts.json,expected.json}`:
+- 18 corpus nodes spanning 6 thematic clusters (MQTT auth /
+  daemon lifecycle / retrieval / build / UI / policy).
+- 30 prompts: 10 high-confidence + 10 medium-confidence + 10
+  low-confidence. The architect's confidence-heuristic +
+  clarification budget become visible at this scale — low-tier
+  prompts carry `expected_clarifications >= 1` so future architect
+  agents can train/evaluate against the signal.
+- Per-prompt metadata under `expected.json["by_prompt"]`:
+  `relevant_node_ids`, `acceptance_criteria_keywords`,
+  `rubric` (for LLM judge), `expected_clarifications`.
+
+**Per-prompt scoring + aggregation.**
+`bench/agent_memory_bench/tasks/prompt_architect.py` adds:
+- `PromptSpec` dataclass replacing the v0 stub's bare-string
+  prompts.
+- `score_prompt(spec, output, judge=...)` per-prompt scorer.
+- `score_aggregate(fixture, outputs, judge=...)` aggregator (mean
+  M4 + M3 across all 30 prompts; M2 summed from per-prompt
+  lengths).
+- `run(...)` collects per-prompt outputs into a JSON-encoded
+  `TaskResult.output` so downstream auditors can inspect
+  individual prompt answers.
+
+**Opt-in LLM judge for M4.** New `bench/agent_memory_bench/judge.py`:
+- `LLMJudge` class grades each rubric criterion 0.0-1.0 via Claude
+  (default `claude-sonnet-4-6`); returns mean per-criterion score.
+- `judge_from_env()` returns `LLMJudge` when both
+  `MNEMO_BENCH_LLM_JUDGE=1` AND `ANTHROPIC_API_KEY` are set AND
+  the optional `anthropic` package is installed. Otherwise returns
+  `None` and per-prompt scoring falls back to keyword matching
+  (the CI default + no-extras path).
+- Graceful failure: any API/parse error returns 0.0 + records to
+  `rationale_log` for audit; the benchmark run doesn't crash.
+- New optional dep group `[llm-judge]` in `bench/pyproject.toml`:
+  `pip install agent-memory-bench[llm-judge]` to enable.
+
+### Tests
+
+- `bench/tests/test_prompt_architect_v5_11.py` — 15 tests locking
+  the new fixture shape (30 prompts, balanced tiers, per-prompt
+  expected.json), the new scorer (`score_aggregate` perfect-output
+  ceiling + vanilla floor), the locked invariant at aggregate
+  scale, and the LLM judge opt-in contract.
+- `bench/tests/test_prompt_architect.py` (the v0 stub) deleted —
+  fully superseded by the v5.11 test file.
+
+Bench suite: 27 passed / 1 skipped (was 12/1 in v5.10.0).
+
+### Locked invariant survives
+
+The strict invariant — `mnemo.answer_correctness > vanilla.answer_correctness`
+— still holds AT AGGREGATE across all 30 prompts. (Per-prompt
+invariant is weaker: a single low-confidence prompt where both
+arms score zero is acceptable; aggregate is what locks the
+substrate framing.)
+
+### Anti-goals preserved
+
+- 26-tool MCP surface contract test stays byte-stable.
+- No new daemon dependencies (the bench is a sibling package; the
+  Anthropic SDK is an optional extra of the bench, not the daemon).
+- Behaviour identical for existing daemon callers; the bench
+  package surface is the only thing that changed.
+- Backward-compat `score(fixture, output)` shim retained so older
+  test callers still work; the v0 stub test file deletion is the
+  only breaking change.
+
 ## [5.10.0] - 2026-05-22
 
 macOS + Linux autostart, closing the open invitation in v5.8.1's

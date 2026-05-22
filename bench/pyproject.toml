@@ -12,10 +12,18 @@ requires-python = ">=3.11"
 dependencies = []
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0"]
+dev = ["pytest>=8.0", "ruff>=0.15"]
 # mnemo extra pulls the optional client deps for agent_mnemo when it
 # lands in Task 3.3.
 mnemo = ["httpx>=0.27"]
+# llm-judge extra (v5.11.0) pulls Anthropic SDK for the opt-in M4
+# rubric judge in ``agent_memory_bench.judge``. Default scoring stays
+# keyword-based so the core remains dependency-free for external
+# implementers. Enable via:
+#   pip install agent-memory-bench[llm-judge]
+#   export MNEMO_BENCH_LLM_JUDGE=1
+#   export ANTHROPIC_API_KEY=sk-...
+llm-judge = ["anthropic>=0.40"]
 
 [build-system]
 requires = ["hatchling"]
