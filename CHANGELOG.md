@@ -2,6 +2,67 @@
 
 All notable changes to mnemo are documented here.
 
+## [5.8.1] - 2026-05-22
+
+Production-grade Windows autostart. Replaces the v5.0-era
+Startup-folder `.vbs` (fire-and-forget, no observability) with a
+Task Scheduler entry + health-probe wrapper + structured logs.
+
+### Why this lands
+
+User reported "daemon doesn't auto-run on startup". Investigation
+(systematic-debugging Phase 1) showed the daemon DID start — 47 s
+after boot, via the `.vbs` — but the gap between logon and "daemon
+listening" was wide enough that Claude Desktop / `mnemo daemon
+status` queries inside that window appeared to show "not running",
+and the `.vbs` had no way to surface failures if a transient
+problem (D: drive not mounted, Python env cold) kept the daemon
+down.
+
+### Features
+
+**Task Scheduler autostart** (`scripts/windows-autostart/`).
+
+- `mnemo-autostart.ps1` — the wrapper. Spawns `mnemo daemon
+  start`, polls `/v1/health` for up to 60 s, logs each attempt to
+  `%APPDATA%\Claude\mnemo\logs\autostart.log`, exits 0 only when
+  the daemon is provably listening.
+- `install-task.ps1` — registers the task: `AtLogOn` trigger
+  (current user), `-RestartCount 3` with 1-minute gap on failure
+  (Task Scheduler's minimum), hidden window, limited run-level
+  (no UAC prompt). Idempotent.
+- `uninstall-task.ps1` — `Unregister-ScheduledTask`. Daemon
+  itself untouched; only the autostart wiring goes.
+- `docs/autostart-windows.md` — install + test + uninstall walk-
+  through, log-format reference, troubleshooting checklist.
+
+**Smoke test verified end-to-end:** with the daemon stopped + port
+clear, `Start-ScheduledTask -TaskName mnemo-daemon-autostart`
+brought the daemon up in 3 s; the log line
+`daemon healthy at http://127.0.0.1:7373/v1/health after 5s`
+confirmed the wrapper's internal probe agreed.
+
+### Tests
+
+`daemon/tests/unit/test_windows_autostart_scripts.py` — 6 contract
+tests asserting:
+- All three PS1 scripts exist
+- Wrapper polls `/v1/health` via `Invoke-WebRequest` / `Invoke-RestMethod`
+- Wrapper spawns the editable-install `mnemo.exe` with `daemon start`
+- Installer uses `Register-ScheduledTask` + `AtLogOn` + `RestartCount`
+- Uninstaller uses `Unregister-ScheduledTask`
+- `docs/autostart-windows.md` references all three scripts + the
+  canonical task name
+
+We don't actually run PowerShell in CI (Linux/macOS runners for
+most jobs); structure assertions catch typo-class regressions.
+
+### Anti-goal preserved
+
+No daemon code changes; 26-tool MCP surface contract test stays
+byte-stable. No new Python dependencies. Pre-v5.8.1 users on
+non-Windows hosts are unaffected.
+
 ## [5.8.0] - 2026-05-22
 
 Third surface for the v5 prompt-architect: the Claude Code slash
