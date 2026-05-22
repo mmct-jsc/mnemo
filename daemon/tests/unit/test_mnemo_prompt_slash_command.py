@@ -24,6 +24,8 @@ Contract this test file locks:
 
 from __future__ import annotations
 
+import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -31,6 +33,14 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[3]
 COMMANDS_DIR = REPO_ROOT / "commands"
 COMMAND_FILE = COMMANDS_DIR / "mnemo-prompt.md"
+
+# Strips ANSI color escape sequences. Typer's --help on Linux / macOS
+# colorizes individual tokens (renders ``--exclude-local-only`` as
+# ``\x1b[1;36m--\x1b[0mexclude\x1b[0m-local-only\x1b[0m``), so a naive
+# ``"--exclude-local-only" in stdout`` check fails there even though
+# the flag IS in the help output. Windows didn't see this in CI
+# because typer detects non-TTY differently on win32 and skips color.
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
 
 def test_mnemo_prompt_command_exists() -> None:
@@ -81,22 +91,27 @@ def test_mnemo_query_cli_accepts_exclude_local_only_flag() -> None:
     The slash command references it; if the flag doesn't exist the
     slash command's invocation fails silently with a typer
     error message instead of returning hits."""
+    # NO_COLOR=1 + TERM=dumb suppresses typer's per-token colorization,
+    # but we strip ANSI defensively too in case the subprocess shell
+    # injects color anyway (Git-Bash on Windows ignores NO_COLOR in some
+    # configs).
+    env = {**os.environ, "NO_COLOR": "1", "TERM": "dumb"}
     proc = subprocess.run(
         [sys.executable, "-m", "mnemo.cli", "query", "--help"],
         capture_output=True,
         text=True,
         timeout=30,
         check=False,
+        env=env,
     )
     assert proc.returncode == 0, (
         f"`mnemo query --help` failed (rc={proc.returncode}).\nstderr: {proc.stderr!r}"
     )
-    # typer's help renders the flag name in either '--exclude-local-only'
-    # or in the option-rendering table. Either way the string must appear.
-    assert "--exclude-local-only" in proc.stdout, (
+    plain = _ANSI_RE.sub("", proc.stdout)
+    assert "--exclude-local-only" in plain, (
         "mnemo query CLI missing --exclude-local-only flag. The "
         "v5.8.0 /mnemo-prompt slash command references this flag; "
         "without it, the retrieval call leaks local_only nodes into "
         "the paste-bound output.\n"
-        f"stdout:\n{proc.stdout}"
+        f"stdout (ANSI-stripped):\n{plain}"
     )
