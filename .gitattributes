@@ -1,0 +1,16 @@
+# Force LF endings for shell scripts + systemd / launchd service files
+# so they run cleanly on Linux + macOS even when committed from Windows
+# checkouts where autocrlf=true would otherwise rewrite to CRLF (which
+# breaks the shebang line: `#!/usr/bin/env bash\r` is parsed as a path
+# to an executable named "bash\r" and fails).
+
+*.sh                text eol=lf
+*.bash              text eol=lf
+*.service           text eol=lf
+*.service.template  text eol=lf
+*.plist             text eol=lf
+*.plist.template    text eol=lf
+
+# PowerShell scripts (Windows-only) keep CRLF — PS 5.1 + 7 read both
+# but native Windows tooling prefers CRLF.
+*.ps1               text eol=crlf

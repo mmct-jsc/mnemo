@@ -1,0 +1,41 @@
+# mnemo daemon autostart (v5.10.0) - systemd user unit template.
+#
+# The install-systemd.sh installer renders this template into
+# ~/.config/systemd/user/mnemo-daemon.service by substituting:
+#
+#   @WRAPPER@        absolute path to scripts/linux-autostart/mnemo-autostart.sh
+#   @MNEMO_BIN@      absolute path to the mnemo CLI (e.g. ~/.local/bin/mnemo)
+#
+# Why systemd-user over .desktop autostart:
+#   - Fires before the desktop session is fully up (.desktop waits for
+#     XDG_AUTOSTART to fan out).
+#   - Restart=on-failure provides automatic recovery from transient
+#     failures (network not yet up, keyring prompt timing out).
+#   - Visible via 'systemctl --user status mnemo-daemon' for diagnosis.
+#   - Survives shell crashes + desktop session restarts.
+#   - Decouples from the per-desktop autostart spec, which different
+#     DEs (GNOME / KDE / XFCE / Sway) implement slightly differently.
+
+[Unit]
+Description=mnemo daemon (local-first knowledge memory for Claude Code)
+Documentation=https://github.com/mmct-jsc/mnemo
+# Wait until the user-session bus is ready; without this the wrapper's
+# log + ~/.local/state writes may race the XDG dirs being mounted.
+After=default.target
+
+[Service]
+Type=oneshot
+# The wrapper script forks mnemo --foreground in the background and
+# polls /v1/health, exiting 0 once the daemon answers. RemainAfterExit
+# keeps the unit "active" after the wrapper exits, so subsequent
+# 'systemctl --user status' reports the autostart as running.
+RemainAfterExit=true
+ExecStart=/bin/bash @WRAPPER@
+Environment=MNEMO_BIN=@MNEMO_BIN@
+# Retry on failure (transient: network not up, keyring prompt timing
+# out, /v1/health probe race).
+Restart=on-failure
+RestartSec=60
+
+[Install]
+WantedBy=default.target
