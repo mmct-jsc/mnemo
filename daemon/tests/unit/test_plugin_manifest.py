@@ -82,6 +82,10 @@ def test_all_slash_commands_present() -> None:
         "mnemo-status",
         "mnemo-hooks",
         "mnemo-show",
+        # v5.8.0: /mnemo-prompt drives the prompt-architect skill from
+        # the slash-command surface; the third surface alongside the
+        # dock pill + MCP mnemo_run_skill path.
+        "mnemo-prompt",
     }
     actual = {p.stem for p in COMMANDS_DIR.glob("*.md")}
     assert expected_stems.issubset(actual), f"missing commands: {expected_stems - actual}"
