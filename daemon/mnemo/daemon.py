@@ -33,6 +33,12 @@ class DaemonStatus:
     pid: int | None
     pid_file_present: bool
     stale: bool  # PID file present but process not alive
+    # v5.6.0: orphan = pid file disagrees with the actual port listener
+    # (or pid file is missing but something IS listening). The pid file
+    # is bookkeeping; the OS port owner is the truth. When orphaned is
+    # True, ``pid`` is the LISTENER pid (the one ``stop()`` must
+    # terminate to recover), regardless of what the pid file said.
+    orphaned: bool = False
 
 
 def read_pid(port: int = DEFAULT_PORT) -> int | None:
@@ -60,16 +66,92 @@ def is_alive(pid: int) -> bool:
     return True
 
 
+def _listener_pid_for_port(port: int) -> int | None:
+    """Return the pid of whichever process is LISTENING on ``port`` on
+    localhost, or None if nothing is bound.
+
+    v5.6.0 source-of-truth for daemon lifecycle: the OS-level port
+    owner is authoritative. ``is_alive(pid)`` lies in some Windows
+    scenarios (``os.kill(pid, 0)`` can return False for live
+    processes when signal-0 hits privilege boundaries), so the pid
+    file alone isn't enough — we cross-check with what's actually
+    bound. See v3.2 gotcha #32 / v5.5.0 lesson #93 for the recurrent
+    orphan bug this fixes.
+
+    Implementation: ``psutil.net_connections(kind='inet')`` is the
+    cleanest cross-platform path (vs parsing ``netstat -ano``).
+    Returns None on any error so callers can fall back to the pid
+    file gracefully — never raises into the daemon lifecycle path.
+    """
+    try:
+        import psutil  # imported here so test collection doesn't depend on it
+    except ImportError:  # pragma: no cover -- listed as a dep, but be defensive
+        return None
+    try:
+        for conn in psutil.net_connections(kind="inet"):
+            if conn.status != psutil.CONN_LISTEN:
+                continue
+            laddr = conn.laddr
+            if not laddr or laddr.port != port:
+                continue
+            return conn.pid
+    except (psutil.AccessDenied, OSError):  # pragma: no cover -- permission / xnu edge
+        return None
+    return None
+
+
 def status(port: int = DEFAULT_PORT) -> DaemonStatus:
-    pid = read_pid(port)
-    if pid is None:
-        return DaemonStatus(running=False, pid=None, pid_file_present=False, stale=False)
-    alive = is_alive(pid)
+    """Authoritative daemon-status view. Port listener wins over pid file.
+
+    Three cases the v5.6.0 logic handles that the v5.5.x logic missed:
+
+    1. pid file says X, ``is_alive(X)`` says dead, but Y IS listening
+       on the port — the v3.2/v5.5.0 orphan scenario. Return
+       running=True, pid=Y, orphaned=True so the CLI can warn and
+       ``stop()`` can target Y.
+    2. pid file missing but Y IS listening — pid file was deleted out
+       of band; daemon is still alive. Return running=True, pid=Y,
+       orphaned=True.
+    3. pid file says X, ``is_alive(X)`` says alive, listener pid is
+       also X — healthy. Return running=True, pid=X, orphaned=False.
+    """
+    pid_in_file = read_pid(port)
+    listener_pid = _listener_pid_for_port(port)
+
+    if listener_pid is not None:
+        # Something IS bound to the port — that's the running daemon
+        # by definition. Pid file may or may not agree.
+        if pid_in_file is not None and pid_in_file == listener_pid:
+            return DaemonStatus(
+                running=True,
+                pid=listener_pid,
+                pid_file_present=True,
+                stale=False,
+                orphaned=False,
+            )
+        # Disagreement: listener exists but pid file points elsewhere
+        # (or pid file is missing). Either way, the listener is the
+        # truth and the bookkeeping is stale.
+        return DaemonStatus(
+            running=True,
+            pid=listener_pid,
+            pid_file_present=pid_in_file is not None,
+            stale=False,
+            orphaned=True,
+        )
+
+    # No listener: daemon truly not running.
+    if pid_in_file is None:
+        return DaemonStatus(
+            running=False, pid=None, pid_file_present=False, stale=False, orphaned=False
+        )
+    # Pid file present but nothing bound — definitively stale.
     return DaemonStatus(
-        running=alive,
-        pid=pid,
+        running=False,
+        pid=pid_in_file,
         pid_file_present=True,
-        stale=not alive,
+        stale=True,
+        orphaned=False,
     )
 
 
@@ -131,7 +213,18 @@ def start(*, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> int:
 
 
 def stop(port: int = DEFAULT_PORT) -> bool:
-    """Stop the daemon if running. Returns True if a daemon was stopped."""
+    """Stop the daemon if running. Returns True if a daemon was stopped.
+
+    v5.6.0: ``status()`` now consults the port-listener as authoritative,
+    so ``s.pid`` is the LISTENER pid when there's an orphan (pid file
+    disagrees with reality). We terminate that pid — recovers the
+    v3.2/v5.5.0 orphan scenarios without manual ``Stop-Process``.
+
+    Wait-for-exit uses the listener probe too: a process pid can be
+    reused by an unrelated process between our SIGTERM and the next
+    poll, so the right "did it exit" check is "is the port still
+    bound" — not "does pid X still exist".
+    """
     s = status(port)
     if not s.running:
         if s.stale:
@@ -139,6 +232,16 @@ def stop(port: int = DEFAULT_PORT) -> bool:
         return False
     pid = s.pid
     assert pid is not None
+    if s.orphaned:
+        log.warning(
+            "daemon at pid %d is orphaned (pid file said %s); terminating the "
+            "actual port :%d listener to recover",
+            pid,
+            paths.pid_file(port).read_text().strip()
+            if paths.pid_file(port).exists()
+            else "<no pid file>",
+            port,
+        )
     try:
         if sys.platform == "win32":
             # On Windows, signal.SIGTERM is mapped to TerminateProcess.
@@ -152,7 +255,11 @@ def stop(port: int = DEFAULT_PORT) -> bool:
     deadline = time.time() + STOP_TIMEOUT_SECONDS
     while time.time() < deadline:
         time.sleep(0.1)
-        if not is_alive(pid):
+        # Port-listener probe: definitively gone when nothing's bound.
+        # is_alive(pid) on Windows can lie about the process state (see
+        # _listener_pid_for_port docstring), so the port being free is
+        # the more reliable termination signal.
+        if _listener_pid_for_port(port) is None and not is_alive(pid):
             paths.pid_file(port).unlink(missing_ok=True)
             return True
     log.warning("daemon pid %d did not exit within %ds", pid, STOP_TIMEOUT_SECONDS)
