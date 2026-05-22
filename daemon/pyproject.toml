@@ -1,6 +1,6 @@
 [project]
 name = "mnemo"
-version = "5.5.1"
+version = "5.6.0"
 description = "Local-first knowledge memory + code intelligence + agentic companion for Claude Code"
 # README lives at repo root, not inside the daemon package; see
 # https://github.com/mmct-jsc/mnemo for the full docs.
@@ -41,6 +41,12 @@ dependencies = [
     "google-genai>=2.3.0",
     "mcp>=1.2",
     "keyring>=25.7.0",
+    # v5.6.0: psutil for cross-platform port-listener enumeration in
+    # daemon lifecycle. Replaces the unreliable ``os.kill(pid, 0)``
+    # Windows path that caused recurrent orphaned-daemon bugs
+    # (v3.2 gotcha #32, v5.5.0 lesson #93). See
+    # ``mnemo.daemon._listener_pid_for_port``.
+    "psutil>=6.1",
 ]
 
 [tool.hatch.build.targets.wheel.sources]

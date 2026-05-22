@@ -22,14 +22,23 @@ def test_status_when_no_pid_file(isolated_mnemo_home: Path) -> None:
     assert s.stale is False
 
 
-def test_status_when_pid_file_points_at_self(isolated_mnemo_home: Path) -> None:
+def test_status_when_pid_file_points_at_self(
+    isolated_mnemo_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """v5.6.0: 'running' requires BOTH a pid file pointing at a live
+    process AND something actually listening on the port. Mock the
+    listener to return os.getpid() to simulate a real running daemon
+    owned by this test process."""
     paths.ensure_runtime_dirs()
     paths.pid_file().write_text(str(os.getpid()))
+    monkeypatch.setattr("mnemo.daemon._listener_pid_for_port", lambda _port: os.getpid())
     s = daemon.status()
     assert s.pid_file_present is True
     assert s.pid == os.getpid()
     assert s.running is True
     assert s.stale is False
+    assert s.orphaned is False  # pid file and listener agree -> healthy
 
 
 def test_status_when_pid_file_is_stale(isolated_mnemo_home: Path) -> None:
@@ -115,11 +124,22 @@ def test_pid_file_is_port_scoped(isolated_mnemo_home: Path) -> None:
     assert "7399" in paths.pid_file(7399).name
 
 
-def test_status_does_not_collide_across_ports(isolated_mnemo_home: Path) -> None:
+def test_status_does_not_collide_across_ports(
+    isolated_mnemo_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """v3.2 invariant carried forward into v5.6.0: a preview daemon on
+    7399 must NOT make the 7373 prod daemon look running (the exact
+    bug: prod served stale code as an orphan).
+
+    Listener probe: 7399 has a daemon (mocked to os.getpid()), 7373
+    does not (returns None — the fixture default)."""
     paths.ensure_runtime_dirs()
-    # a preview daemon on 7399 must NOT make the 7373 prod daemon look
-    # running (the exact bug: prod served stale code as an orphan).
     paths.pid_file(7399).write_text(str(os.getpid()))
+    monkeypatch.setattr(
+        "mnemo.daemon._listener_pid_for_port",
+        lambda port: os.getpid() if port == 7399 else None,
+    )
     assert daemon.status(port=7399).running is True
     assert daemon.status(port=7373).running is False
 
@@ -151,7 +171,11 @@ def test_start_refuses_when_already_running(
     isolated_mnemo_home: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """v5.6.0: ``start()`` refuses when the port is genuinely bound
+    (listener probe returns a pid). Pretend OUR pid is the bound
+    daemon by mocking the listener; pid file is consistent."""
     paths.ensure_runtime_dirs()
-    paths.pid_file().write_text(str(os.getpid()))  # pretend daemon is us
+    paths.pid_file().write_text(str(os.getpid()))
+    monkeypatch.setattr("mnemo.daemon._listener_pid_for_port", lambda _port: os.getpid())
     with pytest.raises(RuntimeError, match="already running"):
         daemon.start()

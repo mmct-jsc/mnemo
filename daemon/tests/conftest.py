@@ -48,6 +48,13 @@ def fake_embedder() -> FakeEmbedder:
 
 @pytest.fixture
 def isolated_mnemo_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
-    """Point MNEMO_HOME at a tmp dir so CLI / daemon tests stay sandboxed."""
+    """Point MNEMO_HOME at a tmp dir so CLI / daemon tests stay sandboxed.
+
+    v5.6.0: also stubs out ``daemon._listener_pid_for_port`` to return
+    None by default so pid-file-based lifecycle tests don't see real
+    OS-level daemons listening on :7373 (e.g. a dev box's prod
+    daemon). Tests that DO want to exercise listener-aware logic patch
+    it explicitly (see ``test_daemon_orphan_detection.py``)."""
     monkeypatch.setenv("MNEMO_HOME", str(tmp_path))
+    monkeypatch.setattr("mnemo.daemon._listener_pid_for_port", lambda _port: None)
     return tmp_path
