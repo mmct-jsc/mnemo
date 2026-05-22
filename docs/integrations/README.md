@@ -34,21 +34,27 @@ documented end to end:
   `context_servers` in `settings.json`. Tools are surfaced as
   `/mnemo-*` slash commands.
 
-All six (Cursor + OpenAI Agents SDK + the four above) run the exact
-same `mnemo mcp` stdio MCP server with the same 26-tool surface.
-Switching hosts is a config change, not a code change.
+## 5-minute mount (v5.7.0 Reach)
+
+- **[Gemini CLI](./gemini-cli.md)** — Google's CLI AI workflow
+  tool; native MCP via `mcpServers` in `~/.gemini/settings.json`.
+  Same shape as Cursor / Claude Desktop / Windsurf.
+
+All seven (Cursor + OpenAI Agents SDK + Claude Desktop + Continue +
+Windsurf + Zed + Gemini CLI) run the exact same `mnemo mcp` stdio
+MCP server with the same 26-tool surface. Switching hosts is a
+config change, not a code change.
 
 ## Why we picked the Phase 1 flagships — and what's still deferred
 
 The picks live in [PICKS.md](./PICKS.md) with the full rubric
 (MCP-native / active 2026 community / different host shape) and the
-analysis tables for each candidate. Quick summary as of v5.5.0:
+analysis tables for each candidate. Quick summary as of v5.7.0:
 
-- **Pick A alternates (IDE-embedded), now landed:** Continue, Zed —
-  both shipped with v5.5.0 alongside Windsurf.
-- **Pick B alternates (agent-loop), still deferred:**
-  - **Gemini CLI** — native MCP, smaller user base. Right slot when
-    Google for Startups outreach goes warm.
+- **Pick A alternates (IDE-embedded), all landed:** Continue, Zed,
+  Windsurf — shipped v5.5.0.
+- **Pick B alternates (agent-loop), Gemini CLI now landed v5.7.0;
+  LangGraph still deferred:**
   - **LangGraph** — large user base via LangChain, but MCP via
     `langchain-mcp-adapters` (adapter, not native). Defer until
     LangGraph ships first-class MCP.
