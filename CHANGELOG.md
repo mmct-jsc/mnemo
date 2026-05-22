@@ -2,6 +2,54 @@
 
 All notable changes to mnemo are documented here.
 
+## [5.9.0] - 2026-05-22
+
+Closes the v5.4.0 bug 3 carry-forward properly. The "reindex
+progress bar disappeared on tab re-entry" UX bug was patched at
+v5.4.0 with an indeterminate "reindexing in background..."
+placeholder; v5.9.0 finishes the job by exposing per-file numbers
+on tab re-entry without needing an SSE reconnect.
+
+### Features
+
+**Stateful reindex progress.** New `AppState.reindex_progress`
+field captures the latest `'file'` event from
+`ingest.reindex_events` as the reindex loop yields them. Both the
+POST `/v1/reindex` route and the SSE `/v1/reindex/events` route
+publish to it; both clear it in the `finally` block alongside the
+existing `reindex_started_at` cleanup.
+
+**`GET /v1/reindex/status?include_progress=1`** (additive). Default
+shape unchanged (`{running, started_at}`) so existing callers keep
+working byte-for-byte. With the param, the response gains a
+`progress` key — either `null` (no reindex running) or
+`{idx, path, status, added, updated, unchanged, errors}` matching
+the SSE event payload.
+
+**Sources page UX.** `_checkReindexStatus` + `_pollReindex` now
+pass `include_progress=1` and surface the actual current file +
+running counters in the progress bar. Tab re-entry now shows the
+actual current file rather than the indeterminate placeholder.
+`_pollReindex` also live-updates the counters every 2 s.
+
+### Tests
+
+`daemon/tests/unit/test_reindex_progress_endpoint.py` — 4 contract
+tests locking the wire schema:
+- `AppState.reindex_progress` defaults to `None`
+- Legacy `/v1/reindex/status` shape (no param) unchanged
+- `?include_progress=1` adds `progress` key
+- Endpoint reflects `state.reindex_progress` when populated
+
+Full suite: **1465 passed / 2 skipped** (+4 vs v5.8.1). Ruff +
+ruff format clean.
+
+### Anti-goal preserved
+
+Additive wire change only; legacy callers see no behaviour
+difference. No new dependencies. 26-tool MCP surface contract
+test stays byte-stable.
+
 ## [5.8.1] - 2026-05-22
 
 Production-grade Windows autostart. Replaces the v5.0-era

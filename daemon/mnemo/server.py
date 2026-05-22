@@ -174,6 +174,16 @@ class AppState:
     # an independent lock.
     reindex_lock: threading.Lock = field(default_factory=threading.Lock)
     reindex_started_at: int | None = None
+    # v5.9.0: latest per-file progress snapshot from the in-flight
+    # reindex. Populated on every 'file' event from
+    # ingest.reindex_events; cleared in the finally block when the
+    # reindex completes. Surfaced via
+    # ``GET /v1/reindex/status?include_progress=1`` so the
+    # /sources UI shows per-file numbers on tab re-entry without
+    # needing an SSE reconnect (closes the v5.4.0 bug 3 carry-forward).
+    # Shape matches the 'file' event payload directly:
+    # ``{idx, path, status, added, updated, unchanged, errors}``.
+    reindex_progress: dict | None = None
     # v2.6 phase 3+6: the most recent ReindexReportSectionsOut payload
     # cached in memory so GET /v1/reindex/report returns the three-
     # section bucket from the last run. None until the first reindex
@@ -581,7 +591,13 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
             report = ReindexReport()
             captured_report: dict | None = None
             for name, payload in ingest.reindex_events(s, embedder=e if embed else None):
-                if name == "report":
+                if name == "file":
+                    # v5.9.0: publish per-file progress to AppState so
+                    # /v1/reindex/status?include_progress=1 can return
+                    # per-file numbers on tab re-entry (closes the
+                    # v5.4.0 bug 3 carry-forward).
+                    state.reindex_progress = payload
+                elif name == "report":
                     captured_report = payload
                 elif name == "done":
                     report.added = payload["added"]
@@ -608,6 +624,7 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
             return ReindexReportOut.from_report(report)
         finally:
             state.reindex_started_at = None
+            state.reindex_progress = None  # v5.9.0
             state.reindex_lock.release()
 
     @v1.get("/reindex/events")
@@ -646,7 +663,12 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
                 # ingest.reindex_events yields (name, payload) tuples.
                 # We encode each one as an SSE frame and flush.
                 for name, payload in ingest.reindex_events(s, embedder=e if embed else None):
-                    if name == "report":
+                    if name == "file":
+                        # v5.9.0: publish per-file progress to AppState
+                        # so polling clients see real-time numbers
+                        # even without an SSE attachment.
+                        state.reindex_progress = payload
+                    elif name == "report":
                         captured_report = payload
                     elif name == "done":
                         final_payload = payload
@@ -669,6 +691,7 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
                 )
             finally:
                 state.reindex_started_at = None
+                state.reindex_progress = None  # v5.9.0
                 state.reindex_lock.release()
 
         return StreamingResponse(
@@ -683,21 +706,30 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
         )
 
     @v1.get("/reindex/status")
-    def reindex_status() -> JSONResponse:
+    def reindex_status(include_progress: int = 0) -> JSONResponse:
         """Report whether a reindex is currently running.
 
         UI uses this on page load so the Reindex button shows the right
         state across navigations -- without it, the client-only "running"
         flag is wiped every reload and a user can fire a second reindex
         while the first is still in-flight.
+
+        v5.9.0: pass ``?include_progress=1`` to ALSO get the latest
+        per-file progress snapshot (matches the SSE 'file' event
+        payload). Defaults to off so the legacy
+        ``{running, started_at}`` shape is preserved for callers that
+        don't opt in.
         """
         running = state.reindex_lock.locked()
-        return JSONResponse(
-            {
-                "running": running,
-                "started_at": state.reindex_started_at if running else None,
-            }
-        )
+        body = {
+            "running": running,
+            "started_at": state.reindex_started_at if running else None,
+        }
+        if include_progress:
+            # When no reindex is running the snapshot is None;
+            # otherwise it's the most recently published 'file' event.
+            body["progress"] = state.reindex_progress if running else None
+        return JSONResponse(body)
 
     # --- v2.6 phase 4 + 5: dual-source proposal + workspaces --------------
 
