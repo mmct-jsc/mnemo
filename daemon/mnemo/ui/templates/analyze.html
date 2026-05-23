@@ -8,8 +8,12 @@
       <p>
         Walk the mnemo graph + surface structural issues: <strong>stale</strong> entries
         (marked SUPERSEDED), <strong>duplicates</strong> (within-type pairs above cosine 0.95),
-        and <strong>orphan</strong> citations (broken [mnemo:...] links). Deterministic, no LLM
-        required. Phase 1 of mnemo's Understanding arc (v5.12.0).
+        <strong>orphan</strong> citations (broken [mnemo:...] links), <strong>contradictions</strong>
+        (mutually-exclusive prescriptions on the same topic, v5.13.0), and
+        <strong>semantic_orphans</strong> (concepts referenced but never defined, v5.14.0).
+        Deterministic by default; opt-in LLM judge via
+        <code>MNEMO_ANALYZE_LLM_JUDGE=1</code> + <code>ANTHROPIC_API_KEY</code>
+        for the LLM-augmented detectors.
       </p>
     </div>
     <div class="hero-actions">
@@ -33,6 +37,10 @@
         <div class="stat-card flat">
           <div class="stat-num" x-text="(report.summary.contradictions || 0)"></div>
           <div class="stat-label">contradictions (candidate/high)</div>
+        </div>
+        <div class="stat-card flat">
+          <div class="stat-num" x-text="(report.summary.semantic_orphans || 0)"></div>
+          <div class="stat-label">semantic orphans (candidate/high)</div>
         </div>
         <div class="stat-card flat">
           <div class="stat-num" x-text="(report.summary.duplicates || 0)"></div>

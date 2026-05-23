@@ -1002,15 +1002,17 @@ def _mnemo_run_skill(ctx: ToolContext, *, skill_name: str) -> dict:
         "Deterministic detectors (no LLM): stale (nodes marked "
         "SUPERSEDED), duplicates (within-type pairs above cosine 0.95), "
         "orphan_references (citations to deleted nodes). Opt-in "
-        "LLM-augmented detector (v5.13.0): contradictions (within-type "
-        "pairs in cosine 0.5-0.85 band with a negation differential; "
-        "default severity 'candidate', elevated to 'high' when "
+        "LLM-augmented detectors: contradictions (v5.13.0; within-type "
+        "pairs in cosine 0.5-0.85 band with a negation differential) "
+        "and semantic_orphans (v5.14.0; per-node concept extraction -- "
+        "CamelCase/snake_case/ALL_CAPS -- whose terms aren't defined in "
+        "any other node's name or description). Both default to "
+        "severity 'candidate', elevated to 'high' when "
         "``MNEMO_ANALYZE_LLM_JUDGE=1`` + ``ANTHROPIC_API_KEY`` are set "
-        "and Claude confirms). Returns "
+        "and Claude confirms. Returns "
         "``{ran_at, node_count_scanned, findings, summary}``. Optional "
-        "``types`` filter restricts detectors. Phase 1 + 2a of mnemo's "
-        "Understanding arc; semantic_orphans + refactor_actions land "
-        "in v5.14.0+."
+        "``types`` filter restricts detectors. Phase 1 + 2a + 2b of "
+        "mnemo's Understanding arc; refactor_actions land in v5.15.0+."
     ),
     parameters=_obj(
         {
@@ -1020,13 +1022,13 @@ def _mnemo_run_skill(ctx: ToolContext, *, skill_name: str) -> dict:
                 "description": (
                     "Optional filter: subset of "
                     '["stale", "duplicates", "orphan_references", '
-                    '"contradictions"]. Default = all.'
+                    '"contradictions", "semantic_orphans"]. Default = all.'
                 ),
             },
             "project_key": {
                 "type": ["string", "null"],
                 "default": None,
-                "description": "Reserved for v5.13.0 scoping (currently no-op).",
+                "description": "Reserved for future scoping (currently no-op).",
             },
         },
         [],
