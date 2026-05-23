@@ -31,6 +31,10 @@
           <div class="stat-label">orphan citations (high)</div>
         </div>
         <div class="stat-card flat">
+          <div class="stat-num" x-text="(report.summary.contradictions || 0)"></div>
+          <div class="stat-label">contradictions (candidate/high)</div>
+        </div>
+        <div class="stat-card flat">
           <div class="stat-num" x-text="(report.summary.duplicates || 0)"></div>
           <div class="stat-label">duplicate pairs (medium)</div>
         </div>
@@ -102,9 +106,13 @@ function analyzePage() {
     get sortedFindings() {
       if (!this.report) return [];
       const order = { high: 0, medium: 1, low: 2 };
+      // v5.13.0: 'candidate' sits between 'high' and 'medium' so
+      // LLM-confirmed contradictions float to the top followed by
+      // unconfirmed candidates.
+      const expanded = { high: 0, candidate: 1, medium: 2, low: 3 };
       return [...this.report.findings].sort((a, b) => {
-        const da = order[a.severity] ?? 3;
-        const db = order[b.severity] ?? 3;
+        const da = expanded[a.severity] ?? (order[a.severity] ?? 4);
+        const db = expanded[b.severity] ?? (order[b.severity] ?? 4);
         if (da !== db) return da - db;
         return a.type.localeCompare(b.type);
       });
@@ -126,6 +134,8 @@ function analyzePage() {
         this.running = false;
       }
     },
+    // v5.13.0: 'candidate' severity sits between high and medium --
+    // it's a deterministic contradiction finding waiting for judgement.
   };
 }
 </script>

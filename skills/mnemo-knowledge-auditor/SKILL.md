@@ -45,13 +45,27 @@ Detectors:
   in v5.14.0+.
 - **orphan_reference**: nodes whose body cites `[mnemo:<id>]` for
   an `<id>` not in the graph. Broken citation = silent rot.
+- **contradictions** (v5.13.0): within-type pairs in the cosine
+  0.5-0.85 band where at least one body contains a negation pattern
+  (`do not`, `never`, `deprecated`, `removed`, `instead of`, ...).
+  Default severity is `candidate` — the user reviews. With
+  `MNEMO_ANALYZE_LLM_JUDGE=1` + `ANTHROPIC_API_KEY` set, candidates
+  are escalated to Claude for binary confirmation: confirmed pairs
+  become severity `high`, rejected pairs are dropped.
 
 ## Phase 2 — Group by severity
 
-Display findings ordered **high → medium → low**. Within each tier,
-group by type. The user should see the most urgent broken-citation
-issues first, then duplicate consolidation candidates, then the
-already-marked stale entries last.
+Display findings ordered **high → medium → candidate → low**.
+Within each tier, group by type. The user should see the most
+urgent broken-citation + LLM-confirmed contradiction findings
+first, then duplicate consolidation candidates, then unconfirmed
+contradiction candidates for review, then the already-marked
+stale entries last.
+
+The `candidate` severity is new in v5.13.0 — it sits between
+`high` and `medium`. A candidate contradiction is a deterministic
+finding waiting for human judgement (or LLM judge confirmation if
+the opt-in flag is set).
 
 ## Phase 3 — Propose actions (NEVER auto-apply)
 
@@ -76,6 +90,28 @@ mnemo primitives. The user copies the proposal and runs it manually
   3. `mnemo_update_node(canonical_id, body=merged_body)`.
   4. `mnemo_delete_node(non_canonical_id)`.
 - DO NOT propose deletion without showing both bodies first.
+
+### For `contradictions` findings:
+
+- The two nodes carry opposing prescriptions on the same topic
+  (Vietnamese-law rules with mutually-exclusive exceptions;
+  internal docs with "use Redis" vs "do not add Redis"; etc.).
+- Propose ONE of:
+  - **Mark one superseded**: `mnemo_update_node(older_id,
+    description=description + " SUPERSEDED by newer_id")` if one
+    is clearly the more recent / authoritative.
+  - **Add a reconciliation note**: edit the older or canonical
+    node's body to explicitly cite the contradiction +
+    explain the scope distinction (when both are valid in
+    different contexts).
+  - **Delete the deprecated one**: `mnemo_delete_node(older_id)`
+    if the older entry is fully superseded.
+- Always include BOTH bodies in the report so the user sees the
+  conflict before deciding.
+- For `candidate` severity (unconfirmed), explicitly flag that
+  the user should verify the contradiction is real before
+  acting; for `high` severity (LLM-confirmed), include the
+  judge's rationale if available.
 
 ### For `orphan_reference` findings:
 

@@ -998,14 +998,19 @@ def _mnemo_run_skill(ctx: ToolContext, *, skill_name: str) -> dict:
     name="mnemo_analyze",
     risk=RISK_SAFE,
     description=(
-        "Audit the mnemo knowledge graph for structural issues: stale "
-        "(nodes marked SUPERSEDED), duplicates (within-type pairs above "
-        "cosine 0.95), and orphan_references (citations to deleted "
-        "nodes). Deterministic, no LLM. Returns "
+        "Audit the mnemo knowledge graph for structural issues. "
+        "Deterministic detectors (no LLM): stale (nodes marked "
+        "SUPERSEDED), duplicates (within-type pairs above cosine 0.95), "
+        "orphan_references (citations to deleted nodes). Opt-in "
+        "LLM-augmented detector (v5.13.0): contradictions (within-type "
+        "pairs in cosine 0.5-0.85 band with a negation differential; "
+        "default severity 'candidate', elevated to 'high' when "
+        "``MNEMO_ANALYZE_LLM_JUDGE=1`` + ``ANTHROPIC_API_KEY`` are set "
+        "and Claude confirms). Returns "
         "``{ran_at, node_count_scanned, findings, summary}``. Optional "
-        "``types`` filter restricts detectors. Phase 1 of mnemo's "
-        "Understanding arc (v5.12.0); LLM-augmented detectors land in "
-        "v5.13.0+."
+        "``types`` filter restricts detectors. Phase 1 + 2a of mnemo's "
+        "Understanding arc; semantic_orphans + refactor_actions land "
+        "in v5.14.0+."
     ),
     parameters=_obj(
         {
@@ -1014,8 +1019,8 @@ def _mnemo_run_skill(ctx: ToolContext, *, skill_name: str) -> dict:
                 "items": {"type": "string"},
                 "description": (
                     "Optional filter: subset of "
-                    '["stale", "duplicates", "orphan_references"]. '
-                    "Default = all."
+                    '["stale", "duplicates", "orphan_references", '
+                    '"contradictions"]. Default = all.'
                 ),
             },
             "project_key": {
