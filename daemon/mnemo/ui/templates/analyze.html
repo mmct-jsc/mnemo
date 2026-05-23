@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+{% block title %} - knowledge auditor{% endblock %}
+{% block content %}
+<section class="analyze-page" x-data="analyzePage()" x-init="run()">
+  <header class="page-hero">
+    <div class="hero-text">
+      <h1>Knowledge auditor</h1>
+      <p>
+        Walk the mnemo graph + surface structural issues: <strong>stale</strong> entries
+        (marked SUPERSEDED), <strong>duplicates</strong> (within-type pairs above cosine 0.95),
+        and <strong>orphan</strong> citations (broken [mnemo:...] links). Deterministic, no LLM
+        required. Phase 1 of mnemo's Understanding arc (v5.12.0).
+      </p>
+    </div>
+    <div class="hero-actions">
+      <button class="btn" :disabled="running" @click="run()">
+        <span x-text="running ? 'Auditing...' : 'Re-run audit'"></span>
+      </button>
+    </div>
+  </header>
+
+  <template x-if="report">
+    <div>
+      <section class="dash-grid">
+        <div class="stat-card flat">
+          <div class="stat-num" x-text="report.node_count_scanned"></div>
+          <div class="stat-label">nodes scanned</div>
+        </div>
+        <div class="stat-card flat">
+          <div class="stat-num" x-text="(report.summary.orphan_references || 0)"></div>
+          <div class="stat-label">orphan citations (high)</div>
+        </div>
+        <div class="stat-card flat">
+          <div class="stat-num" x-text="(report.summary.duplicates || 0)"></div>
+          <div class="stat-label">duplicate pairs (medium)</div>
+        </div>
+        <div class="stat-card flat">
+          <div class="stat-num" x-text="(report.summary.stale || 0)"></div>
+          <div class="stat-label">stale entries (low)</div>
+        </div>
+      </section>
+
+      <p class="hint">
+        Audit ran at <span x-text="report.ran_at"></span>.
+        <strong>Phase 1 anti-goal:</strong> the auditor surfaces only.
+        You decide what to act on via <code>mnemo_update_node</code> /
+        <code>mnemo_delete_node</code> in chat or the node detail page.
+      </p>
+
+      <template x-if="report.findings.length === 0">
+        <div class="empty">
+          <p>No structural issues detected. Your knowledge graph is clean.</p>
+        </div>
+      </template>
+
+      <template x-if="report.findings.length > 0">
+        <table class="audit-table">
+          <thead>
+            <tr>
+              <th>Severity</th>
+              <th>Type</th>
+              <th>Node(s)</th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="(f, i) in sortedFindings" :key="i">
+              <tr :class="'severity-' + f.severity">
+                <td><span class="badge" :class="'badge-' + f.severity" x-text="f.severity"></span></td>
+                <td><code x-text="f.type"></code></td>
+                <td>
+                  <template x-for="nid in f.node_ids" :key="nid">
+                    <a class="node-link" :href="'/node/' + encodeURIComponent(nid)" x-text="nid"></a>
+                  </template>
+                </td>
+                <td x-text="f.description"></td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </template>
+    </div>
+  </template>
+
+  <template x-if="!report && error">
+    <div class="error">
+      <p>Audit failed: <span x-text="error"></span></p>
+    </div>
+  </template>
+
+  <template x-if="!report && !error">
+    <div class="empty"><p>Loading audit...</p></div>
+  </template>
+</section>
+
+<script>
+function analyzePage() {
+  return {
+    report: null,
+    error: null,
+    running: false,
+    get sortedFindings() {
+      if (!this.report) return [];
+      const order = { high: 0, medium: 1, low: 2 };
+      return [...this.report.findings].sort((a, b) => {
+        const da = order[a.severity] ?? 3;
+        const db = order[b.severity] ?? 3;
+        if (da !== db) return da - db;
+        return a.type.localeCompare(b.type);
+      });
+    },
+    async run() {
+      this.running = true;
+      this.error = null;
+      try {
+        const r = await fetch('/v1/analyze', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({}),
+        });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        this.report = await r.json();
+      } catch (e) {
+        this.error = String(e);
+      } finally {
+        this.running = false;
+      }
+    },
+  };
+}
+</script>
+{% endblock %}

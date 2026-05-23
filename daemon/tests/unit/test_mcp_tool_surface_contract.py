@@ -21,9 +21,10 @@ snapshot) is built on top of it.
 
 from mnemo.agent_tools import TOOLS
 
-# Snapshot of the published MCP tool surface as of 2026-05-20
-# (post-v4.6.5 + housekeeping merge, main = 1086f2e enterprise /
-# 552a47c public). Counts: 9 safe + 13 confirm + 4 danger = 26.
+# Snapshot of the published MCP tool surface as of 2026-05-22
+# (post-v5.12.0). Counts: 10 safe + 13 confirm + 4 danger = 27.
+# v5.12.0 added ``mnemo_analyze`` (safe) for the knowledge auditor;
+# the 26-tool surface from v4.6.5+ is preserved byte-stable.
 EXPECTED_TOOLS: frozenset[str] = frozenset(
     {
         # --- safe reads (Phase 1 substrate-hardening surface) -----------
@@ -36,6 +37,7 @@ EXPECTED_TOOLS: frozenset[str] = frozenset(
         "mnemo_page_context",
         "mnemo_session_nodes",
         "mnemo_list_skills",
+        "mnemo_analyze",  # v5.12.0: knowledge auditor (Phase 1)
         # --- confirm (recoverable mutations + UI directives + skill load)
         "mnemo_create_node",
         "mnemo_update_node",
