@@ -1,28 +1,40 @@
-"""v5.12.0 -- knowledge auditor: deterministic cross-reference analysis.
+"""v5.12.0+ -- knowledge auditor: deterministic + LLM-augmented analysis.
 
-Phase 1 of mnemo's Understanding arc. The auditor walks the existing
-node graph + surfaces structural issues. No LLM, no API key, no new
-dependencies. See:
+mnemo's Understanding arc:
 
-- ``docs/plans/2026-05-22-mnemo-understanding-phase1-design.md`` for
-  the spec + Definition of Done.
-- ``memory/project_mnemo_v6_vision_understanding`` for the long-term
-  arc (LLM-augmented detection lands in v5.13.0+).
+- **Phase 1 (v5.12.0)**: 3 deterministic detectors below
+  (``detect_stale`` / ``detect_duplicates`` /
+  ``detect_orphan_references``). No LLM, no API key, no new deps.
+- **Phase 2a (v5.13.0)**: LLM-augmented ``detect_contradictions``
+  -- deterministic candidate selection (cosine band + negation
+  differential) optionally escalated to a Claude judge via
+  opt-in env flag (``MNEMO_ANALYZE_LLM_JUDGE=1`` +
+  ``ANTHROPIC_API_KEY``). Default path stays no-LLM.
 
-Three detectors:
+See:
+- ``docs/plans/2026-05-22-mnemo-understanding-phase1-design.md``
+- ``docs/plans/2026-05-23-mnemo-understanding-phase2a-design.md``
+- ``memory/project_mnemo_v6_vision_understanding`` (the multi-
+  release north star covering Phase 2b/3/4).
+
+Detectors:
 
 1. :func:`detect_stale` -- nodes whose body / description contain the
    literal ``SUPERSEDED`` token. Lexical, instant. Severity: low.
 2. :func:`detect_duplicates` -- pairs of same-type nodes with cosine
    similarity >= 0.95. Uses sqlite-vec's chunk-level NN search +
-   filters to within-type pairs only (Phase 1 contract). Severity:
-   medium.
+   filters to within-type pairs only. Severity: medium.
 3. :func:`detect_orphan_references` -- nodes whose body contains
    ``[mnemo:<id>]`` where ``<id>`` is not in the graph. Severity:
    high (broken citation).
+4. :func:`detect_contradictions` (v5.13.0) -- same-type pairs in
+   the [0.5, 0.85] cosine band with a negation-pattern
+   differential. Default severity ``candidate``; elevated to
+   ``high`` when the opt-in ``LLMContradictionJudge`` confirms;
+   dropped entirely when the judge rejects.
 
-The orchestrator :func:`analyze` runs all three (or a filtered
-subset via ``types=``) and returns a canonical envelope:
+The orchestrator :func:`analyze` runs the requested detectors
+(filtered via ``types=``) and returns a canonical envelope:
 
     {
         "ran_at": "<ISO timestamp>",
@@ -34,11 +46,17 @@ subset via ``types=``) and returns a canonical envelope:
 
 from __future__ import annotations
 
+import json
+import logging
+import os
 import re
 import time
+from dataclasses import dataclass, field
 from typing import Any
 
 from mnemo.store import Node, Store
+
+log = logging.getLogger(__name__)
 
 # Per-type pages for ``Store.list_nodes``. We page through each
 # type bucket so even a 4500-node bucket doesn't load everything at
@@ -81,6 +99,191 @@ _CITATION_RE = re.compile(r"\[mnemo:([^\]]+?)\]")
 # body OR the description. Matches our own session-handover
 # convention ("SUPERSEDED by v5.X.X").
 _STALE_MARKER_RE = re.compile(r"superseded", re.IGNORECASE)
+
+
+# --- Phase 2a (v5.13.0) -- contradictions parameters --------------------
+
+# Cosine band for candidate-pair selection. Below 0.5 the topics
+# diverge enough that a real contradiction can't form; above 0.85
+# it's near-duplicate territory (the ``duplicates`` detector owns
+# that case). The [0.5, 0.85] sweet spot is "same topic, different
+# prescription".
+CONTRADICTION_COSINE_MIN = 0.5
+CONTRADICTION_COSINE_MAX = 0.85
+
+# sqlite-vec L2 distance on normalized vectors: L2 = sqrt(2 * (1 - cos)).
+# A pair is in band when its L2 is between these two thresholds.
+_CONTRA_L2_MAX = (2 * (1 - CONTRADICTION_COSINE_MIN)) ** 0.5  # 1.0
+_CONTRA_L2_MIN = (2 * (1 - CONTRADICTION_COSINE_MAX)) ** 0.5  # ~0.5477
+
+# Lexical negation patterns -- a body containing any of these (case-
+# insensitive substring) is treated as a "negating" body for the
+# differential check. v5.14.0+ may refine with regex word-boundaries
+# or LLM-driven extraction.
+_NEGATION_PATTERNS: tuple[str, ...] = (
+    "do not",
+    "don't",
+    "never",
+    "no longer",
+    "deprecated",
+    "removed",
+    "instead of",
+    "forbidden",
+    "disallowed",
+    "must not",
+    "should not",
+    "avoid",
+)
+
+# Same buckets as ``DUPLICATE_TYPE_BUCKETS`` -- contradictions are
+# within-type only in Phase 2a; cross-type lens are Phase 3.
+CONTRADICTION_TYPE_BUCKETS = DUPLICATE_TYPE_BUCKETS
+
+# Body excerpt cap sent to the LLM judge. Full bodies can be huge
+# (whole reference docs); 2000 chars is enough context for a yes/no
+# decision on whether two snippets contradict.
+_JUDGE_BODY_CAP = 2000
+
+_JUDGE_SYSTEM_PROMPT = (
+    "You are a strict contradiction grader for a knowledge corpus. "
+    "Given two related text snippets from the same domain, decide whether "
+    "they are mutually contradictory (one explicitly negates, forbids, "
+    "or deprecates what the other prescribes / recommends). Two snippets "
+    "that simply cover different aspects of a topic are NOT a contradiction. "
+    "Respond with ONLY a JSON object of the shape "
+    '{"contradiction": true|false, "rationale": "<one short paragraph>"}. '
+    "No prose outside the JSON. No markdown fences."
+)
+
+
+def _has_negation(body: str | None) -> bool:
+    if not body:
+        return False
+    lowered = body.lower()
+    return any(p in lowered for p in _NEGATION_PATTERNS)
+
+
+# --- Phase 2a (v5.13.0) -- LLM judge -----------------------------------
+
+
+@dataclass
+class LLMContradictionJudge:
+    """Opt-in binary judge for contradiction candidates.
+
+    Wraps an Anthropic client; tests pass a MagicMock so no network
+    call is made. Graceful: any parse/exception path returns False
+    (the pair stays a deterministic 'candidate'; no false-positive
+    'high')."""
+
+    client: Any
+    """The Anthropic client. Any object with
+    ``messages.create(...)`` works (tests pass a MagicMock)."""
+
+    model: str = "claude-sonnet-4-6"
+    """Default judge model. Sonnet is the recommended grader for
+    bench-style sweeps (lower latency + cost than Opus). Override
+    via ``MNEMO_ANALYZE_JUDGE_MODEL`` env var."""
+
+    max_tokens: int = 512
+    """Token budget for the judge response. The structured output is
+    small (~50-100 tokens for {contradiction, rationale}); 512 is a
+    comfortable ceiling."""
+
+    rationale_log: list[dict[str, Any]] = field(default_factory=list)
+    """Per-pair audit trail. Operators can dump this after a sweep
+    to inspect grading decisions."""
+
+    def judge(self, *, a_body: str, b_body: str) -> bool:
+        """Return True if the two bodies represent a mutual
+        contradiction; False otherwise (including on every error
+        path)."""
+        a = (a_body or "")[:_JUDGE_BODY_CAP]
+        b = (b_body or "")[:_JUDGE_BODY_CAP]
+        user_msg = (
+            "## Snippet A\n"
+            f"{a}\n\n"
+            "## Snippet B\n"
+            f"{b}\n\n"
+            "## Task\n"
+            "Decide: do A and B contradict each other? Respond with ONLY the JSON."
+        )
+        try:
+            response = self.client.messages.create(
+                model=self.model,
+                max_tokens=self.max_tokens,
+                system=_JUDGE_SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": user_msg}],
+            )
+            text = response.content[0].text
+            parsed = json.loads(text)
+            result = bool(parsed.get("contradiction", False))
+            self.rationale_log.append(
+                {
+                    "a_body": a,
+                    "b_body": b,
+                    "contradiction": result,
+                    "rationale": parsed.get("rationale", ""),
+                    "parsed_ok": True,
+                }
+            )
+            return result
+        except (json.JSONDecodeError, KeyError, AttributeError, IndexError) as exc:
+            log.warning(
+                "LLMContradictionJudge: parse/structure error (%s); "
+                "returning False (degrades to candidate-only)",
+                exc,
+            )
+            self.rationale_log.append(
+                {
+                    "a_body": a,
+                    "b_body": b,
+                    "contradiction": False,
+                    "rationale": f"PARSE_ERROR: {exc}",
+                    "parsed_ok": False,
+                }
+            )
+            return False
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "LLMContradictionJudge: client error (%s); returning False",
+                exc,
+            )
+            self.rationale_log.append(
+                {
+                    "a_body": a,
+                    "b_body": b,
+                    "contradiction": False,
+                    "rationale": f"CLIENT_ERROR: {exc}",
+                    "parsed_ok": False,
+                }
+            )
+            return False
+
+
+def judge_from_env() -> LLMContradictionJudge | None:
+    """Construct an LLMContradictionJudge from environment when ALL
+    of: ``MNEMO_ANALYZE_LLM_JUDGE`` is truthy, ``ANTHROPIC_API_KEY``
+    is set, and the ``anthropic`` package is importable. Otherwise
+    return None so the analyzer falls back to the deterministic
+    candidate-only path.
+
+    Override the model via ``MNEMO_ANALYZE_JUDGE_MODEL``
+    (default ``claude-sonnet-4-6``)."""
+    flag = os.environ.get("MNEMO_ANALYZE_LLM_JUDGE", "").strip().lower()
+    if flag not in {"1", "true", "yes", "on"}:
+        return None
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        return None
+    try:
+        import anthropic  # type: ignore[import-untyped]
+    except ImportError:
+        log.warning(
+            "judge_from_env: MNEMO_ANALYZE_LLM_JUDGE=1 set but anthropic "
+            "package not installed; falling back to deterministic candidates."
+        )
+        return None
+    model = os.environ.get("MNEMO_ANALYZE_JUDGE_MODEL", "claude-sonnet-4-6")
+    return LLMContradictionJudge(client=anthropic.Anthropic(), model=model)
 
 
 def _iter_all_nodes(store: Store, *, type: str | None = None) -> list[Node]:
@@ -221,6 +424,110 @@ def detect_orphan_references(store: Store) -> list[dict[str, Any]]:
     return findings
 
 
+# --- 4. contradictions (v5.13.0) ---------------------------------------
+
+
+def detect_contradictions(
+    store: Store,
+    *,
+    embedder: Any,
+    judge: Any | None = None,
+) -> list[dict[str, Any]]:
+    """Surface within-type pairs of nodes likely to contradict.
+
+    Two-step detection:
+
+    1. **Candidate gate** (deterministic, fast): for each pair within
+       a type bucket, require:
+       - cosine similarity in [CONTRADICTION_COSINE_MIN,
+         CONTRADICTION_COSINE_MAX] (same topic, distinct
+         prescriptions), AND
+       - at least one body contains a negation pattern (from
+         ``_NEGATION_PATTERNS``).
+
+    2. **Optional LLM confirmation**: when ``judge`` is provided,
+       each candidate's two bodies are sent to the judge for a
+       binary contradiction decision. Confirmed pairs become
+       severity ``high``; rejected pairs are DROPPED (not returned
+       with the lower 'candidate' severity -- the judge is
+       authoritative when enabled).
+
+    Without a judge, every candidate is returned with severity
+    ``candidate``.
+    """
+    if embedder is None:
+        return []
+
+    findings: list[dict[str, Any]] = []
+    seen_pairs: set[tuple[str, str]] = set()
+
+    for type_bucket in CONTRADICTION_TYPE_BUCKETS:
+        nodes = _iter_all_nodes(store, type=type_bucket)
+        if len(nodes) < 2:
+            continue
+        for node in nodes:
+            haystack = node.body or node.description or node.name
+            if not haystack:
+                continue
+            try:
+                vec = embedder.embed_text(haystack)
+            except Exception:  # noqa: BLE001
+                continue
+            try:
+                hits = store.vec_search(vec, k=20, type_filter=[type_bucket])
+            except Exception:  # noqa: BLE001
+                continue
+            for hit_node_id, _chunk_idx, _chunk_text, distance in hits:
+                if hit_node_id == node.id:
+                    continue
+                # Cosine band: L2 in [_CONTRA_L2_MIN, _CONTRA_L2_MAX].
+                if distance < _CONTRA_L2_MIN or distance > _CONTRA_L2_MAX:
+                    continue
+                pair = tuple(sorted([node.id, hit_node_id]))
+                if pair in seen_pairs:
+                    continue
+                # Negation differential: at least one of the two
+                # bodies must contain a negation pattern (Phase 2a
+                # gate). v5.14.0+ may require XOR or LLM-driven
+                # negation extraction.
+                other = store.get_node(hit_node_id)
+                if other is None:
+                    continue
+                if not (_has_negation(node.body) or _has_negation(other.body)):
+                    continue
+                seen_pairs.add(pair)
+                cosine = max(0.0, min(1.0, 1.0 - (distance * distance) / 2.0))
+
+                # If a judge is provided, escalate. Confirmed ->
+                # severity high; rejected -> drop entirely.
+                if judge is not None:
+                    confirmed = bool(judge.judge(a_body=node.body or "", b_body=other.body or ""))
+                    if not confirmed:
+                        continue
+                    severity = "high"
+                else:
+                    severity = "candidate"
+
+                findings.append(
+                    {
+                        "type": "contradictions",
+                        "node_ids": list(pair),
+                        "description": (
+                            f"Two {type_bucket} nodes with cosine "
+                            f"similarity {cosine:.3f} and a negation "
+                            f"differential; "
+                            + (
+                                "LLM judge confirmed mutual contradiction."
+                                if severity == "high"
+                                else "review for mutual contradiction."
+                            )
+                        ),
+                        "severity": severity,
+                    }
+                )
+    return findings
+
+
 # --- Orchestrator ------------------------------------------------------
 
 
@@ -228,7 +535,12 @@ def detect_orphan_references(store: Store) -> list[dict[str, Any]]:
 # ``types=`` filter on :func:`analyze`. ``orphan_references`` is
 # plural for the API; the per-finding ``type`` is the singular
 # ``orphan_reference``.
-KNOWN_DETECTOR_TYPES = ("stale", "duplicates", "orphan_references")
+KNOWN_DETECTOR_TYPES = (
+    "stale",
+    "duplicates",
+    "orphan_references",
+    "contradictions",  # v5.13.0 Phase 2a
+)
 
 
 def analyze(
@@ -236,18 +548,28 @@ def analyze(
     *,
     embedder: Any | None = None,
     types: list[str] | None = None,
-    project_key: str | None = None,  # noqa: ARG001 -- reserved for v5.13.0 scoping
+    project_key: str | None = None,  # noqa: ARG001 -- reserved for future scoping
+    judge: Any | None = None,
 ) -> dict[str, Any]:
     """Run the requested detectors + return a canonical envelope.
 
     Args:
         store: the live mnemo Store.
-        embedder: optional Embedder for ``duplicates``. When ``None``,
-            the duplicates detector returns an empty list (clean
-            fallback for stores without embeddings; tests can opt out).
+        embedder: optional Embedder for ``duplicates`` +
+            ``contradictions``. When ``None``, both detectors return
+            empty lists (clean fallback for stores without
+            embeddings; tests can opt out).
         types: filter list, default = all detectors. Pass e.g.
             ``["stale"]`` to skip duplicates + orphan_references.
-        project_key: reserved for v5.13.0 (currently no-op).
+            v5.13.0: ``"contradictions"`` enables the new detector.
+        project_key: reserved for future scoping (currently no-op).
+        judge: optional ``LLMContradictionJudge``. When provided +
+            ``"contradictions"`` is in ``types``, candidates are
+            escalated to the judge; confirmed -> severity ``high``;
+            rejected -> dropped. When ``None``, candidates ship with
+            severity ``candidate``. The default fetches a judge via
+            :func:`judge_from_env` (which returns ``None`` unless
+            the opt-in env flag + API key are set).
 
     Returns:
         ``{ran_at, node_count_scanned, findings, summary}``.
@@ -261,6 +583,10 @@ def analyze(
         findings.extend(detect_duplicates(store, embedder=embedder))
     if "orphan_references" in requested:
         findings.extend(detect_orphan_references(store))
+    if "contradictions" in requested:
+        # Resolve the judge lazily: caller-provided > env-derived > None.
+        resolved_judge = judge if judge is not None else judge_from_env()
+        findings.extend(detect_contradictions(store, embedder=embedder, judge=resolved_judge))
 
     # Tally by type. ``orphan_reference`` (singular per-finding type)
     # is reported under the API-facing ``orphan_references`` (plural)

@@ -2,6 +2,110 @@
 
 All notable changes to mnemo are documented here.
 
+## [5.13.0] - 2026-05-23
+
+**Understanding Phase 2a: LLM-augmented contradictions detector.**
+
+mnemo's knowledge auditor (v5.12.0 shipped Phase 1: stale /
+duplicates / orphan_references — all deterministic) gains a
+fourth detector: `contradictions`. Two-step:
+
+1. **Deterministic candidate gate**: within-type pairs of nodes
+   in the cosine 0.5-0.85 band where at least one body contains
+   a negation pattern (`do not`, `never`, `deprecated`,
+   `removed`, `instead of`, ...). Default severity: `candidate`.
+2. **Opt-in LLM judge** (mirror of the v5.11.0 bench LLM-judge
+   pattern): when `MNEMO_ANALYZE_LLM_JUDGE=1` + `ANTHROPIC_API_KEY`
+   are set and the `anthropic` package is installed, each
+   candidate is escalated to Claude (default
+   `claude-sonnet-4-6`, override via
+   `MNEMO_ANALYZE_JUDGE_MODEL`) for a binary contradiction
+   decision. Confirmed pairs become severity `high`; rejected
+   pairs are dropped. Network/parse errors degrade gracefully.
+
+The Vietnamese-law / internal-policy use case is the canonical
+example: same-domain rules with mutually-exclusive prescriptions
+that a purely lexical detector can't separate from "different
+aspects of the same topic". The LLM judge fills that gap.
+
+### Features
+
+**`detect_contradictions`** in `daemon/mnemo/analyzer.py`:
+- Cosine band `[0.5, 0.85]` (L2 in `[~0.5477, 1.0]`).
+- Within-type buckets only (`memory_*`, `plan_doc`,
+  `project_doc`, `session_summary`). Cross-type and code-bucket
+  detection deferred to Phase 3 domain lenses.
+- Negation patterns: 12 case-insensitive substrings covering the
+  common prescriptive-vs-prohibitive vocabulary.
+
+**`LLMContradictionJudge`** + **`judge_from_env()`** in the same
+module:
+- Binary classifier with rationale (different shape from the
+  bench's multi-criterion rubric judge — sibling implementation,
+  not a shared module).
+- Auto-resolved via `judge_from_env()` when the orchestrator's
+  `judge=` arg is `None`.
+- Per-pair `rationale_log` audit trail; the daemon doesn't
+  expose it via HTTP in this release (deferred to Phase 4
+  proactive auditor).
+
+**`analyze()` orchestrator extension**:
+- `KNOWN_DETECTOR_TYPES` gains `"contradictions"`.
+- New `judge` kwarg threads through; default behaviour resolves
+  via `judge_from_env()` when contradictions is requested.
+
+**Surface updates** (all additive; no breaks):
+- `mnemo_analyze` MCP tool description mentions contradictions
+  + the opt-in env flag.
+- `mnemo-knowledge-auditor` SKILL.md adds Contradictions
+  detector + the proposed-action workflow for contradiction
+  findings (mark-superseded / add-reconciliation-note /
+  delete-deprecated).
+- `/analyze` UI page renders a new "contradictions" stat card
+  + the `candidate` severity slots between `high` and `medium`
+  in the sort order.
+
+### Tests
+
+- `tests/unit/test_contradictions_detector.py` — 10 tests
+  (candidate selection, cosine bands, negation differential,
+  same-type-only, self-pair, orchestrator wiring,
+  KNOWN_DETECTOR_TYPES surface).
+- `tests/unit/test_contradictions_judge.py` — 9 tests (env-flag
+  gate, JSON parsing, graceful degradation on parse/exception
+  errors, orchestrator integration with mocked judge).
+- `tests/unit/_snapshots/mcp_tool_list.json` — regen for the
+  updated tool description.
+
+Daemon suite target: **1525+ passed / 2 skipped** (was
+1510/2skip in v5.12.0).
+
+### Locked invariants
+
+- 27-tool MCP surface stays byte-stable (`mnemo_analyze`
+  description updated; name/signature unchanged).
+- No new daemon dependencies (`anthropic` is already a runtime
+  dep from the v3 chat companion).
+- The 3 existing detectors (stale, duplicates,
+  orphan_references) are unchanged byte-for-byte.
+
+### Anti-goals (deferred per design doc)
+
+- **No semantic_orphans detector.** Phase 2b, v5.14.0.
+- **No refactor_actions generation.** Phase 2c, v5.14.0+.
+- **No domain lenses** (vietnamese-law / code / research-notes).
+  Phase 3, v5.14.0+.
+- **No proactive scheduling.** Phase 4, v5.15.0+.
+- **No silent edits.** Still in force from Phase 1.
+
+### Design doc
+
+`docs/plans/2026-05-23-mnemo-understanding-phase2a-design.md` —
+follows the DoD-first template installed by pipeline #21 in
+v5.12.0. Spec / Definition of Done / Anti-goals / Scope /
+Comparison sections, with measurable claims and an
+interactive-test DoD entry.
+
 ## [5.12.0] - 2026-05-22
 
 **mnemo's Understanding arc -- Phase 1: Knowledge Auditor.**
