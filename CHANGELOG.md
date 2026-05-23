@@ -2,6 +2,108 @@
 
 All notable changes to mnemo are documented here.
 
+## [5.14.0] - 2026-05-23
+
+**Understanding Phase 2b: LLM-augmented semantic_orphans detector.**
+
+v5.13.0 shipped the first LLM-augmented detector (`contradictions`)
+on the per-pair axis. v5.14.0 ships the second on the per-NODE axis:
+**`semantic_orphans`** — concepts referenced by a node that no other
+node in the corpus defines.
+
+Two-step:
+
+1. **Deterministic concept extraction + cross-reference lookup**:
+   for each node, walk the body via three regex patterns
+   (CamelCase like `MQTTBridge` / `RetryHandler`, snake_case with
+   2+ underscores or length ≥ 12 like `son_tinh_ai` /
+   `petrolimex_detection_model`, and ALL_CAPS with at least one
+   underscore like `MAX_RETRIES` / `MNEMO_ANALYZE_LLM_JUDGE`).
+   Length filter (6-60 chars) + stop-list (`__init__`,
+   `__main__`, ...). For each extracted concept, the auditor
+   checks every OTHER node's `name` and `description` (NOT body —
+   a body mention is a reference, not a definition) for a
+   case-insensitive substring match. Concepts with no defining
+   node surface as candidates. Default severity: `candidate`.
+2. **Opt-in LLM judge** (reuses `MNEMO_ANALYZE_LLM_JUDGE=1` +
+   `ANTHROPIC_API_KEY` env contract from v5.13.0): each candidate
+   is escalated to Claude (default `claude-sonnet-4-6`) for a
+   binary "needs definition" decision. Project-specific terms →
+   severity `high`. Common terms (Redis, JSON, PostgreSQL, ...) →
+   dropped. Network/parse errors degrade gracefully.
+
+The Vietnamese-law / internal-policy / codebase use case: an
+article references `Decree 99/2020` (or a `RetryHandler` class)
+but no node DEFINES it — the auditor flags the dangling reference.
+
+### Features
+
+**`detect_semantic_orphans`** in `daemon/mnemo/analyzer.py`:
+- Three regex patterns + length filter + stop-list +
+  source-self-defines short-circuit.
+- Per-(source × concept) finding; same concept used by two
+  different sources emits two findings (one per source).
+- Definition lookup against `name` + `description` ONLY (body
+  mentions don't count).
+
+**`LLMSemanticOrphanJudge`** + **`semantic_orphan_judge_from_env()`**:
+- Sibling class to `LLMContradictionJudge` — different prompt +
+  different return semantics (`needs_definition` vs
+  `contradiction`). Shared env contract.
+- Per-concept context excerpt (600-char window) sent to the judge.
+- Per-concept `rationale_log` audit trail.
+
+**`analyze()`** gains `orphan_judge=` kwarg alongside the existing
+`judge=`; auto-resolves both via env helpers when None.
+
+**`KNOWN_DETECTOR_TYPES`** extended to 5 entries.
+
+### Surface updates (additive only)
+
+- `mnemo_analyze` MCP tool description mentions the new detector
+  + the shared opt-in env flag. **27-tool MCP surface stays
+  byte-stable** (`mnemo_analyze` name + signature unchanged).
+- `mnemo-knowledge-auditor` SKILL.md gains a Semantic Orphans
+  section + proposed-action workflow (create definition node /
+  add definition to existing node / remove reference).
+- `/analyze` UI gains a 5th stat card for `semantic_orphans`.
+
+### Tests
+
+- `tests/unit/test_semantic_orphans_detector.py` — 21 tests
+  (extraction regex patterns, length filter, stop-list,
+  definition lookup with name/description match + exclude-self,
+  case-insensitivity, body-only mention is NOT a definition,
+  per-source dedup, orchestrator wiring, KNOWN_DETECTOR_TYPES).
+- `tests/unit/test_semantic_orphans_judge.py` — 10 tests
+  (env-flag gate, JSON parsing, graceful degradation,
+  rationale_log audit trail, orchestrator integration with mocked
+  judge).
+- `tests/unit/_snapshots/mcp_tool_list.json` regenerated.
+
+**Daemon suite: targeting 1545+ passed (+15-18 vs v5.13.0).**
+Ruff clean.
+
+### Anti-goals preserved
+
+- 27-tool MCP surface stays byte-stable.
+- Existing 4 detectors (stale / duplicates / orphan_references /
+  contradictions) unchanged byte-for-byte.
+- No new daemon dependencies. `anthropic` already a v5.13.0
+  runtime dep.
+- No required LLM. Deterministic path is the default; LLM judge
+  is opt-in.
+- No silent edits. The auditor surfaces; the user acts.
+
+### Carry-forward to v5.15.0+
+
+- Phase 2c (`refactor_actions`): for each finding, generate an
+  LLM-driven concrete proposed action.
+- Phase 3: pluggable domain lenses
+  (`lens=vietnamese-law` / `lens=code` / `lens=research-notes`).
+- Phase 4: proactive auditor running on every reindex.
+- LLM-based concept extraction (currently deterministic only).
+
 ## [5.13.0] - 2026-05-23
 
 **Understanding Phase 2a: LLM-augmented contradictions detector.**

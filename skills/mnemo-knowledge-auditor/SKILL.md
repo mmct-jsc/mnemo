@@ -1,6 +1,6 @@
 ---
 name: mnemo-knowledge-auditor
-description: Use when the user wants to audit the mnemo knowledge graph for structural issues -- stale entries, duplicates, broken citations. Runs the deterministic auditor + groups findings by severity + proposes concrete refactor actions using existing mnemo_update_node / mnemo_delete_node primitives. v5.12.0 Phase 1 of mnemo's Understanding arc; LLM-augmented detection lands in v5.13.0+.
+description: Use when the user wants to audit the mnemo knowledge graph for structural issues -- stale entries, duplicates, broken citations, contradictions, semantic orphans. Runs the deterministic auditor + groups findings by severity + proposes concrete refactor actions using existing mnemo_update_node / mnemo_delete_node primitives. v5.12.0 Phase 1 deterministic; v5.13.0 Phase 2a LLM-augmented contradictions; v5.14.0 Phase 2b LLM-augmented semantic_orphans.
 ---
 
 # mnemo-knowledge-auditor — surface structural issues in the corpus
@@ -52,6 +52,19 @@ Detectors:
   `MNEMO_ANALYZE_LLM_JUDGE=1` + `ANTHROPIC_API_KEY` set, candidates
   are escalated to Claude for binary confirmation: confirmed pairs
   become severity `high`, rejected pairs are dropped.
+- **semantic_orphans** (v5.14.0): per-node concept extraction. Three
+  regex patterns: CamelCase (`MQTTBridge`, `RetryHandler`), snake_case
+  with 2+ underscores or length ≥ 12 (`son_tinh_ai`,
+  `petrolimex_detection_model`), and ALL_CAPS with at least 1
+  underscore (`MAX_RETRIES`, `DUPLICATE_COSINE_THRESHOLD`). For each
+  extracted concept, the auditor checks every OTHER node's `name`
+  and `description` (NOT body — a body mention is a reference, not a
+  definition) for a case-insensitive substring match. Concepts with
+  no defining node surface as candidates. Default severity is
+  `candidate`. With `MNEMO_ANALYZE_LLM_JUDGE=1` +
+  `ANTHROPIC_API_KEY` set, candidates are escalated to Claude:
+  project-specific terms → severity `high`, common terms (Redis,
+  JSON, etc.) → dropped.
 
 ## Phase 2 — Group by severity
 
@@ -90,6 +103,30 @@ mnemo primitives. The user copies the proposal and runs it manually
   3. `mnemo_update_node(canonical_id, body=merged_body)`.
   4. `mnemo_delete_node(non_canonical_id)`.
 - DO NOT propose deletion without showing both bodies first.
+
+### For `semantic_orphans` findings:
+
+- The node references a concept (CamelCase / snake_case / ALL_CAPS)
+  that no other node in the corpus defines (no substring match in
+  any other node's `name` or `description`).
+- Propose ONE of:
+  - **Create a definition node**: prompt the user to run
+    `mnemo_create_node` with `type="memory_reference"` (or the
+    domain-appropriate type), `name=<concept>`, and a description
+    + body explaining what the concept is. Cite the source node's
+    body excerpt that motivated the new definition.
+  - **Add the definition to an existing node**: if a sibling node
+    is the natural place for the definition, propose
+    `mnemo_update_node(sibling_id, description=description +
+    " Defines <concept>: <one-line definition>")`.
+  - **Remove the reference**: if the concept is incidental and
+    doesn't warrant a definition, the user can edit the source's
+    body to remove or contextualize the reference.
+- The `concept` field on each finding identifies the orphaned term.
+- For `candidate` severity (deterministic-only), explicitly flag
+  that the user should verify the concept needs a definition (it
+  may be a common term that doesn't); for `high` severity
+  (LLM-confirmed), include the judge's rationale if available.
 
 ### For `contradictions` findings:
 
