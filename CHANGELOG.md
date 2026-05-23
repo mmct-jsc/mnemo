@@ -2,6 +2,105 @@
 
 All notable changes to mnemo are documented here.
 
+## [5.12.0] - 2026-05-22
+
+**mnemo's Understanding arc -- Phase 1: Knowledge Auditor.**
+
+mnemo v1-v5 indexed + retrieved. v5.12.0 adds the foundation
+substrate for the v6+ "understanding" arc: a deterministic
+auditor that walks the existing node graph + surfaces three
+structural issues users would otherwise eyeball-grep their way
+to (or never notice).
+
+Vision: see new memory entry `project_mnemo_v6_vision_understanding`.
+Phase 1 spec + Definition of Done: see new design doc
+`docs/plans/2026-05-22-mnemo-understanding-phase1-design.md` (which
+also installs the new DoD-first pipeline doctrine -- every future
+feature ships with Spec / DoD / Anti-goals / Scope / Comparison
+sections in its design doc before any code is written).
+
+### Features
+
+**Three deterministic detectors (no LLM, no API key, no new deps).**
+`daemon/mnemo/analyzer.py`:
+- **`stale`** — nodes whose body or description contains the
+  literal `SUPERSEDED` token (case-insensitive). The user's own
+  marker; informational. Severity: low.
+- **`duplicates`** — pairs of same-type nodes with cosine
+  similarity ≥ 0.95 (L2 ≤ ~0.316 in sqlite-vec). Within-type
+  buckets only in Phase 1 (memory_*, plan_doc, project_doc,
+  session_summary). Severity: medium.
+- **`orphan_references`** — nodes whose body cites `[mnemo:<id>]`
+  for an `<id>` not in the current graph. Broken citation.
+  Severity: high.
+
+**`POST /v1/analyze`** — HTTP endpoint. Optional body
+`{"types": [...]}` filters detectors. Response shape:
+`{ran_at, node_count_scanned, findings, summary}`. New
+Pydantic models in `daemon/mnemo/api_schemas.py`.
+
+**`mnemo_analyze` MCP tool** — 27th tool on the stdio surface.
+Same backing call. Safe risk (auto-runs on MCP hosts without
+prompting). The 26-tool surface contract from v4.6.5+ stays
+byte-stable; this release is purely additive.
+
+**`mnemo-knowledge-auditor` skill** — new
+`skills/mnemo-knowledge-auditor/SKILL.md`. Documents the
+audit -> group-by-severity -> propose-action workflow. Phase 1
+anti-goal: the skill NEVER auto-applies edits; it surfaces +
+proposes via existing `mnemo_update_node` / `mnemo_delete_node`
+primitives the user runs themselves.
+
+**`/analyze` UI page** — new `daemon/mnemo/ui/templates/analyze.html`.
+Alpine-driven: POSTs to `/v1/analyze` on load + renders findings
+sorted by severity (high -> medium -> low). No edit buttons
+(Phase 1 anti-goal).
+
+### Tests
+
+- `tests/unit/test_analyze_detectors.py` (12 tests)
+- `tests/integration/test_analyze_endpoint.py` (5 tests)
+- `tests/unit/test_mnemo_analyze_mcp_tool.py` (5 tests)
+- `tests/unit/test_knowledge_auditor_skill.py` (5 tests)
+- `tests/unit/test_analyze_ui_page.py` (4 tests)
+- `tests/unit/test_mcp_tool_surface_contract.py` updated to 27
+  tools (still set-based; additive-friendly)
+
+Daemon suite target: **1500+ passed / 2 skipped** (was 1479/2skip).
+
+### Locked invariants
+
+- 26-tool MCP surface from v4.6.5+ stays byte-stable
+  (`mnemo_analyze` is the 27th; renames/removals on the 26 would
+  still flip `test_mcp_tool_surface_has_no_removed_or_renamed_tools`).
+- No new daemon dependencies. The auditor reuses embedder +
+  store + graph; nothing new in `pyproject.toml`.
+- No silent edits. The auditor surfaces; the user acts. Phase 4
+  (v5.15.0+) may add a confirm-then-apply mode behind an
+  explicit opt-in.
+
+### Anti-goals (deferred to later phases)
+
+- **No LLM-augmented detection** (contradictions, semantic
+  orphans, refactor-action generation). Gated to v5.13.0+
+  behind an opt-in env flag, mirroring the bench's LLM judge
+  pattern.
+- **No domain lenses** (`lens=vietnamese-law`, `lens=code`,
+  `lens=research-notes`). Phase 3, v5.14.0+.
+- **No background scheduling.** The auditor runs on demand.
+  Proactive runs land in Phase 4, v5.15.0+.
+
+### New pipeline doctrine (#21, BASE-flagged)
+
+`reference_mnemo_pipelines.md` is updated with pipeline #21:
+**DoD-first specs.** Every feature ships with a design doc that
+includes Spec, Definition of Done, Anti-goals, Scope, and
+Comparison sections BEFORE any code is written. The DoD is the
+sign-off checklist; the Comparison section names the baseline we
+improve over. v5.12.0's design doc
+(`2026-05-22-mnemo-understanding-phase1-design.md`) is the
+canonical template for future releases.
+
 ## [5.11.0] - 2026-05-22
 
 T9 benchmark expansion. The agent-memory-spec-v0 fixture for the

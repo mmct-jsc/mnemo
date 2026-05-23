@@ -1,6 +1,6 @@
 {
   "name": "mnemo",
-  "version": "5.11.0",
+  "version": "5.12.0",
   "description": "Local-first knowledge memory + code intelligence for Claude Code: aggregate memory and source across projects into a typed graph, retrieve via hybrid Graph-RAG with budget-capped context injected every session, chat through an agentic companion (Mnem), and explore the whole graph as a custom WebGL galaxy.",
   "author": "mnemo contributors",
   "license": "MIT",

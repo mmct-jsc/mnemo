@@ -51,6 +51,8 @@ from mnemo.api_schemas import (
     ActivateWorkspaceOut,
     ActiveProjectOut,
     ActiveWorkspaceOut,
+    AnalyzeIn,
+    AnalyzeOut,
     ChatBookmarkIn,
     ChatBookmarkOut,
     ChatCreateIn,
@@ -730,6 +732,36 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
             # otherwise it's the most recently published 'file' event.
             body["progress"] = state.reindex_progress if running else None
         return JSONResponse(body)
+
+    # --- Knowledge auditor (v5.12.0, design phase 1 of mnemo Understanding arc)
+
+    @v1.post("/analyze", response_model=AnalyzeOut)
+    def analyze_route(
+        body: AnalyzeIn | None = None,
+        s: Store = Depends(get_store),
+    ) -> AnalyzeOut:
+        """Run the knowledge auditor against the live store.
+
+        Walks the existing node graph + surfaces three structural
+        issues (stale / duplicates / orphan_references). Deterministic,
+        no LLM, no network. See
+        ``docs/plans/2026-05-22-mnemo-understanding-phase1-design.md``.
+
+        Phase 1 (this release): detection only -- the user reviews
+        findings + acts via existing primitives (``mnemo_update_node`` /
+        ``mnemo_delete_node``). Phase 2 (v5.13.0+) adds opt-in LLM
+        augmentation. Phase 4 (v5.15.0+) makes the auditor proactive.
+        """
+        from mnemo import analyzer
+
+        body = body or AnalyzeIn()
+        result = analyzer.analyze(
+            s,
+            embedder=state.embedder,
+            types=body.types,
+            project_key=body.project_key,
+        )
+        return AnalyzeOut(**result)
 
     # --- v2.6 phase 4 + 5: dual-source proposal + workspaces --------------
 

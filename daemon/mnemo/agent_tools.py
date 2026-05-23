@@ -989,3 +989,55 @@ def _mnemo_run_skill(ctx: ToolContext, *, skill_name: str) -> dict:
     fm, body = _read_skill(candidate)
     name = str(fm.get("name") or candidate.name)
     return {"_skill": {"name": name, "guidance": body.strip()}}
+
+
+# --- Knowledge auditor (v5.12.0) ---------------------------------------
+
+
+@_tool(
+    name="mnemo_analyze",
+    risk=RISK_SAFE,
+    description=(
+        "Audit the mnemo knowledge graph for structural issues: stale "
+        "(nodes marked SUPERSEDED), duplicates (within-type pairs above "
+        "cosine 0.95), and orphan_references (citations to deleted "
+        "nodes). Deterministic, no LLM. Returns "
+        "``{ran_at, node_count_scanned, findings, summary}``. Optional "
+        "``types`` filter restricts detectors. Phase 1 of mnemo's "
+        "Understanding arc (v5.12.0); LLM-augmented detectors land in "
+        "v5.13.0+."
+    ),
+    parameters=_obj(
+        {
+            "types": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "Optional filter: subset of "
+                    '["stale", "duplicates", "orphan_references"]. '
+                    "Default = all."
+                ),
+            },
+            "project_key": {
+                "type": ["string", "null"],
+                "default": None,
+                "description": "Reserved for v5.13.0 scoping (currently no-op).",
+            },
+        },
+        [],
+    ),
+)
+def _mnemo_analyze(
+    ctx: ToolContext,
+    *,
+    types: list[str] | None = None,
+    project_key: str | None = None,
+) -> dict:
+    from mnemo import analyzer
+
+    return analyzer.analyze(
+        ctx.store,
+        embedder=ctx.embedder,
+        types=types,
+        project_key=project_key,
+    )

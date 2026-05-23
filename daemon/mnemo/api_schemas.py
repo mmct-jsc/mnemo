@@ -856,3 +856,38 @@ class SettingsOut(BaseModel):
     providers: dict
     companion: dict
     chat_history_retention_days: int | None
+
+
+# --- Knowledge auditor (v5.12.0) -----------------------------------------
+
+
+class AnalyzeIn(BaseModel):
+    """``POST /v1/analyze`` body. All fields optional.
+
+    ``types`` filter: any subset of
+    ``{"stale", "duplicates", "orphan_references"}``. Omit / None for
+    "run all detectors". Unknown values are silently ignored so the
+    daemon can add detectors without breaking pre-existing callers.
+    """
+
+    types: list[str] | None = None
+    project_key: str | None = None  # reserved for v5.13.0 scoping
+
+
+class AnalyzeFinding(BaseModel):
+    """One row in the audit report."""
+
+    type: str
+    node_ids: list[str]
+    description: str
+    severity: str
+    missing_targets: list[str] | None = None
+
+
+class AnalyzeOut(BaseModel):
+    """``POST /v1/analyze`` response envelope."""
+
+    ran_at: str
+    node_count_scanned: int
+    findings: list[AnalyzeFinding]
+    summary: dict[str, int]

@@ -361,6 +361,14 @@ def mount_ui(
             _ctx(page="sources", sources=s.list_sources()),
         )
 
+    @app.get("/analyze", response_class=HTMLResponse)
+    def analyze_page(request: Request) -> Any:
+        """v5.12.0: knowledge-auditor surface. The page is purely
+        client-side — it POSTs to /v1/analyze on load + renders the
+        findings table. No edit buttons (Phase 1 anti-goal: no silent
+        edits). See docs/plans/2026-05-22-mnemo-understanding-phase1-design.md."""
+        return templates.TemplateResponse(request, "analyze.html", _ctx(page="analyze"))
+
     @app.get("/workspaces", response_class=HTMLResponse)
     def workspaces_page(request: Request) -> Any:
         """v2.6 phase 8: workspace management page.
