@@ -26,6 +26,32 @@
     "risk": "confirm"
   },
   {
+    "description": "Audit the mnemo knowledge graph for structural issues: stale (nodes marked SUPERSEDED), duplicates (within-type pairs above cosine 0.95), and orphan_references (citations to deleted nodes). Deterministic, no LLM. Returns ``{ran_at, node_count_scanned, findings, summary}``. Optional ``types`` filter restricts detectors. Phase 1 of mnemo's Understanding arc (v5.12.0); LLM-augmented detectors land in v5.13.0+. (risk: safe)",
+    "inputSchema": {
+      "properties": {
+        "project_key": {
+          "default": null,
+          "description": "Reserved for v5.13.0 scoping (currently no-op).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "types": {
+          "description": "Optional filter: subset of [\"stale\", \"duplicates\", \"orphan_references\"]. Default = all.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "mnemo_analyze",
+    "risk": "safe"
+  },
+  {
     "description": "Apply retrieval scoring-weight deltas (alpha/beta/gamma/delta/epsilon/zeta) to the live config -- the Settings retune assistant's apply step. Bounded + recoverable. Returns the before/after so the page can validate. (risk: confirm)",
     "inputSchema": {
       "properties": {
