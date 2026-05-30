@@ -2,6 +2,66 @@
 
 All notable changes to mnemo are documented here.
 
+## [5.19.0] - 2026-05-30
+
+**cyclic_imports — the code-structure triad is complete.**
+
+A third detector joins the `code` lens: **`cyclic_imports`** —
+module import cycles, found by an iterative Tarjan SCC over the
+`imports` edge graph. Deterministic + precise (a cycle is
+unambiguous), **no LLM judge** (no debt growth). Together with
+`dead_code` (uncalled) and `god_object` (oversized), the code lens
+now covers the three canonical structure smells:
+tangled / dead / bloated.
+
+### Detector
+
+- **`detect_cyclic_imports(store)`** — iterative (not recursive, so
+  a deep import chain can't crash the daemon) Tarjan SCC over the
+  `imports` edges (`src=importer`, `dst=imported`). A cycle is an SCC
+  of size ≥ 2, or a single module with a self-import. Each cycle →
+  one finding (`type: "cyclic_import"`, `node_ids`: the sorted cycle
+  members, module names in the description). Severity **`medium`**:
+  the cycle's existence is certain (peer to `duplicates`), but
+  whether to break it is the user's call.
+- Registered as `LENS_DETECTORS["code"] = ("dead_code", "god_object",
+  "cyclic_imports")`; `analyze()` dispatches it; `types` filters
+  within the suite.
+
+### Live verification
+
+The live corpus import graph is **acyclic** (1692 imports edges, 871
+modules, 0 cycles), so `lens=code, types=["cyclic_imports"]` returns
+`[]` — the *correct* clean result (operator-green: a detector that
+certifies "no cycles" on demand). The detection LOGIC is proven by
+synthetic fixtures (2-cycle, 3-cycle, self-loop, two disjoint
+cycles, a 12-module chain feeding a cycle).
+
+### Anti-goals preserved
+
+- No LLM judge (a cycle is objective; no 6th judge, no debt).
+- No new lens / MCP param / agnostic detector (`KNOWN_DETECTOR_TYPES`
+  stays 5; 27-tool count unchanged; wire snapshot regen for the
+  description only).
+- Recursive Tarjan banned — iterative only.
+- NEVER auto-apply. No new daemon dependencies (hand-rolled SCC, no
+  networkx).
+
+### Tests
+
+- `tests/unit/test_cyclic_imports_detector.py` (11) + extended
+  `test_lens_mechanism.py` (three-detector code suite + isolation).
+- `tests/unit/_snapshots/mcp_tool_list.json` regenerated.
+
+**Daemon suite: targeting 1663+ (+14 vs v5.18.0).** Ruff clean.
+
+### Carry-forward to v5.20.0+
+
+- `orphan_modules` (needs its own gate design — sparse-import-graph
+  precision problem).
+- More lenses (`vietnamese-law`, `research-notes` — need domain corpus).
+- Phase 4: proactive auditor + confirm-then-apply.
+
 ## [5.18.0] - 2026-05-30
 
 **god_object cohesion judge — the `_LLMHelper` payoff.**
