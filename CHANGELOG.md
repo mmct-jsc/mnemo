@@ -2,6 +2,115 @@
 
 All notable changes to mnemo are documented here.
 
+## [5.21.0] - 2026-05-30
+
+**Knowledge auditor UX overhaul + companion feature-awareness.**
+
+The `/analyze` page was a flat, auto-running, uncolored, unpaginated table
+that re-ran the full audit (incl. the 29k-candidate `semantic_orphans`
+flood) on every visit and showed only opaque node-id hashes. Rebuilt:
+
+- **No auto-run.** The page restores your last result + scope from
+  `localStorage` and only audits on an explicit **Run audit** (fixes
+  "always re-analyze on enter"). A landing CTA shows when there's no
+  result yet.
+- **Scoped + fast.** Detector toggle chips with `stale` +
+  `orphan_references` ON by default (instant, no embedder); the
+  embedding-bound floods (`duplicates`, `contradictions`,
+  `semantic_orphans`) are opt-in "heavy" chips. A `lens` select swaps to
+  the `code` suite. Fixes "ran too long" — the default audit is ~instant.
+- **Pagination.** Findings page at 25/row, severity-sorted, with a true
+  total — no more tens-of-thousands-of-rows page.
+- **Colored badges.** Severity (red/amber/blue/slate), finding type, and
+  node type (incl. `commit`) are all colored via the single-source
+  `--type-color` mechanism. (No `.badge-<sev>` rules existed before.)
+- **Shows WHERE.** A new `AnalyzeOut.node_labels` map (id -> name / type /
+  source_path; resolved in the route, chunked at 400 ids) lets each
+  finding render the node **name** + **file path** + the problem locus
+  (missing citation / concept / symbol) inline — no click needed.
+- **Less boring.** Severity-accented finding cards, clickable
+  scope/severity stat cards, a real empty/landing state.
+
+**Companion knows + drives every feature.** Mnem's system prompt
+(`DEFAULT_SYSTEM`) is now a tight FEATURE MAP naming every tool family:
+retrieve (`mnemo_query` / `search_by_type` / `traverse`), **audit**
+(`mnemo_analyze` — agnostic detectors + `lens=code`), edit
+(`create/update/delete_node`), tune, skills, sources, and the in-page
+tools — preserving the in-page-first / navigate-last discipline. No new
+tools (all 27 exist); this is awareness.
+
+- Additive only: `node_labels` is an HTTP-response convenience; the MCP
+  `mnemo_analyze` tool + 27-tool wire snapshot are UNCHANGED. Detector
+  logic + thresholds untouched.
+
+See `docs/plans/2026-05-30-mnemo-analyze-ux-overhaul-design.md`.
+
+## [5.20.0] - 2026-05-30
+
+**duplicate_code — a 4th code-lens detector (and orphan_modules, rejected).**
+
+The `code` lens gains **`duplicate_code`**: WITHIN-project pairs of
+`code_function` / `code_method` nodes with near-identical bodies
+(copy-paste duplication), found via embedding cosine >= 0.97 over bodies
+of >= 5 non-empty lines, excluding test symbols. Deterministic + precise
+(NO LLM judge — the threshold is high-confidence, matching the
+cyclic_imports precedent; no judge debt). Severity `medium`; the finding
+names both symbols and suggests extracting a shared helper. It uses
+EMBEDDINGS, not the import graph — so it sidesteps the sparse-import-graph
+problem entirely. Detection is an in-memory all-pairs cosine WITHIN each
+project (numpy BLAS matmul over the **stored** embedding index — no
+re-embedding), so a full-corpus code-duplication audit runs in **~2.5 s**.
+A live dogfood caught that the naive re-embed + per-node KNN loop took
+~11-16 min and would time out the MCP / HTTP surface (lessons #120-121);
+the within-project scope also drops non-actionable cross-repo coincidences.
+
+The originally-planned `orphan_modules` detector was **rejected after a
+corpus probe**: the import resolver records only ~12% of real imports, so
+"zero inbound imports" floods (~83% false positives — even
+heavily-imported modules like `analyzer.py` read as orphan). A detector
+on an incomplete graph relation is viable only when a missing edge causes
+a false NEGATIVE (safe under-report), not a false POSITIVE (flood);
+`orphan_modules` is the latter, while `cyclic_imports` was the former
+(hence shippable). Deferred until the resolver resolves package imports.
+
+- `LENS_DETECTORS["code"] = (dead_code, god_object, cyclic_imports,
+  duplicate_code)` — the code lens now has four detectors.
+- No new MCP tool / param / env flag; the 27-tool surface is unchanged
+  (only description text), `KNOWN_DETECTOR_TYPES` stays 5.
+- Daemon: 1673 passed / 2 skipped (+12). Ruff clean. Deterministic paths
+  byte-stable.
+
+See `docs/plans/2026-05-30-mnemo-understanding-phase3d-duplicate-code-design.md`.
+
+**UI/UX fixes (from live review).**
+
+- **Knowledge auditor is reachable.** The `/analyze` page (the structural
+  Knowledge auditor) had no nav entry — added an **Analyze** link to the
+  top nav (distinct from **Audit**, the query/retrieval log).
+  `page == 'analyze'` drives its active state.
+- **Settings tab strip stays in sync.** The three `/settings/chat#…` tabs
+  (Providers & keys / Companion / Permissions & history) differ only by
+  hash, so switching between them does NOT reload the page. The shared
+  `_settings_tabs.html` highlight was a one-shot pass with no `hashchange`
+  listener, so the content switched (Alpine) while the highlight froze on
+  the landing tab — the "really weird" desync. Fixed: the strip
+  re-resolves the active tab on `hashchange` and toggles (clearing the old
+  one). Verified: Providers→Companion→Permissions keeps exactly one active
+  tab matching the visible section.
+- **Settings heading tracks the active tab.** `/settings/chat` hosts three
+  tabs but its `<h1>` was hard-coded "Companion settings", so the
+  Providers & keys and Permissions & history tabs were mis-titled. The
+  heading now binds to the active tab (`tabTitle` getter → "Providers &
+  keys" / "Companion" / "Permissions & history"); the static text stays as
+  the pre-Alpine fallback. Verified live across all three tabs.
+- **Nebula reads as a galaxy.** In the custom WebGL renderer
+  (`nebula-gl.js` + `graph.html` theme): edges are thinner (ribbon
+  half-width 2.4→1.5 px) and dimmer (edge alpha 0.085→0.05, cooler RGB),
+  and node star-points glow brighter (`glow` 0.9→1.35) — the field reads
+  as a luminous galaxy of stars, not a bright wire tangle. Visual-only:
+  the motion/layout/sim lifecycle is untouched; live-verified the renderer
+  still draws the full graph (2,770-node spiral, no freeze).
+
 ## [5.19.0] - 2026-05-30
 
 **cyclic_imports — the code-structure triad is complete.**

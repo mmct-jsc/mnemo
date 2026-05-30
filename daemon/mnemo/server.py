@@ -418,6 +418,33 @@ def api_key_or_local(request: Request) -> str | None:
     return key_id
 
 
+def _node_labels_for_findings(
+    store: Store, findings: list[dict], *, batch: int = 400
+) -> dict[str, dict[str, str | None]]:
+    """v5.21.0: resolve every node id cited across ``findings`` to
+    ``{name, type, source_path}`` so the /analyze table shows WHERE the
+    problem is inline (no click). Chunked (``batch`` ids per query)
+    because a heavy opt-in run can cite tens of thousands of nodes -- a
+    single ``IN (...)`` would blow SQLite's host-variable ceiling.
+    Unresolved ids are omitted (the UI falls back to the raw id)."""
+    seen: set[str] = set()
+    ids: list[str] = []
+    for f in findings:
+        for nid in f.get("node_ids", []):
+            if nid not in seen:
+                seen.add(nid)
+                ids.append(nid)
+    labels: dict[str, dict[str, str | None]] = {}
+    for i in range(0, len(ids), batch):
+        for nid, node in store.get_nodes_by_ids(ids[i : i + batch]).items():
+            labels[nid] = {
+                "name": node.name,
+                "type": node.type,
+                "source_path": node.source_path,
+            }
+    return labels
+
+
 def create_app(*, store: Store | None = None, embedder: Embedder | None = None) -> FastAPI:
     """Build a FastAPI app. ``store`` and ``embedder`` may be injected for tests.
 
@@ -766,7 +793,10 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
             propose_actions=body.propose_actions,
             lens=body.lens,
         )
-        return AnalyzeOut(**result)
+        # v5.21.0: enrich with per-node display labels so the UI shows
+        # WHERE each problem is (name + path) without a click.
+        node_labels = _node_labels_for_findings(s, result.get("findings", []))
+        return AnalyzeOut(**result, node_labels=node_labels)
 
     # --- v2.6 phase 4 + 5: dual-source proposal + workspaces --------------
 

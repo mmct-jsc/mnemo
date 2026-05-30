@@ -1,177 +1,408 @@
 {% extends "base.html" %}
 {% block title %} - knowledge auditor{% endblock %}
 {% block content %}
-<section class="analyze-page" x-data="analyzePage()" x-init="run()">
+<section class="analyze-page" x-data="analyzePage()" x-init="restore()">
   <header class="page-hero">
     <div class="hero-text">
       <h1>Knowledge auditor</h1>
       <p>
-        Walk the mnemo graph + surface structural issues: <strong>stale</strong> entries
-        (marked SUPERSEDED), <strong>duplicates</strong> (within-type pairs above cosine 0.95),
-        <strong>orphan</strong> citations (broken [mnemo:...] links), <strong>contradictions</strong>
-        (mutually-exclusive prescriptions on the same topic, v5.13.0), and
-        <strong>semantic_orphans</strong> (concepts referenced but never defined, v5.14.0).
-        Deterministic by default; opt-in LLM judge via
-        <code>MNEMO_ANALYZE_LLM_JUDGE=1</code> + <code>ANTHROPIC_API_KEY</code>
-        for the LLM-augmented detectors.
-        <br>
-        <strong>Domain lenses (v5.16.0+):</strong> pass <code>lens=code</code> to run
-        code-specific structural checks instead of the agnostic detectors &mdash; the
-        <strong>code</strong> lens surfaces <strong>dead_code</strong> (private, uncalled
-        functions/methods via the call graph), <strong>god_object</strong> (oversized
-        classes/modules by exact method/definition count, v5.17.0), and
-        <strong>cyclic_imports</strong> (module import cycles via Tarjan SCC, v5.19.0).
+        Audit the mnemo graph for structural issues. Pick a scope and run it &mdash;
+        the page does <strong>not</strong> auto-run, and your last result is kept
+        until you re-run. Agnostic detectors: <strong>stale</strong>,
+        <strong>duplicates</strong>, <strong>orphan</strong> citations,
+        <strong>contradictions</strong>, <strong>semantic_orphans</strong>.
+        Or switch the <strong>lens</strong> to <strong>code</strong> for
+        <strong>dead_code</strong> / god_object / cyclic_imports / duplicate_code.
+        <code>semantic_orphans</code> and <code>contradictions</code> are heavy
+        (embedding sweeps) &mdash; off by default.
       </p>
-    </div>
-    <div class="hero-actions">
-      <button class="btn" :disabled="running" @click="run()">
-        <span x-text="running ? 'Auditing...' : 'Re-run audit'"></span>
-      </button>
     </div>
   </header>
 
-  <template x-if="report">
+  <!-- Scope controls. The agnostic detectors are toggle chips (heavy ones
+       off by default); the lens select swaps to the code suite. Run is
+       explicit -- nothing fires on page load. -->
+  <section class="audit-controls">
+    <div class="audit-scope" x-show="lens === 'none'" x-cloak>
+      <template x-for="d in agnosticDetectors" :key="d.key">
+        <button type="button" class="scope-chip"
+                :class="{ on: scope[d.key] }"
+                :style="'--type-color: ' + findingColor(d.color)"
+                @click="scope[d.key] = !scope[d.key]; persistScope()">
+          <span class="scope-dot"></span>
+          <span x-text="d.label"></span>
+          <span class="chip-heavy" x-show="d.heavy" x-cloak title="embedding sweep">heavy</span>
+        </button>
+      </template>
+    </div>
+    <label class="audit-lens">
+      <span>Lens</span>
+      <select x-model="lens" @change="persistScope()">
+        <option value="none">knowledge (agnostic)</option>
+        <option value="code">code</option>
+      </select>
+    </label>
+    <button class="btn primary" :disabled="running" @click="run()">
+      <span x-text="running ? 'Auditing…' : 'Run audit'"></span>
+    </button>
+    <span class="audit-meta" x-show="ranAt" x-cloak x-text="metaLine"></span>
+    <span class="audit-cachenote" x-show="cacheNote" x-cloak x-text="cacheNote"></span>
+  </section>
+
+  <template x-if="running">
+    <div class="audit-running">
+      <span class="nebula-booting-orb"></span>
+      <span>Auditing the graph&hellip;</span>
+    </div>
+  </template>
+
+  <template x-if="!running && error">
+    <div class="error"><p>Audit failed: <span x-text="error"></span></p></div>
+  </template>
+
+  <!-- Landing CTA when there is no result yet (no auto-run). -->
+  <template x-if="!running && !report && !error">
+    <div class="audit-landing">
+      <img src="/static/mnem/mark.svg" width="40" height="40" alt="" class="audit-landing-mark">
+      <p>No audit yet. Choose a scope above and press <strong>Run audit</strong>.</p>
+      <p class="hint">Tip: the default scope (stale + orphan citations) is instant.</p>
+    </div>
+  </template>
+
+  <template x-if="report && !running">
     <div>
+      <!-- Summary stat cards, colored by finding type / severity. Clickable
+           to filter the list to one bucket. -->
       <section class="dash-grid">
         <div class="stat-card flat">
-          <div class="stat-num" x-text="report.node_count_scanned"></div>
+          <div class="stat-num" x-text="report.node_count_scanned.toLocaleString()"></div>
           <div class="stat-label">nodes scanned</div>
         </div>
-        <div class="stat-card flat">
-          <div class="stat-num" x-text="(report.summary.orphan_references || 0)"></div>
-          <div class="stat-label">orphan citations (high)</div>
-        </div>
-        <div class="stat-card flat">
-          <div class="stat-num" x-text="(report.summary.contradictions || 0)"></div>
-          <div class="stat-label">contradictions (candidate/high)</div>
-        </div>
-        <div class="stat-card flat">
-          <div class="stat-num" x-text="(report.summary.semantic_orphans || 0)"></div>
-          <div class="stat-label">semantic orphans (candidate/high)</div>
-        </div>
-        <div class="stat-card flat">
-          <div class="stat-num" x-text="(report.summary.duplicates || 0)"></div>
-          <div class="stat-label">duplicate pairs (medium)</div>
-        </div>
-        <div class="stat-card flat">
-          <div class="stat-num" x-text="(report.summary.stale || 0)"></div>
-          <div class="stat-label">stale entries (low)</div>
-        </div>
+        <template x-for="b in summaryBuckets" :key="b.key">
+          <button type="button" class="stat-card flat stat-card-btn"
+                  :class="{ on: bucketFilter === b.key }"
+                  :style="'--type-color: ' + findingColor(b.key)"
+                  @click="toggleBucket(b.key)">
+            <div class="stat-num" x-text="b.count.toLocaleString()"></div>
+            <div class="stat-label" x-text="b.label"></div>
+          </button>
+        </template>
       </section>
 
       <p class="hint">
-        Audit ran at <span x-text="report.ran_at"></span>.
-        <strong>Phase 1 anti-goal:</strong> the auditor surfaces only.
-        You decide what to act on via <code>mnemo_update_node</code> /
-        <code>mnemo_delete_node</code> in chat or the node detail page.
+        Audited <span x-text="report.ran_at"></span>.
+        The auditor <strong>surfaces</strong> only &mdash; you act via
+        <code>mnemo_update_node</code> / <code>mnemo_delete_node</code> in chat
+        or on the node page.
       </p>
 
       <template x-if="report.findings.length === 0">
-        <div class="empty">
-          <p>No structural issues detected. Your knowledge graph is clean.</p>
+        <div class="audit-landing">
+          <img src="/static/mnem/mark.svg" width="40" height="40" alt="" class="audit-landing-mark">
+          <p>No structural issues in this scope. Your knowledge graph is clean.</p>
         </div>
       </template>
 
       <template x-if="report.findings.length > 0">
-        <table class="audit-table">
-          <thead>
-            <tr>
-              <th>Severity</th>
-              <th>Type</th>
-              <th>Node(s)</th>
-              <th>Description</th>
-              <th>Proposed action</th>
-            </tr>
-          </thead>
-          <tbody>
-            <template x-for="(f, i) in sortedFindings" :key="i">
-              <tr :class="'severity-' + f.severity">
-                <td><span class="badge" :class="'badge-' + f.severity" x-text="f.severity"></span></td>
-                <td><code x-text="f.type"></code></td>
-                <td>
+        <div>
+          <div class="audit-listmeta">
+            <span x-text="listMeta"></span>
+            <button type="button" class="link-button" x-show="bucketFilter" x-cloak
+                    @click="bucketFilter = null; page = 1">clear filter</button>
+          </div>
+
+          <div class="audit-findings">
+            <template x-for="(f, i) in pageFindings" :key="f._k">
+              <article class="finding" :style="'--sev-color: ' + sevColor(f.severity)">
+                <div class="finding-head">
+                  <span class="badge type-sev" :style="'--type-color: ' + sevColor(f.severity)"
+                        x-text="f.severity"></span>
+                  <span class="badge type-finding" :style="'--type-color: ' + findingColor(f.type)"
+                        x-text="f.type"></span>
+                  <span class="finding-locus" x-show="locus(f)" x-cloak>
+                    <code x-text="locus(f)"></code>
+                  </span>
+                </div>
+
+                <!-- WHERE: each cited node by NAME + path + node-type, not a
+                     raw hash. Falls back to the id when unlabeled. -->
+                <div class="finding-nodes">
                   <template x-for="nid in f.node_ids" :key="nid">
-                    <a class="node-link" :href="'/node/' + encodeURIComponent(nid)" x-text="nid"></a>
+                    <span class="finding-node">
+                      <a class="node-link" :href="'/node/' + encodeURIComponent(nid)"
+                         x-text="nodeName(nid)"></a>
+                      <span class="badge type-node"
+                            x-show="nodeType(nid)" x-cloak
+                            :style="'--type-color: ' + typeColor(nodeType(nid))"
+                            x-text="nodeType(nid)"></span>
+                      <span class="finding-path" x-show="nodePath(nid)" x-cloak
+                            x-text="nodePath(nid)"></span>
+                    </span>
                   </template>
-                </td>
-                <td x-text="f.description"></td>
-                <td>
-                  <!-- v5.15.0 refactor_actions: present only when the
-                       opt-in enrichment ran + this finding was eligible. -->
-                  <template x-if="f.action && f.action.kind && f.action.kind !== 'none'">
-                    <div class="proposed-action">
-                      <span class="badge badge-action" x-text="f.action.kind"></span>
-                      <code x-show="f.action.primitive" x-text="f.action.primitive"></code>
-                      <div class="action-rationale" x-text="f.action.rationale"></div>
-                    </div>
-                  </template>
-                  <template x-if="!f.action || !f.action.kind || f.action.kind === 'none'">
-                    <span class="muted">&mdash;</span>
-                  </template>
-                </td>
-              </tr>
+                </div>
+
+                <div class="finding-desc" x-text="f.description"></div>
+
+                <!-- v5.15.0 refactor_actions: a PROPOSAL, never an apply button. -->
+                <template x-if="f.action && f.action.kind && f.action.kind !== 'none'">
+                  <div class="finding-action">
+                    <span class="badge type-finding" :style="'--type-color: #c4f37a'"
+                          x-text="'proposed action: ' + f.action.kind"></span>
+                    <code x-show="f.action.primitive" x-cloak x-text="f.action.primitive"></code>
+                    <span class="action-rationale" x-text="f.action.rationale"></span>
+                  </div>
+                </template>
+              </article>
             </template>
-          </tbody>
-        </table>
-        <p class="hint" x-show="(report.summary._refactor_actions_skipped || 0) > 0">
-          <strong x-text="report.summary._refactor_actions_skipped"></strong>
-          eligible finding(s) were not enriched with an action because the
-          per-audit cap was reached. Re-run with a tighter <code>types</code>
-          filter to propose actions for them.
-        </p>
+          </div>
+
+          <nav class="pager" x-show="totalPages > 1" x-cloak>
+            <button type="button" class="btn" :disabled="page <= 1" @click="page = page - 1">Prev</button>
+            <span x-text="'Page ' + page + ' of ' + totalPages"></span>
+            <button type="button" class="btn" :disabled="page >= totalPages" @click="page = page + 1">Next</button>
+          </nav>
+        </div>
       </template>
     </div>
   </template>
-
-  <template x-if="!report && error">
-    <div class="error">
-      <p>Audit failed: <span x-text="error"></span></p>
-    </div>
-  </template>
-
-  <template x-if="!report && !error">
-    <div class="empty"><p>Loading audit...</p></div>
-  </template>
 </section>
+
+<style>
+  .audit-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem; margin: 1rem 0 1.25rem; }
+  .audit-scope { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+  .scope-chip {
+    display: inline-flex; align-items: center; gap: 0.4rem;
+    padding: 0.3rem 0.7rem; border-radius: var(--radius-pill);
+    background: var(--panel-2); border: 1px solid var(--border);
+    color: var(--fg-muted); cursor: pointer; font-size: 0.8rem;
+    transition: border-color 0.15s, color 0.15s, background 0.15s;
+  }
+  .scope-chip .scope-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--fg-dim); }
+  .scope-chip.on {
+    color: var(--type-color, var(--fg)); background: color-mix(in srgb, var(--type-color) 12%, transparent);
+    border-color: color-mix(in srgb, var(--type-color) 45%, transparent);
+  }
+  .scope-chip.on .scope-dot { background: var(--type-color); }
+  .chip-heavy {
+    font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.04em;
+    color: var(--fg-dim); border: 1px solid var(--border); border-radius: var(--radius-pill);
+    padding: 0 0.3rem;
+  }
+  .audit-lens { display: inline-flex; align-items: center; gap: 0.4rem; color: var(--fg-dim); }
+  .audit-lens select {
+    padding: 0.35rem 0.5rem; background: var(--bg); color: var(--fg);
+    border: 1px solid var(--border); border-radius: var(--radius);
+  }
+  .audit-meta, .audit-cachenote { color: var(--fg-dim); font-size: 0.8rem; }
+  .audit-cachenote { color: var(--type-medium, #fb923c); }
+  .audit-running { display: flex; align-items: center; gap: 0.7rem; color: var(--fg-muted); padding: 2rem 0; }
+  .audit-landing {
+    display: flex; flex-direction: column; align-items: center; gap: 0.4rem;
+    text-align: center; padding: 3rem 1rem; color: var(--fg-muted);
+    border: 1px dashed var(--border); border-radius: var(--radius); background: var(--panel);
+  }
+  .audit-landing-mark { opacity: 0.6; margin-bottom: 0.3rem; }
+  .stat-card-btn { cursor: pointer; text-align: left; border: 1px solid transparent; background: var(--panel); }
+  .stat-card-btn .stat-num { color: var(--type-color, var(--fg)); }
+  .stat-card-btn.on { border-color: color-mix(in srgb, var(--type-color) 50%, transparent); background: color-mix(in srgb, var(--type-color) 10%, transparent); }
+  .audit-listmeta { display: flex; align-items: center; gap: 0.6rem; color: var(--fg-dim); font-size: 0.82rem; margin: 1rem 0 0.6rem; }
+  .audit-findings { display: flex; flex-direction: column; gap: 0.55rem; }
+  .finding {
+    border: 1px solid var(--border-soft); border-left: 3px solid var(--sev-color, var(--border));
+    border-radius: var(--radius); padding: 0.7rem 0.9rem; background: var(--panel);
+  }
+  .finding-head { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+  .finding-locus code {
+    font-size: 0.74rem; background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 0.05rem 0.4rem; color: var(--fg);
+  }
+  .finding-nodes { display: flex; flex-wrap: wrap; gap: 0.5rem 0.9rem; margin: 0.45rem 0 0.3rem; }
+  .finding-node { display: inline-flex; align-items: center; gap: 0.4rem; min-width: 0; }
+  .finding-node .node-link { font-weight: 600; }
+  .finding-path { color: var(--fg-dim); font-size: 0.72rem; font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; max-width: 38ch; white-space: nowrap; }
+  .finding-desc { color: var(--fg-muted); font-size: 0.84rem; line-height: 1.45; }
+  .finding-action { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-top: 0.45rem; padding-top: 0.45rem; border-top: 1px dashed var(--border-soft); }
+  .finding-action .action-rationale { color: var(--fg-muted); font-size: 0.8rem; }
+  .pager { display: flex; align-items: center; justify-content: center; gap: 1rem; margin: 1.25rem 0; color: var(--fg-muted); }
+</style>
 
 <script>
 function analyzePage() {
+  // Per-detector + per-severity colors -- mirror the Nebula palette so the
+  // badges read consistently with the rest of the UI. (Colors only; the
+  // single-source node-type palette is window.MNEMO_TYPE_COLORS.)
+  const SEV_COLORS = { high: '#f43f5e', candidate: '#5fa8ff', medium: '#fb923c', low: '#94a3b8' };
+  const FINDING_COLORS = {
+    orphan_references: '#f43f5e', orphan_reference: '#f43f5e',
+    contradictions: '#ff8a4c',
+    semantic_orphans: '#e879f9', semantic_orphan: '#e879f9',
+    duplicates: '#818cf8', stale: '#94a3b8',
+    dead_code: '#2dd4bf', god_object: '#c084fc',
+    cyclic_imports: '#06b6d4', cyclic_import: '#06b6d4',
+    duplicate_code: '#38bdf8',
+  };
+  const PAGE_SIZE = 25;
+  const SEV_ORDER = { high: 0, candidate: 1, medium: 2, low: 3 };
+  const CACHE_KEY = 'mnemo.analyze.last';
+  const SCOPE_KEY = 'mnemo.analyze.scope';
+  const MAX_CACHE_BYTES = 2_000_000;
+
   return {
     report: null,
     error: null,
     running: false,
+    ranAt: null,
+    page: 1,
+    bucketFilter: null,
+    cacheNote: '',
+    lens: 'none',
+    // agnostic detector chips: stale + orphan_references default ON
+    // (instant, no embedder); the embedding-bound floods default OFF.
+    agnosticDetectors: [
+      { key: 'orphan_references', label: 'orphan citations', color: 'orphan_references', heavy: false },
+      { key: 'stale', label: 'stale', color: 'stale', heavy: false },
+      { key: 'duplicates', label: 'duplicates', color: 'duplicates', heavy: true },
+      { key: 'contradictions', label: 'contradictions', color: 'contradictions', heavy: true },
+      { key: 'semantic_orphans', label: 'semantic orphans', color: 'semantic_orphans', heavy: true },
+    ],
+    scope: {
+      orphan_references: true, stale: true,
+      duplicates: false, contradictions: false, semantic_orphans: false,
+    },
+
+    sevColor(s) { return SEV_COLORS[s] || '#94a3b8'; },
+    findingColor(t) { return FINDING_COLORS[t] || (window.MNEMO_TYPE_COLOR_FALLBACK || '#7ee7e0'); },
+    typeColor(t) { return (window.mnemoColorFor && window.mnemoColorFor(t)) || '#7ee7e0'; },
+
+    // Per-node display info from the response's node_labels map.
+    _label(nid) { return (this.report && this.report.node_labels && this.report.node_labels[nid]) || null; },
+    nodeName(nid) { const l = this._label(nid); return (l && l.name) || nid; },
+    nodeType(nid) { const l = this._label(nid); return (l && l.type) || ''; },
+    nodePath(nid) { const l = this._label(nid); return (l && l.source_path) || ''; },
+
+    // The concrete problem locus -- the missing citation / undefined
+    // concept / flagged symbol -- so "where" is visible without a click.
+    locus(f) {
+      if (f.missing_targets && f.missing_targets.length) return 'missing: ' + f.missing_targets.join(', ');
+      if (f.concept) return 'concept: ' + f.concept;
+      if (f.symbol) return f.symbol;
+      return '';
+    },
+
+    get summaryBuckets() {
+      if (!this.report) return [];
+      const s = this.report.summary || {};
+      return Object.keys(s)
+        .filter((k) => !k.startsWith('_'))
+        .map((k) => ({ key: k, count: s[k], label: k.replace(/_/g, ' ') }));
+    },
+
     get sortedFindings() {
       if (!this.report) return [];
-      const order = { high: 0, medium: 1, low: 2 };
-      // v5.13.0: 'candidate' sits between 'high' and 'medium' so
-      // LLM-confirmed contradictions float to the top followed by
-      // unconfirmed candidates.
-      const expanded = { high: 0, candidate: 1, medium: 2, low: 3 };
-      return [...this.report.findings].sort((a, b) => {
-        const da = expanded[a.severity] ?? (order[a.severity] ?? 4);
-        const db = expanded[b.severity] ?? (order[b.severity] ?? 4);
+      let arr = this.report.findings;
+      if (this.bucketFilter) {
+        arr = arr.filter((f) => this._bucketOf(f) === this.bucketFilter);
+      }
+      return [...arr].sort((a, b) => {
+        const da = SEV_ORDER[a.severity] ?? 4, db = SEV_ORDER[b.severity] ?? 4;
         if (da !== db) return da - db;
-        return a.type.localeCompare(b.type);
+        return String(a.type).localeCompare(String(b.type));
       });
     },
+    // Map a per-finding type to its summary bucket key (plural API name).
+    _bucketOf(f) {
+      if (f.type === 'orphan_reference') return 'orphan_references';
+      if (f.type === 'semantic_orphan') return 'semantic_orphans';
+      if (f.type === 'cyclic_import') return 'cyclic_imports';
+      return f.type;
+    },
+    get totalPages() { return Math.max(1, Math.ceil(this.sortedFindings.length / PAGE_SIZE)); },
+    get pageFindings() {
+      const start = (this.page - 1) * PAGE_SIZE;
+      return this.sortedFindings.slice(start, start + PAGE_SIZE)
+        .map((f, j) => ({ ...f, _k: (this.page * 1000) + j }));
+    },
+    get listMeta() {
+      const total = this.sortedFindings.length;
+      if (!total) return '';
+      const start = (this.page - 1) * PAGE_SIZE + 1;
+      const end = Math.min(total, this.page * PAGE_SIZE);
+      return 'Showing ' + start + '–' + end + ' of ' + total.toLocaleString() + ' finding(s)';
+    },
+    get metaLine() {
+      if (!this.ranAt) return '';
+      const scopeTxt = this.lens === 'code' ? 'lens=code'
+        : this.agnosticDetectors.filter((d) => this.scope[d.key]).map((d) => d.key).join(', ');
+      return 'audited ' + this.ranAt + ' · ' + (scopeTxt || 'nothing selected');
+    },
+
+    toggleBucket(k) { this.bucketFilter = this.bucketFilter === k ? null : k; this.page = 1; },
+
+    persistScope() {
+      try {
+        localStorage.setItem(SCOPE_KEY, JSON.stringify({ lens: this.lens, scope: this.scope }));
+      } catch (_) { /* quota / disabled */ }
+    },
+
+    // No auto-run: restore the persisted scope + the LAST result so the
+    // page opens instantly without re-analyzing.
+    restore() {
+      try {
+        const sc = JSON.parse(localStorage.getItem(SCOPE_KEY) || 'null');
+        if (sc && sc.scope) { this.scope = { ...this.scope, ...sc.scope }; this.lens = sc.lens || 'none'; }
+      } catch (_) { /* ignore */ }
+      try {
+        const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || 'null');
+        if (cached && cached.report) {
+          this.report = cached.report;
+          this.ranAt = cached.ranAt || (cached.report && cached.report.ran_at) || '';
+        }
+      } catch (_) { /* ignore */ }
+    },
+
+    _selectedTypes() {
+      return this.agnosticDetectors.filter((d) => this.scope[d.key]).map((d) => d.key);
+    },
+
     async run() {
       this.running = true;
       this.error = null;
+      this.cacheNote = '';
+      this.bucketFilter = null;
+      this.page = 1;
+      const body = this.lens === 'code'
+        ? { lens: 'code' }
+        : { types: this._selectedTypes() };
       try {
         const r = await fetch('/v1/analyze', {
           method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({}),
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
         });
         if (!r.ok) throw new Error('HTTP ' + r.status);
         this.report = await r.json();
+        this.ranAt = this.report.ran_at;
+        this._cache();
       } catch (e) {
         this.error = String(e);
       } finally {
         this.running = false;
       }
     },
-    // v5.13.0: 'candidate' severity sits between high and medium --
-    // it's a deterministic contradiction finding waiting for judgement.
+
+    _cache() {
+      try {
+        const payload = JSON.stringify({ ranAt: this.ranAt, report: this.report });
+        if (payload.length > MAX_CACHE_BYTES) {
+          localStorage.removeItem(CACHE_KEY);
+          this.cacheNote = 'shown below — too large to keep after a reload (re-run to see it again)';
+          return;
+        }
+        localStorage.setItem(CACHE_KEY, payload);
+      } catch (_) {
+        this.cacheNote = 'could not cache result (storage full)';
+      }
+    },
   };
 }
 </script>

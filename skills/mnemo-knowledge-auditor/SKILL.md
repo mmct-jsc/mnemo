@@ -289,14 +289,27 @@ running agnostic detectors on a code corpus floods).
     defer an import to runtime — citing the cycle members from
     `node_ids`. The cycle's existence is certain; whether/how to
     break it is the user's call. NEVER auto-edit.
+- **duplicate_code** (v5.20.0): pairs of `code_function` /
+  `code_method` nodes with near-identical bodies (embedding cosine
+  ≥ 0.97), excluding test symbols + bodies under 5 non-empty lines.
+  Deterministic + precise (no LLM judge — the threshold is high-
+  confidence). Severity `medium`; `node_ids` lists the duplicate
+  pair, `symbol` names both. Uses EMBEDDINGS, not the import graph.
+  - **Workflow**: for each `duplicate_code` finding, propose
+    extracting a shared helper / component and replacing both call
+    sites — citing both symbols from `symbol`. NEVER auto-edit.
 
 ### Future lenses (later releases)
 
 - `lens=vietnamese-law`: hierarchy violations + missing exception
   cross-refs in a legal corpus.
 - `lens=research-notes`: un-cited claims, hypothesis drift.
-- Additional `code` detectors (`cyclic_imports`, `orphan_modules`)
-  land when a corpus exercises them.
+- `orphan_modules` (code modules nothing imports) is **DEFERRED**: a
+  corpus probe found the import resolver records only ~12% of real
+  imports, so "zero inbound imports" floods (~83% false positives —
+  even heavily-imported modules like `analyzer.py` read as orphan).
+  It needs an import-resolver fix first, not just a gate. See
+  `docs/plans/2026-05-30-mnemo-understanding-phase3d-duplicate-code-design.md`.
 
 To discover valid lenses programmatically, the analyzer exports
 `KNOWN_LENSES`; an unknown lens runs no detectors (returns empty).
