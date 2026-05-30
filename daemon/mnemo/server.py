@@ -742,15 +742,18 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
     ) -> AnalyzeOut:
         """Run the knowledge auditor against the live store.
 
-        Walks the existing node graph + surfaces three structural
-        issues (stale / duplicates / orphan_references). Deterministic,
-        no LLM, no network. See
-        ``docs/plans/2026-05-22-mnemo-understanding-phase1-design.md``.
+        Walks the existing node graph + surfaces structural issues
+        across five detectors (stale / duplicates / orphan_references
+        / contradictions / semantic_orphans). Deterministic by
+        default; opt-in LLM augmentation via env flags. See the
+        Understanding-arc design docs under ``docs/plans/``.
 
-        Phase 1 (this release): detection only -- the user reviews
-        findings + acts via existing primitives (``mnemo_update_node`` /
-        ``mnemo_delete_node``). Phase 2 (v5.13.0+) adds opt-in LLM
-        augmentation. Phase 4 (v5.15.0+) makes the auditor proactive.
+        Detection only: the user reviews findings + acts via existing
+        primitives (``mnemo_update_node`` / ``mnemo_delete_node`` /
+        ``mnemo_create_node``). v5.15.0 adds opt-in refactor_actions
+        enrichment (``propose_actions``) that attaches an LLM-proposed
+        action to each high/medium finding -- still a proposal, never
+        auto-applied. Phase 4 (v5.16.0+) makes the auditor proactive.
         """
         from mnemo import analyzer
 
@@ -760,6 +763,7 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
             embedder=state.embedder,
             types=body.types,
             project_key=body.project_key,
+            propose_actions=body.propose_actions,
         )
         return AnalyzeOut(**result)
 

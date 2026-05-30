@@ -86,6 +86,37 @@ For each finding, propose ONE concrete action using existing
 mnemo primitives. The user copies the proposal and runs it manually
 (or accepts it via the chat companion's confirm UI).
 
+### Auto-proposed actions (v5.15.0)
+
+If you call `mnemo_analyze(propose_actions=true)` AND the daemon has
+`MNEMO_ANALYZE_PROPOSE_ACTIONS=1` + `ANTHROPIC_API_KEY` set, each
+high/medium finding arrives with an `action` field already populated
+by the daemon's LLM proposer:
+
+```
+"action": {
+  "kind": "merge" | "supersede" | "delete" | "create_definition"
+        | "add_reconciliation_note" | "fix_citation" | "none",
+  "primitive": "mnemo_update_node" | "mnemo_delete_node"
+        | "mnemo_create_node" | null,
+  "target_node_id": "<id>" | null,
+  "args_hint": { ...suggested kwargs... },
+  "rationale": "<why>"
+}
+```
+
+When the `action` field is present, USE IT as the basis for your
+proposal rather than re-deriving from scratch — but still SHOW the
+user the action + rationale and let them decide. The proposer is
+severity-gated (high/medium only) and hard-capped per audit;
+`summary._refactor_actions_skipped` reports how many eligible
+findings were left unenriched by the cap. If `action.kind` is
+`"none"` (the proposer declined or hit an error), fall back to the
+per-type manual proposal templates below.
+
+When `propose_actions` is off (the default), every finding has
+`action: null` and you derive proposals manually as below.
+
 ### For `stale` findings:
 
 - Propose: archive via `mnemo_update_node(node_id, frontmatter_patch={"archived": true})`,

@@ -140,3 +140,44 @@ def test_analyze_endpoint_summary_matches_findings(app_client) -> None:
     assert summary_stale == findings_stale, (
         f"summary[stale]={summary_stale} mismatch with len(findings.stale)={findings_stale}"
     )
+
+
+def test_analyze_endpoint_accepts_propose_actions_field(app_client) -> None:
+    """v5.15.0: ``propose_actions`` is an accepted body field. With no
+    env opt-in the enrichment is a no-op + the response stays
+    byte-stable (findings carry no action, no skipped key)."""
+    client, store = app_client
+    store.upsert_node(
+        _mknode(
+            id="memory_feedback/x",
+            description="canonical",
+            body="cites [mnemo:does-not-exist] for context",
+        )
+    )
+    r = client.post("/v1/analyze", json={"types": ["orphan_references"], "propose_actions": True})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    orphan = next(f for f in body["findings"] if f["type"] == "orphan_reference")
+    # No proposer in test env -> action stays None even with the flag.
+    assert orphan.get("action") is None
+    assert "_refactor_actions_skipped" not in body["summary"]
+
+
+def test_analyze_endpoint_finding_carries_action_and_concept_fields(app_client) -> None:
+    """v5.15.0: the AnalyzeFinding schema declares ``action`` +
+    ``concept`` so they survive HTTP serialization (the v5.14.0
+    ``concept`` field was previously stripped)."""
+    client, store = app_client
+    store.upsert_node(
+        _mknode(
+            id="memory_feedback/x",
+            description="canonical",
+            body="cites [mnemo:does-not-exist]",
+        )
+    )
+    r = client.post("/v1/analyze", json={"types": ["orphan_references"]})
+    body = r.json()
+    orphan = next(f for f in body["findings"] if f["type"] == "orphan_reference")
+    # Both keys must be present in the serialized shape (value None is fine).
+    assert "action" in orphan, "AnalyzeFinding must declare 'action' so HTTP keeps it"
+    assert "concept" in orphan, "AnalyzeFinding must declare 'concept' so HTTP keeps it"

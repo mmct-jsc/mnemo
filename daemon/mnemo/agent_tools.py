@@ -1009,10 +1009,15 @@ def _mnemo_run_skill(ctx: ToolContext, *, skill_name: str) -> dict:
         "any other node's name or description). Both default to "
         "severity 'candidate', elevated to 'high' when "
         "``MNEMO_ANALYZE_LLM_JUDGE=1`` + ``ANTHROPIC_API_KEY`` are set "
-        "and Claude confirms. Returns "
+        "and Claude confirms. Set ``propose_actions=true`` (v5.15.0) to "
+        "attach an LLM-proposed concrete refactor action (merge / "
+        "supersede / delete / create_definition / fix_citation) to "
+        "each high/medium finding -- requires "
+        "``MNEMO_ANALYZE_PROPOSE_ACTIONS=1`` + key; actions are "
+        "proposals the user reviews, never auto-applied. Returns "
         "``{ran_at, node_count_scanned, findings, summary}``. Optional "
-        "``types`` filter restricts detectors. Phase 1 + 2a + 2b of "
-        "mnemo's Understanding arc; refactor_actions land in v5.15.0+."
+        "``types`` filter restricts detectors. Phase 1 + 2a + 2b + 2c "
+        "of mnemo's Understanding arc."
     ),
     parameters=_obj(
         {
@@ -1030,6 +1035,16 @@ def _mnemo_run_skill(ctx: ToolContext, *, skill_name: str) -> dict:
                 "default": None,
                 "description": "Reserved for future scoping (currently no-op).",
             },
+            "propose_actions": {
+                "type": ["boolean", "null"],
+                "default": None,
+                "description": (
+                    "v5.15.0: opt-in refactor_actions enrichment. true "
+                    "attaches an LLM-proposed action to each high/medium "
+                    "finding (requires MNEMO_ANALYZE_PROPOSE_ACTIONS=1 + "
+                    "ANTHROPIC_API_KEY); null/omit = off."
+                ),
+            },
         },
         [],
     ),
@@ -1039,6 +1054,7 @@ def _mnemo_analyze(
     *,
     types: list[str] | None = None,
     project_key: str | None = None,
+    propose_actions: bool | None = None,
 ) -> dict:
     from mnemo import analyzer
 
@@ -1047,4 +1063,5 @@ def _mnemo_analyze(
         embedder=ctx.embedder,
         types=types,
         project_key=project_key,
+        propose_actions=propose_actions,
     )
