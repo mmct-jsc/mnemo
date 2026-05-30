@@ -912,6 +912,248 @@ def detect_semantic_orphans(
     return findings
 
 
+# --- Phase 2c (v5.15.0) -- refactor_actions enrichment -----------------
+
+# Default hard cap on the number of findings enriched with an LLM
+# action per audit. Defense in depth: even within the high/medium
+# severity gate a pathological corpus could surface hundreds.
+# Bounds worst-case cost (~$0.10 at 50 actions x ~1.5k tok on
+# Sonnet). The skipped count is always surfaced (no silent caps).
+DEFAULT_MAX_REFACTOR_ACTIONS = 50
+
+# Severity tiers eligible for action proposal by default. The
+# actionable / confirmed tier: high (LLM-confirmed or broken
+# citation) + medium (duplicates). ``candidate`` (unconfirmed
+# deterministic) and ``low`` (stale, already user-marked) are NOT
+# enriched unless the caller explicitly widens ``severities`` --
+# they're noise until promoted, and enriching them all would be
+# both expensive and low-value.
+DEFAULT_REFACTOR_SEVERITIES = ("high", "medium")
+
+# Body excerpt cap per cited node sent to the proposer. Full bodies
+# can be huge; 1500 chars per node is enough context to propose a
+# concrete action.
+_PROPOSER_BODY_CAP = 1500
+
+# The canonical action ``kind`` values + their primitive mappings.
+# Surfaced in the system prompt so the model picks from a closed set.
+_REFACTOR_ACTION_KINDS = (
+    "merge",  # duplicates -> mnemo_update_node(canonical) + delete other
+    "supersede",  # contradiction -> mnemo_update_node(older, +SUPERSEDED)
+    "delete",  # stale / fully-superseded -> mnemo_delete_node
+    "create_definition",  # semantic_orphan -> mnemo_create_node
+    "add_reconciliation_note",  # contradiction (both valid) -> mnemo_update_node
+    "fix_citation",  # orphan_reference -> mnemo_update_node(body)
+    "none",  # the proposer declined / error
+)
+
+_PROPOSER_SYSTEM_PROMPT = (
+    "You are a knowledge-graph refactoring assistant. Given ONE "
+    "audit finding (a structural issue) plus the bodies of the cited "
+    "nodes, propose exactly ONE concrete action a human could take to "
+    "resolve it, mapping to an existing mnemo primitive. Valid action "
+    "kinds and their primitives:\n"
+    "- merge -> mnemo_update_node (fold the duplicate's unique content "
+    "into the canonical node; the user deletes the other afterward)\n"
+    "- supersede -> mnemo_update_node (append a 'SUPERSEDED by <id>' "
+    "note to the older / less authoritative node)\n"
+    "- delete -> mnemo_delete_node (the node is fully superseded / "
+    "obsolete)\n"
+    "- create_definition -> mnemo_create_node (define a referenced-but-"
+    "undefined concept)\n"
+    "- add_reconciliation_note -> mnemo_update_node (both nodes are "
+    "valid in different scopes; add a note explaining the distinction)\n"
+    "- fix_citation -> mnemo_update_node (repair or remove a broken "
+    "[mnemo:<id>] citation)\n"
+    "- none -> null (you cannot propose a safe action)\n"
+    "These are PROPOSALS the user reviews; you NEVER apply them. "
+    "Respond with ONLY a JSON object of the shape "
+    '{"kind": "<one kind>", "primitive": "<primitive or null>", '
+    '"target_node_id": "<id or null>", "args_hint": {<suggested kwargs>}, '
+    '"rationale": "<one short paragraph>"}. '
+    "No prose outside the JSON. No markdown fences."
+)
+
+
+def _empty_action(reason: str) -> dict[str, Any]:
+    """The graceful-degradation action: no operation proposed."""
+    return {
+        "kind": "none",
+        "primitive": None,
+        "target_node_id": None,
+        "args_hint": {},
+        "rationale": reason,
+    }
+
+
+@dataclass
+class LLMRefactorProposer:
+    """Opt-in structured action generator for audit findings.
+
+    UNLIKE the v5.13.0 / v5.14.0 judges (binary classifiers returning
+    bool), this is a GENERATOR: it returns an action dict. Wraps an
+    Anthropic client; tests pass a MagicMock so no network call is
+    made. Graceful: any parse/exception path returns an ``_empty_action``
+    (``kind="none"``) so the finding still ships with an empty action.
+    """
+
+    client: Any
+    model: str = "claude-sonnet-4-6"
+    max_tokens: int = 700
+    rationale_log: list[dict[str, Any]] = field(default_factory=list)
+
+    def propose(self, *, finding: dict[str, Any], node_bodies: dict[str, str]) -> dict[str, Any]:
+        """Return an action dict for the finding. Never raises; every
+        error path returns ``_empty_action``."""
+        bodies_block = "\n\n".join(
+            f"### Node {nid}\n{(body or '')[:_PROPOSER_BODY_CAP]}"
+            for nid, body in node_bodies.items()
+        )
+        user_msg = (
+            "## Finding\n"
+            f"type: {finding.get('type')}\n"
+            f"severity: {finding.get('severity')}\n"
+            f"node_ids: {finding.get('node_ids')}\n"
+            f"description: {finding.get('description')}\n\n"
+            "## Cited node bodies\n"
+            f"{bodies_block}\n\n"
+            "## Task\n"
+            "Propose ONE action. Respond with ONLY the JSON."
+        )
+        try:
+            response = self.client.messages.create(
+                model=self.model,
+                max_tokens=self.max_tokens,
+                system=_PROPOSER_SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": user_msg}],
+            )
+            text = response.content[0].text
+            parsed = json.loads(text)
+            kind = str(parsed.get("kind", "none"))
+            if kind not in _REFACTOR_ACTION_KINDS:
+                kind = "none"
+            action = {
+                "kind": kind,
+                "primitive": parsed.get("primitive") if kind != "none" else None,
+                "target_node_id": parsed.get("target_node_id"),
+                "args_hint": parsed.get("args_hint", {}) or {},
+                "rationale": str(parsed.get("rationale", "")),
+            }
+            self.rationale_log.append(
+                {
+                    "finding_type": finding.get("type"),
+                    "node_ids": finding.get("node_ids"),
+                    "kind": action["kind"],
+                    "rationale": action["rationale"],
+                    "parsed_ok": True,
+                }
+            )
+            return action
+        except (json.JSONDecodeError, KeyError, AttributeError, IndexError, TypeError) as exc:
+            log.warning(
+                "LLMRefactorProposer: parse/structure error (%s); returning kind='none'",
+                exc,
+            )
+            self.rationale_log.append(
+                {
+                    "finding_type": finding.get("type"),
+                    "node_ids": finding.get("node_ids"),
+                    "kind": "none",
+                    "rationale": f"PARSE_ERROR: {exc}",
+                    "parsed_ok": False,
+                }
+            )
+            return _empty_action(f"PARSE_ERROR: {exc}")
+        except Exception as exc:  # noqa: BLE001
+            log.warning("LLMRefactorProposer: client error (%s); returning kind='none'", exc)
+            self.rationale_log.append(
+                {
+                    "finding_type": finding.get("type"),
+                    "node_ids": finding.get("node_ids"),
+                    "kind": "none",
+                    "rationale": f"CLIENT_ERROR: {exc}",
+                    "parsed_ok": False,
+                }
+            )
+            return _empty_action(f"CLIENT_ERROR: {exc}")
+
+
+def refactor_proposer_from_env() -> LLMRefactorProposer | None:
+    """Construct an LLMRefactorProposer from environment when ALL of:
+    ``MNEMO_ANALYZE_PROPOSE_ACTIONS`` is truthy, ``ANTHROPIC_API_KEY``
+    is set, and the ``anthropic`` package is importable. Otherwise
+    return None so the enrichment pass is a no-op.
+
+    Uses its OWN flag (independent of the detection-judge flag
+    ``MNEMO_ANALYZE_LLM_JUDGE``) so action proposal can be toggled
+    separately. Shares the model override
+    ``MNEMO_ANALYZE_JUDGE_MODEL`` (default ``claude-sonnet-4-6``).
+    """
+    flag = os.environ.get("MNEMO_ANALYZE_PROPOSE_ACTIONS", "").strip().lower()
+    if flag not in {"1", "true", "yes", "on"}:
+        return None
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        return None
+    try:
+        import anthropic  # type: ignore[import-untyped]
+    except ImportError:
+        log.warning(
+            "refactor_proposer_from_env: MNEMO_ANALYZE_PROPOSE_ACTIONS=1 set "
+            "but anthropic package not installed; refactor_actions is a no-op."
+        )
+        return None
+    model = os.environ.get("MNEMO_ANALYZE_JUDGE_MODEL", "claude-sonnet-4-6")
+    return LLMRefactorProposer(client=anthropic.Anthropic(), model=model)
+
+
+def propose_refactor_actions(
+    store: Store,
+    findings: list[dict[str, Any]],
+    *,
+    proposer: Any | None = None,
+    max_actions: int = DEFAULT_MAX_REFACTOR_ACTIONS,
+    severities: tuple[str, ...] = DEFAULT_REFACTOR_SEVERITIES,
+) -> tuple[list[dict[str, Any]], int]:
+    """Enrich eligible findings with an LLM-proposed ``action``.
+
+    Eligibility: a finding's ``severity`` must be in ``severities``
+    (default high+medium). Eligible findings are enriched in list
+    order up to ``max_actions``; any eligible findings beyond the cap
+    are left unenriched and counted into the returned ``n_skipped``.
+    Non-eligible findings are never touched (no ``action`` key added).
+
+    Without a ``proposer`` (``None``) the pass is a no-op: returns the
+    findings unchanged + ``0`` skipped. This is the byte-stable
+    default path.
+
+    Returns ``(findings, n_skipped)``. The findings list is mutated
+    in place (and also returned for convenience).
+    """
+    if proposer is None:
+        return findings, 0
+
+    enriched_count = 0
+    skipped = 0
+    for f in findings:
+        if f.get("severity") not in severities:
+            continue
+        if enriched_count >= max_actions:
+            skipped += 1
+            continue
+        bodies: dict[str, str] = {}
+        for nid in f.get("node_ids", []):
+            node = store.get_node(nid)
+            bodies[nid] = (node.body if node and node.body else "") if node else ""
+        try:
+            action = proposer.propose(finding=f, node_bodies=bodies)
+        except Exception as exc:  # noqa: BLE001 -- proposer must never break the audit
+            log.warning("propose_refactor_actions: proposer raised (%s); using empty action", exc)
+            action = _empty_action(f"PROPOSER_RAISED: {exc}")
+        f["action"] = action
+        enriched_count += 1
+    return findings, skipped
+
+
 # --- Orchestrator ------------------------------------------------------
 
 
@@ -920,6 +1162,9 @@ def detect_semantic_orphans(
 # plural for the API; the per-finding ``type`` is the singular
 # ``orphan_reference`` (likewise ``semantic_orphans`` plural API,
 # ``semantic_orphan`` singular per-finding).
+#
+# refactor_actions (v5.15.0) is NOT listed here -- it's an
+# enrichment over findings, not a detector. The count stays 5.
 KNOWN_DETECTOR_TYPES = (
     "stale",
     "duplicates",
@@ -937,6 +1182,8 @@ def analyze(
     project_key: str | None = None,  # noqa: ARG001 -- reserved for future scoping
     judge: Any | None = None,
     orphan_judge: Any | None = None,
+    propose_actions: bool | None = None,
+    proposer: Any | None = None,
 ) -> dict[str, Any]:
     """Run the requested detectors + return a canonical envelope.
 
@@ -963,9 +1210,21 @@ def analyze(
             candidates are escalated to the judge with the same
             confirmed/rejected/drop semantics as ``judge``. Default
             fetches via :func:`semantic_orphan_judge_from_env`.
+        propose_actions: opt-in refactor_actions enrichment (v5.15.0).
+            ``True`` runs the enrichment (using ``proposer`` or an
+            env-derived one); ``False`` disables it; ``None`` (default)
+            enables it only when an env-derived proposer exists
+            (``MNEMO_ANALYZE_PROPOSE_ACTIONS=1`` + key + anthropic).
+            When it runs, each high/medium finding gains an ``action``
+            dict and ``summary["_refactor_actions_skipped"]`` reports
+            how many eligible findings the cap dropped.
+        proposer: optional ``LLMRefactorProposer``. Caller-provided
+            takes precedence over the env-derived one.
 
     Returns:
-        ``{ran_at, node_count_scanned, findings, summary}``.
+        ``{ran_at, node_count_scanned, findings, summary}``. When the
+        enrichment ran, eligible findings carry an ``action`` field
+        and ``summary`` includes ``_refactor_actions_skipped``.
     """
     requested = set(types) if types else set(KNOWN_DETECTOR_TYPES)
 
@@ -986,6 +1245,23 @@ def analyze(
         )
         findings.extend(detect_semantic_orphans(store, judge=resolved_orphan_judge))
 
+    # refactor_actions enrichment (v5.15.0). Opt-in: resolve the
+    # proposer lazily (caller-provided > env-derived > None). The
+    # ``propose_actions`` flag gates it; when None it falls back to
+    # the env flag via the proposer factory. A None proposer makes
+    # the pass a no-op (byte-stable default).
+    n_skipped: int | None = None
+    want_actions = propose_actions
+    if want_actions is None:
+        # No explicit flag: enable only if the env-derived proposer
+        # exists (mirrors the judge precedence).
+        resolved_proposer = proposer if proposer is not None else refactor_proposer_from_env()
+        want_actions = resolved_proposer is not None
+    else:
+        resolved_proposer = proposer if proposer is not None else refactor_proposer_from_env()
+    if want_actions and resolved_proposer is not None:
+        findings, n_skipped = propose_refactor_actions(store, findings, proposer=resolved_proposer)
+
     # Tally by type. ``orphan_reference`` (singular per-finding type)
     # is reported under the API-facing ``orphan_references`` (plural)
     # key so callers can match on the same vocabulary they passed via
@@ -998,6 +1274,12 @@ def analyze(
         elif bucket == "semantic_orphan":
             bucket = "semantic_orphans"
         summary[bucket] = summary.get(bucket, 0) + 1
+
+    # Surface the skipped-due-to-cap count ONLY when the enrichment
+    # pass actually ran (no silent caps; but don't inflate the
+    # default deterministic summary with a noise key).
+    if n_skipped is not None:
+        summary["_refactor_actions_skipped"] = n_skipped
 
     return {
         "ran_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),

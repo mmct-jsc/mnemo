@@ -78,3 +78,29 @@ def test_analyze_page_has_no_edit_buttons(client) -> None:
             f"Phase 1 anti-goal violated: page mentions {danger!r}; "
             f"the auditor must SURFACE only, never apply edits."
         )
+
+
+def test_analyze_page_renders_proposed_action_column(client) -> None:
+    """v5.15.0: the findings table has a 'Proposed action' column +
+    binds the action fields so refactor_actions are visible when the
+    enrichment ran."""
+    r = client.get("/analyze")
+    text = r.text.lower()
+    assert "proposed action" in text, "findings table must have a Proposed action column"
+    # The Alpine binding reads f.action.kind / .primitive / .rationale.
+    raw = r.text
+    assert "f.action" in raw, "the table must bind the per-finding action object"
+
+
+def test_analyze_page_proposed_action_is_not_auto_applied(client) -> None:
+    """v5.15.0 anti-goal: the proposed-action column is a PROPOSAL
+    surface, never an apply button. Still no auto-apply automation."""
+    r = client.get("/analyze")
+    text = r.text.lower()
+    # The action column shows kind + primitive + rationale, never a
+    # one-click 'apply this action' control.
+    for danger in ("apply action", "run action", "execute action"):
+        assert danger not in text, (
+            f"v5.15.0 anti-goal violated: page exposes {danger!r}; "
+            f"refactor_actions are proposals the user reviews, never applied."
+        )

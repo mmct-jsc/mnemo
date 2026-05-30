@@ -72,3 +72,26 @@ def test_skill_proposes_action_primitives() -> None:
         "skill should propose at least one concrete action primitive "
         "(mnemo_update_node / mnemo_delete_node) per its design contract"
     )
+
+
+def test_skill_documents_auto_proposed_actions() -> None:
+    """v5.15.0: the skill must document the daemon-side
+    refactor_actions enrichment -- when to pass propose_actions=true,
+    how to read the action field, and that it's still never
+    auto-applied."""
+    text = SKILL_FILE.read_text(encoding="utf-8")
+    assert "propose_actions" in text, "skill must document the propose_actions option (v5.15.0)"
+    # The action field shape the daemon attaches.
+    assert '"kind"' in text or "action.kind" in text or "`action`" in text, (
+        "skill must explain the action field the proposer attaches"
+    )
+
+
+def test_skill_auto_actions_still_never_auto_applied() -> None:
+    """v5.15.0 anti-goal: even with auto-proposed actions, the skill
+    must keep the 'never auto-apply' contract -- the user reviews."""
+    text = SKILL_FILE.read_text(encoding="utf-8").lower()
+    assert "never auto-appl" in text or "never auto-apply" in text, (
+        "skill must preserve the NEVER auto-apply anti-goal even with "
+        "the v5.15.0 auto-proposed actions"
+    )

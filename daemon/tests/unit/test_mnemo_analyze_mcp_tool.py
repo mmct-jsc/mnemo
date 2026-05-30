@@ -108,3 +108,35 @@ def test_mnemo_analyze_accepts_project_key_kwarg(ctx) -> None:
     # Should not raise.
     result = spec.fn(ctx, project_key="some-project")
     assert "findings" in result
+
+
+def test_mnemo_analyze_accepts_propose_actions_kwarg(ctx) -> None:
+    """v5.15.0: the ``propose_actions`` arg is accepted. With no env
+    opt-in + no proposer the enrichment is a no-op, so findings carry
+    no action and the response is byte-stable."""
+    ctx.store.upsert_node(
+        _mknode(
+            id="memory_feedback/x",
+            description="canonical",
+            body="cites [mnemo:does-not-exist]",
+        )
+    )
+    spec = TOOLS["mnemo_analyze"]
+    # propose_actions=True but no env opt-in -> proposer is None ->
+    # the pass is a no-op; must not raise.
+    result = spec.fn(ctx, types=["orphan_references"], propose_actions=True)
+    assert "findings" in result
+    orphan = next(f for f in result["findings"] if f["type"] == "orphan_reference")
+    assert orphan.get("action") is None, (
+        "without the env opt-in there's no proposer; action must stay None"
+    )
+
+
+def test_mnemo_analyze_propose_actions_in_schema() -> None:
+    """The tool's input schema advertises the new optional param so
+    MCP hosts can surface it."""
+    spec = TOOLS["mnemo_analyze"]
+    props = spec.parameters["properties"]
+    assert "propose_actions" in props, (
+        f"mnemo_analyze must advertise propose_actions; got {sorted(props)}"
+    )

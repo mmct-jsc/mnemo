@@ -2,6 +2,116 @@
 
 All notable changes to mnemo are documented here.
 
+## [5.15.0] - 2026-05-23
+
+**Understanding Phase 2c: refactor_actions enrichment.**
+
+The auditor (v5.12.0 -> v5.14.0) surfaces five classes of structural
+issue but every finding stops at "here is a problem". v5.15.0 turns
+detection into prescription: an opt-in **refactor_actions**
+enrichment attaches ONE concrete, LLM-proposed action to each
+high/medium finding -- mapping to an existing mnemo primitive
+(`mnemo_update_node` / `mnemo_delete_node` / `mnemo_create_node`).
+This is squarely the user's v6 vision: "actually suggest if need to
+refactor".
+
+refactor_actions is an ENRICHMENT over findings, NOT a 6th detector.
+`KNOWN_DETECTOR_TYPES` stays at 5. The action travels with the
+finding through the HTTP / MCP / UI surfaces.
+
+Two-layer, opt-in, bounded:
+
+1. **Severity gate + hard cap**: only findings whose severity is in
+   `("high","medium")` are eligible (the actionable / confirmed
+   tier; `candidate` + `low` are noise until promoted). Eligible
+   findings are enriched up to `DEFAULT_MAX_REFACTOR_ACTIONS` (50);
+   the skipped-due-to-cap count is surfaced in
+   `summary["_refactor_actions_skipped"]` (no silent caps).
+2. **LLM proposer**: when `MNEMO_ANALYZE_PROPOSE_ACTIONS=1` +
+   `ANTHROPIC_API_KEY` are set and `anthropic` is importable, each
+   eligible finding's cited node bodies are sent to Claude (default
+   `claude-sonnet-4-6`, shared `MNEMO_ANALYZE_JUDGE_MODEL` override)
+   which returns a structured action `{kind, primitive,
+   target_node_id, args_hint, rationale}`. Valid kinds: merge /
+   supersede / delete / create_definition / add_reconciliation_note
+   / fix_citation / none. Parse/network errors degrade to
+   `kind="none"`.
+
+The proposer NEVER applies the action -- it's a proposal the user
+reviews (Phase 1 anti-goal still in force). A confirm-then-apply
+mode is explicitly Phase 4 (v5.16.0+).
+
+### Features
+
+**`LLMRefactorProposer`** in `daemon/mnemo/analyzer.py`:
+- A structured GENERATOR (returns an action dict), unlike the
+  v5.13.0 / v5.14.0 binary-classifier judges. Per-finding
+  `rationale_log` audit trail. Graceful `_empty_action` on every
+  error path.
+
+**`refactor_proposer_from_env()`**:
+- Reads its OWN flag `MNEMO_ANALYZE_PROPOSE_ACTIONS` (independent of
+  the detection-judge flag) so action proposal toggles separately.
+
+**`propose_refactor_actions(store, findings, ...)`**:
+- Severity-gated + capped enrichment; returns
+  `(findings, n_skipped)`. No-proposer = no-op (byte-stable default).
+
+**`analyze(..., propose_actions=None, proposer=None)`**:
+- Wires the enrichment in after detection; precedence
+  caller > env > off. Skipped count lands in the summary.
+
+### Surface updates (additive only)
+
+- `AnalyzeFinding` gains `action: dict | None` AND `concept: str |
+  None` (the latter backfills a v5.14.0 omission -- the
+  semantic_orphans `concept` field was being stripped on HTTP
+  serialization because the model didn't declare it; the MCP path
+  always kept it).
+- `AnalyzeIn` gains `propose_actions: bool | None`.
+- `mnemo_analyze` MCP tool gains an optional `propose_actions`
+  param + description. **27-tool count unchanged**; the new param is
+  optional + backward-compatible (existing callers omit it and get
+  byte-identical behavior).
+- `/analyze` UI gains a "Proposed action" column + a skipped-cap
+  hint.
+- `mnemo-knowledge-auditor` SKILL.md documents the auto-proposed
+  action mode + preserves the never-auto-apply contract.
+
+### Tests
+
+- `tests/unit/test_refactor_actions.py` -- 12 tests (proposer shape
+  per finding type, graceful kind="none", rationale_log, enrichment
+  severity gate, cap + skipped count, no-proposer no-op, node-body
+  passing, custom severities, orchestrator wiring).
+- `tests/unit/test_refactor_proposer_env.py` -- 4 tests (env gate,
+  independence from the judge flag, graceful None).
+- Extended: `test_analyze_endpoint.py` (+2), `test_mnemo_analyze_mcp_tool.py`
+  (+2), `test_analyze_ui_page.py` (+2), `test_knowledge_auditor_skill.py`
+  (+2).
+- `tests/unit/_snapshots/mcp_tool_list.json` regenerated.
+
+**Daemon suite: targeting 1580+ (+20 vs v5.14.0).** Ruff clean.
+
+### Anti-goals preserved
+
+- NEVER auto-apply. The proposer generates a proposal; the user
+  acts. `propose_refactor_actions` calls no mutating primitive.
+- No per-finding LLM by default. Opt-in + severity-gated + capped.
+- No new MCP tool (count stays 27; one optional backward-compatible
+  param added).
+- No new detector (`KNOWN_DETECTOR_TYPES` stays 5).
+- No silent cap (skipped count surfaced).
+- No new daemon dependencies (`anthropic` already a runtime dep).
+
+### Carry-forward to v5.16.0+
+
+- Phase 3: pluggable domain lenses (`vietnamese-law` / `code` /
+  `research-notes`).
+- Phase 4: proactive auditor on every reindex + confirm-then-apply
+  mode (behind a separate explicit opt-in).
+- LLM-based concept extraction for semantic_orphans.
+
 ## [5.14.0] - 2026-05-23
 
 **Understanding Phase 2b: LLM-augmented semantic_orphans detector.**
