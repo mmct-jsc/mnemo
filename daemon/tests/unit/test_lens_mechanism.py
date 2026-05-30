@@ -52,6 +52,15 @@ def _mkcode(*, id: str, name: str, type: str = "code_function") -> Node:
     )
 
 
+def _add_methods(store: Store, class_id: str, n: int) -> None:
+    """Give a code_class ``n`` methods (real method nodes + method_of
+    edges -- the edges table has a FK on both endpoints)."""
+    for i in range(n):
+        mid = f"{class_id}__m{i}"
+        store.upsert_node(_mkcode(id=mid, name=f"method_{i}", type="code_method"))
+        store.add_edge(mid, class_id, "method_of")
+
+
 def _mkmem(*, id: str, description: str = "", body: str = "") -> Node:
     now = int(time.time())
     return Node(
@@ -142,4 +151,50 @@ def test_lens_summary_counts_dead_code(store) -> None:
     result = analyze(store, lens="code")
     assert result["summary"].get("dead_code", 0) >= 2, (
         f"summary must count dead_code findings; got {result['summary']}"
+    )
+
+
+def test_code_lens_has_two_detectors(store) -> None:
+    """v5.17.0: the code suite now holds dead_code AND god_object.
+    With both a dead private fn and a god class present, lens=code
+    surfaces both."""
+    from mnemo.analyzer import GOD_CLASS_METHOD_THRESHOLD, analyze
+
+    store.upsert_node(_mkcode(id="f1", name="_dead_helper"))
+    store.upsert_node(_mkcode(id="C", name="HugeService", type="code_class"))
+    _add_methods(store, "C", GOD_CLASS_METHOD_THRESHOLD + 1)
+
+    types_seen = {f["type"] for f in analyze(store, lens="code")["findings"]}
+    assert "dead_code" in types_seen, f"code lens must still surface dead_code; got {types_seen}"
+    assert "god_object" in types_seen, f"code lens must surface god_object; got {types_seen}"
+
+
+def test_code_lens_types_isolates_one_detector(store) -> None:
+    """v5.17.0: types filters within the now-two-detector code suite."""
+    from mnemo.analyzer import GOD_CLASS_METHOD_THRESHOLD, analyze
+
+    store.upsert_node(_mkcode(id="f1", name="_dead_helper"))
+    store.upsert_node(_mkcode(id="C", name="HugeService", type="code_class"))
+    _add_methods(store, "C", GOD_CLASS_METHOD_THRESHOLD + 1)
+
+    # Only god_object requested -> no dead_code even though a dead fn exists.
+    only_god = {f["type"] for f in analyze(store, lens="code", types=["god_object"])["findings"]}
+    assert only_god == {"god_object"}, f"types=[god_object] must isolate it; got {only_god}"
+
+    # Only dead_code requested -> no god_object even though a god class exists.
+    only_dead = {f["type"] for f in analyze(store, lens="code", types=["dead_code"])["findings"]}
+    assert only_dead == {"dead_code"}, f"types=[dead_code] must isolate it; got {only_dead}"
+
+
+def test_known_lenses_unchanged_and_dead_code_still_default_excluded(store) -> None:
+    """KNOWN_LENSES is still just ('code',); the agnostic default
+    still never runs god_object or dead_code."""
+    from mnemo.analyzer import KNOWN_LENSES, analyze
+
+    assert "code" in KNOWN_LENSES
+    store.upsert_node(_mkcode(id="C", name="HugeService", type="code_class"))
+    _add_methods(store, "C", 99)
+    types_seen = {f["type"] for f in analyze(store)["findings"]}  # no lens
+    assert "god_object" not in types_seen, (
+        f"agnostic default must not run god_object; got {types_seen}"
     )

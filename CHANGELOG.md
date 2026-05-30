@@ -2,6 +2,80 @@
 
 All notable changes to mnemo are documented here.
 
+## [5.17.0] - 2026-05-30
+
+**Understanding Phase 3b: god_object detector (code lens).**
+
+v5.16.0 shipped the code lens with `dead_code`. v5.17.0 adds a
+second code-lens detector, **`god_object`** — oversized classes and
+modules, surfaced by EXACT structural edge counts.
+
+Unlike `dead_code` (which leans on the best-effort `calls` graph and
+needs an LLM judge for precision), `god_object` counts Tier-1
+structural edges (`method_of`, `defines`) which are built directly
+from the AST and are complete. So a class's method count is exact —
+`god_object` is **precise without an LLM judge**, and it answers the
+vision verbatim: "suggest if it needs refactoring because it's a
+mess." A 92-method service class IS the mess.
+
+### Detector
+
+- **god class**: `code_class` with > `GOD_CLASS_METHOD_THRESHOLD`
+  (25) inbound `method_of` edges. Corpus probe (902 classes): mean
+  5.4, p90 11, max 92 → `> 25` flags the top ~2% (18 classes), not
+  the body of the distribution.
+- **god module**: `code_module` with > `GOD_MODULE_DEFINES_THRESHOLD`
+  (30) outbound `defines` edges, EXCLUDING test files (they
+  legitimately define many test functions). Probe (1795 modules):
+  mean 3.2, p90 8, max 75.
+- Severity `candidate` (a high count is a real smell but a cohesive
+  facade may be acceptable; the user judges). Finding carries
+  `symbol` + the count in the description.
+
+Registered as `LENS_DETECTORS["code"] = ("dead_code", "god_object")`
+— the code lens now has two detectors, validating the multi-detector
+lens design. `types` filters within the suite
+(`lens="code", types=["god_object"]`).
+
+### Live dogfood
+
+`lens=code, types=["god_object"]` on the live corpus flags mnemo's
+OWN sprawl: `Store` (80 methods), `api_schemas.py` (58 definitions),
+`agent_tools.py` (35), `code.py` (45) — plus the petrolimex/edge
+backend's `AlertsService` (92), `ReportsService` (82), etc.
+
+### Anti-goals preserved
+
+- NEVER auto-apply (a god_object finding is a proposal; the user
+  refactors).
+- No LLM judge this release (keeps it precise + free; avoids a 5th
+  sibling LLM-helper class before the flagged `_LLMHelperBase`
+  consolidation).
+- Fixed, documented, probe-derived thresholds (25 / 30) — not a
+  per-audit statistical fit.
+- Test modules excluded from god_module.
+- No new lens, no new MCP tool (count stays 27), no new agnostic
+  detector (`KNOWN_DETECTOR_TYPES` stays 5 — god_object is a lens
+  detector). `dead_code` + the agnostic five unchanged byte-for-byte.
+
+### Tests
+
+- `tests/unit/test_god_object_detector.py` (10) + extended
+  `test_lens_mechanism.py` (two-detector suite + types isolation).
+- `tests/unit/_snapshots/mcp_tool_list.json` regenerated.
+
+**Daemon suite: targeting 1630+ (+15 vs v5.16.0).** Ruff clean.
+
+### Carry-forward to v5.18.0+
+
+- `_LLMHelperBase` consolidation (4 sibling judge/proposer classes)
+  — dedicated refactor pass, BEFORE adding a 5th judge.
+- An optional cohesion judge for god_object (after the refactor).
+- `cyclic_imports` / `orphan_modules` (need a corpus that exercises
+  them — this one has 0 cycles).
+- More lenses (`vietnamese-law`, `research-notes`).
+- Phase 4: proactive auditor on reindex + confirm-then-apply.
+
 ## [5.16.0] - 2026-05-30
 
 **Understanding Phase 3: pluggable domain lenses (code lens + dead_code).**
