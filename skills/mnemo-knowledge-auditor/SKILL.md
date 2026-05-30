@@ -261,6 +261,17 @@ running agnostic detectors on a code corpus floods).
 - Only PRIVATE symbols are flagged — public dead code needs
   cross-file/external/dynamic call resolution mnemo doesn't have, so
   flagging public symbols would flood with false positives.
+- **god_object** (v5.17.0): oversized `code_class` (> 25 methods via
+  `method_of` edges) or `code_module` (> 30 top-level `defines`,
+  excluding test files). Counts Tier-1 structural edges (complete,
+  not best-effort), so it's precise WITHOUT an LLM judge. Default
+  severity `candidate`.
+  - **Workflow**: for each `god_object` finding, propose a refactor —
+    split the class into focused collaborators / extract a module —
+    using the finding's `symbol` + the method/definition count in
+    the description. A large count is a real smell, but a cohesive
+    facade may be acceptable; surface it for the user's judgment,
+    NEVER auto-refactor.
 
 ### Future lenses (later releases)
 

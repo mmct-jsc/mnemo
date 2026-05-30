@@ -1357,6 +1357,94 @@ def detect_dead_code(store: Store, *, judge: Any | None = None) -> list[dict[str
     return findings
 
 
+# --- Phase 3b (v5.17.0) -- code lens: god_object -----------------------
+
+# A code_class with more than this many methods (inbound ``method_of``
+# edges) is a "god class" candidate. Probe of the live corpus (902
+# classes): mean 5.4, p90 11, max 92 -> ``> 25`` flags the top ~2%
+# (genuine outliers), not the body of the distribution.
+GOD_CLASS_METHOD_THRESHOLD = 25
+
+# A code_module with more than this many top-level definitions
+# (outbound ``defines`` edges) is a "god module" candidate, EXCLUDING
+# test files. Probe (1795 modules): mean 3.2, p90 8, max 75 -> ``> 30``
+# flags real large modules.
+GOD_MODULE_DEFINES_THRESHOLD = 30
+
+
+def detect_god_object(store: Store) -> list[dict[str, Any]]:
+    """Surface oversized classes + modules by EXACT structural edge
+    counts (Tier-1 ``method_of`` / ``defines`` edges are complete, not
+    best-effort -- so this is precise without an LLM judge).
+
+    - **god class**: ``code_class`` with > ``GOD_CLASS_METHOD_THRESHOLD``
+      inbound ``method_of`` edges (= methods).
+    - **god module**: ``code_module`` with > ``GOD_MODULE_DEFINES_THRESHOLD``
+      outbound ``defines`` edges (= top-level definitions), excluding
+      test files (they legitimately define many test functions).
+
+    Severity ``candidate`` -- a high count is a real refactoring smell
+    but the user judges whether it's a cohesive facade or a grab-bag.
+    """
+    # method_of: src=method, dst=class -> inbound count per class.
+    try:
+        method_edges = store.get_edges(relation="method_of")
+    except Exception:  # noqa: BLE001 -- empty stores / missing table
+        method_edges = []
+    methods_per_class: dict[str, int] = {}
+    for e in method_edges:
+        methods_per_class[e.dst_id] = methods_per_class.get(e.dst_id, 0) + 1
+
+    # defines: src=module, dst=decl -> outbound count per module.
+    try:
+        defines_edges = store.get_edges(relation="defines")
+    except Exception:  # noqa: BLE001
+        defines_edges = []
+    defines_per_module: dict[str, int] = {}
+    for e in defines_edges:
+        defines_per_module[e.src_id] = defines_per_module.get(e.src_id, 0) + 1
+
+    findings: list[dict[str, Any]] = []
+
+    for node in _iter_all_nodes(store, type="code_class"):
+        count = methods_per_class.get(node.id, 0)
+        if count > GOD_CLASS_METHOD_THRESHOLD:
+            findings.append(
+                {
+                    "type": "god_object",
+                    "node_ids": [node.id],
+                    "description": (
+                        f"Class {node.name!r} ({node.source_path}) defines "
+                        f"{count} methods (> {GOD_CLASS_METHOD_THRESHOLD}); "
+                        f"consider splitting responsibilities."
+                    ),
+                    "severity": "candidate",
+                    "symbol": node.name,
+                }
+            )
+
+    for node in _iter_all_nodes(store, type="code_module"):
+        if _is_test_symbol(node.name, node.source_path):
+            continue
+        count = defines_per_module.get(node.id, 0)
+        if count > GOD_MODULE_DEFINES_THRESHOLD:
+            findings.append(
+                {
+                    "type": "god_object",
+                    "node_ids": [node.id],
+                    "description": (
+                        f"Module {node.name!r} ({node.source_path}) defines "
+                        f"{count} top-level symbols (> {GOD_MODULE_DEFINES_THRESHOLD}); "
+                        f"consider splitting it."
+                    ),
+                    "severity": "candidate",
+                    "symbol": node.name,
+                }
+            )
+
+    return findings
+
+
 # --- Orchestrator ------------------------------------------------------
 
 
@@ -1383,7 +1471,7 @@ KNOWN_DETECTOR_TYPES = (
 # semantic_orphans floods a code corpus). Unknown lenses run nothing
 # (permissive, matching the ``types`` contract).
 LENS_DETECTORS: dict[str, tuple[str, ...]] = {
-    "code": ("dead_code",),
+    "code": ("dead_code", "god_object"),  # v5.16.0 dead_code; v5.17.0 god_object
 }
 KNOWN_LENSES = tuple(LENS_DETECTORS)
 
@@ -1481,6 +1569,8 @@ def analyze(
             dead_code_judge if dead_code_judge is not None else dead_code_judge_from_env()
         )
         findings.extend(detect_dead_code(store, judge=resolved_dc_judge))
+    if "god_object" in requested:
+        findings.extend(detect_god_object(store))
 
     # refactor_actions enrichment (v5.15.0). Opt-in: resolve the
     # proposer lazily (caller-provided > env-derived > None). The

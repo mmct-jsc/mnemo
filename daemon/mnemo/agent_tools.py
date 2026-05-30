@@ -1017,8 +1017,10 @@ def _mnemo_run_skill(ctx: ToolContext, *, skill_name: str) -> dict:
         "proposals the user reviews, never auto-applied. Pass "
         '``lens="code"`` (v5.16.0) to run a DOMAIN lens instead of '
         "the agnostic detectors: the code lens surfaces ``dead_code`` "
-        "(private, uncalled functions/methods via the call graph), "
-        "LLM-judged when the opt-in flag is set. Returns "
+        "(private, uncalled functions/methods via the call graph; "
+        "LLM-judged when the opt-in flag is set) and ``god_object`` "
+        "(v5.17.0; oversized classes/modules by exact method/definition "
+        "count -- deterministic). Returns "
         "``{ran_at, node_count_scanned, findings, summary}``. Optional "
         "``types`` filter restricts detectors. Phase 1 + 2 + 3 of "
         "mnemo's Understanding arc."
@@ -1032,7 +1034,8 @@ def _mnemo_run_skill(ctx: ToolContext, *, skill_name: str) -> dict:
                     "Optional filter: subset of the active suite. "
                     'Agnostic (no lens): ["stale", "duplicates", '
                     '"orphan_references", "contradictions", '
-                    '"semantic_orphans"]. With lens="code": ["dead_code"].'
+                    '"semantic_orphans"]. With lens="code": '
+                    '["dead_code", "god_object"].'
                 ),
             },
             "project_key": {
@@ -1055,9 +1058,9 @@ def _mnemo_run_skill(ctx: ToolContext, *, skill_name: str) -> dict:
                 "default": None,
                 "description": (
                     "v5.16.0: optional domain lens. null = agnostic "
-                    'detectors. "code" = the code lens (dead_code). A '
-                    "lens REPLACES the agnostic suite; unknown lens runs "
-                    "nothing."
+                    'detectors. "code" = the code lens (dead_code + '
+                    "god_object). A lens REPLACES the agnostic suite; "
+                    "unknown lens runs nothing."
                 ),
             },
         },

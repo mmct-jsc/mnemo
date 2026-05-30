@@ -15,10 +15,11 @@
         <code>MNEMO_ANALYZE_LLM_JUDGE=1</code> + <code>ANTHROPIC_API_KEY</code>
         for the LLM-augmented detectors.
         <br>
-        <strong>Domain lenses (v5.16.0):</strong> pass <code>lens=code</code> to run
+        <strong>Domain lenses (v5.16.0+):</strong> pass <code>lens=code</code> to run
         code-specific structural checks instead of the agnostic detectors &mdash; the
         <strong>code</strong> lens surfaces <strong>dead_code</strong> (private, uncalled
-        functions/methods via the call graph).
+        functions/methods via the call graph) and <strong>god_object</strong> (oversized
+        classes/modules by exact method/definition count, v5.17.0).
       </p>
     </div>
     <div class="hero-actions">
