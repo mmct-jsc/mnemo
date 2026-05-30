@@ -2,6 +2,97 @@
 
 All notable changes to mnemo are documented here.
 
+## [5.16.0] - 2026-05-30
+
+**Understanding Phase 3: pluggable domain lenses (code lens + dead_code).**
+
+Phases 1-2 (v5.12.0 -> v5.15.0) shipped five domain-AGNOSTIC
+detectors + the refactor_actions enrichment. v5.16.0 establishes the
+**domain-lens mechanism** and ships the first lens -- **`code`** --
+with one detector, **`dead_code`**.
+
+The user's vision is explicit that mnemo should understand a
+codebase and "suggest if it needs refactoring". Agnostic detectors
+can't see code-specific rot (a function nobody calls). A **lens** is
+a pluggable suite of domain-specific detectors. mnemo's own corpus
+is ~75% code nodes, so the code lens is immediately dogfoodable.
+
+### The lens mechanism
+
+- `analyze(..., lens=None)`: `None` (default) runs the agnostic
+  five -- unchanged. A known lens (see `KNOWN_LENSES`, e.g.
+  `"code"`) REPLACES the agnostic suite with that lens's detectors.
+  `types` filters WITHIN the active suite. Unknown lens runs nothing
+  (permissive, matching the `types` contract).
+- A lens replaces rather than adds because running agnostic
+  detectors on a code corpus floods (semantic_orphans emitted
+  24,776 candidates on this corpus); a lens is a focused audit.
+- `LENS_DETECTORS = {"code": ("dead_code",)}` registry; new lenses
+  are one registry entry + the detector.
+
+### `dead_code` detector
+
+A candidate is a PRIVATE (`_`-prefixed, non-dunder) `code_function`
+/ `code_method` node with ZERO inbound `calls` edges, excluding test
+entry points. Private-only by design: on the live corpus, *any*
+uncalled callable = 6,367 candidates (68% -- the call graph is
+best-effort, so most "uncalled" are resolution misses); restricting
+to PRIVATE uncalled (within-file resolution is high-confidence) =
+135 tractable candidates. Default severity `candidate`.
+
+Opt-in **`LLMDeadCodeJudge`** (reuses `MNEMO_ANALYZE_LLM_JUDGE` +
+`ANTHROPIC_API_KEY`): grades each candidate -- genuinely dead ->
+`high`; reached dynamically (dispatch table / getattr / decorator /
+framework hook) -> dropped. Graceful on every error path.
+
+### Features
+
+- `LENS_DETECTORS`, `KNOWN_LENSES`, `detect_dead_code`,
+  `LLMDeadCodeJudge`, `dead_code_judge_from_env()`,
+  `_is_private_symbol` / `_is_test_symbol` helpers in
+  `daemon/mnemo/analyzer.py`.
+- `analyze(lens=, dead_code_judge=)` wiring: the lens selects the
+  active suite; `types` intersects within it.
+
+### Surface updates (additive only)
+
+- `AnalyzeIn.lens`; `/v1/analyze` passes it through.
+- `mnemo_analyze` MCP tool gains an optional `lens` param +
+  description. **27-tool count unchanged**; optional +
+  backward-compatible.
+- `/analyze` UI advertises the code lens; `mnemo-knowledge-auditor`
+  SKILL.md gains a live "Domain lenses" section (replacing the
+  former "future" placeholder) with the dead_code workflow + the
+  never-auto-delete contract.
+
+### Tests
+
+- `tests/unit/test_dead_code_detector.py` (9), `test_lens_mechanism.py`
+  (6), `test_dead_code_judge.py` (10) + extended endpoint/MCP/UI/skill.
+- `tests/unit/_snapshots/mcp_tool_list.json` regenerated.
+
+**Daemon suite: targeting 1605+ (+20 vs v5.15.0).** Ruff clean.
+
+### Anti-goals preserved
+
+- NEVER auto-apply (a dead_code finding is a proposal; the user
+  deletes).
+- No raw-uncalled flood (private-only gate by design).
+- Lens replaces, not adds (no agnostic-on-code flood).
+- No new MCP tool (count stays 27; one optional param added).
+- `dead_code` is NOT in `KNOWN_DETECTOR_TYPES` (it's a lens
+  detector); the agnostic five are unchanged byte-for-byte.
+- No new daemon dependencies.
+
+### Carry-forward to v5.17.0+
+
+- More `code` detectors (`cyclic_imports`, `orphan_modules`) when a
+  corpus exercises them (this one has 0 import cycles).
+- `lens=vietnamese-law` / `lens=research-notes`.
+- Phase 4: proactive auditor on reindex + confirm-then-apply mode.
+- Internal: a shared `_LLMHelperBase` for the now-four sibling
+  LLM helper classes (dedicated refactor pass, not bundled).
+
 ## [5.15.0] - 2026-05-23
 
 **Understanding Phase 2c: refactor_actions enrichment.**

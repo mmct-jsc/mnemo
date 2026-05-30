@@ -92,6 +92,15 @@ def test_analyze_page_renders_proposed_action_column(client) -> None:
     assert "f.action" in raw, "the table must bind the per-finding action object"
 
 
+def test_analyze_page_mentions_code_lens(client) -> None:
+    """v5.16.0: the page advertises the code lens + dead_code so users
+    know the domain-lens capability exists."""
+    r = client.get("/analyze")
+    text = r.text.lower()
+    assert "lens" in text, "page should mention domain lenses"
+    assert "dead_code" in text or "dead code" in text, "page should mention the dead_code detector"
+
+
 def test_analyze_page_proposed_action_is_not_auto_applied(client) -> None:
     """v5.15.0 anti-goal: the proposed-action column is a PROPOSAL
     surface, never an apply button. Still no auto-apply automation."""

@@ -881,6 +881,10 @@ class AnalyzeIn(BaseModel):
     types: list[str] | None = None
     project_key: str | None = None  # reserved for future scoping
     propose_actions: bool | None = None  # v5.15.0 Phase 2c
+    # v5.16.0 Phase 3: optional domain lens. None = agnostic suite;
+    # a known lens (e.g. "code") replaces it with domain-specific
+    # detectors (e.g. dead_code). Unknown lens runs nothing.
+    lens: str | None = None
 
 
 class AnalyzeFinding(BaseModel):
@@ -899,6 +903,10 @@ class AnalyzeFinding(BaseModel):
     # Present only when the opt-in enrichment ran AND this finding
     # was eligible (high/medium) + within the cap.
     action: dict | None = None
+    # v5.16.0: the symbol name a dead_code (code lens) finding flags.
+    # Declared so it survives HTTP serialization (parity with the MCP
+    # raw-dict path).
+    symbol: str | None = None
 
 
 class AnalyzeOut(BaseModel):
