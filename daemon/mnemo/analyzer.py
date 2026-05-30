@@ -1300,11 +1300,112 @@ GOD_CLASS_METHOD_THRESHOLD = 25
 # flags real large modules.
 GOD_MODULE_DEFINES_THRESHOLD = 30
 
+# Member-name list cap sent to the cohesion judge. The largest god
+# class on the corpus has 92 methods; 80 keeps the prompt bounded
+# while preserving enough names to judge cohesion.
+_COHESION_MEMBERS_CAP = 80
 
-def detect_god_object(store: Store) -> list[dict[str, Any]]:
+_COHESION_JUDGE_SYSTEM_PROMPT = (
+    "You are a code-cohesion grader. Given a class or module that the "
+    "auditor flagged as oversized, plus the names of its members "
+    "(methods / top-level definitions), decide whether it is a "
+    "COHESIVE unit with a single clear responsibility (a facade / "
+    "repository / domain service that is large but focused) or a "
+    "GRAB-BAG of unrelated responsibilities that should be split. "
+    "Respond with ONLY a JSON object of the shape "
+    '{"should_split": true|false, "rationale": "<one short paragraph>"}. '
+    "true = grab-bag that should be split; false = cohesive. No prose "
+    "outside the JSON. No markdown fences."
+)
+
+
+@dataclass
+class LLMCohesionJudge(_LLMHelper):
+    """Opt-in cohesion judge for god_object candidates (v5.18.0).
+
+    The 5th LLM helper, built on :class:`_LLMHelper`. Returns True
+    when an oversized unit is a grab-bag that should be split, False
+    when it is a cohesive facade (including on every error path, so a
+    judge failure conservatively DROPS the candidate rather than
+    falsely escalating)."""
+
+    max_tokens: int = 400
+
+    def judge(self, *, kind: str, name: str, members: list[str]) -> bool:
+        """Return True if the unit should be split (grab-bag); False
+        if cohesive (or on any error)."""
+        shown = members[:_COHESION_MEMBERS_CAP]
+        more = len(members) - len(shown)
+        members_block = ", ".join(shown) + (f", ... (+{more} more)" if more > 0 else "")
+        user_msg = (
+            f"## Unit\nkind: {kind}\nname: {name}\nmember count: {len(members)}\n\n"
+            f"## Members\n{members_block}\n\n"
+            "## Task\nIs this a cohesive single-responsibility unit, or a "
+            "grab-bag that should be split? Respond with ONLY the JSON."
+        )
+        parsed, err = self._invoke_json(system=_COHESION_JUDGE_SYSTEM_PROMPT, user=user_msg)
+        if parsed is None:
+            self.rationale_log.append(
+                {
+                    "kind": kind,
+                    "name": name,
+                    "should_split": False,
+                    "rationale": err,
+                    "parsed_ok": False,
+                }
+            )
+            return False
+        result = bool(parsed.get("should_split", False))
+        self.rationale_log.append(
+            {
+                "kind": kind,
+                "name": name,
+                "should_split": result,
+                "rationale": parsed.get("rationale", ""),
+                "parsed_ok": True,
+            }
+        )
+        return result
+
+
+def god_object_judge_from_env() -> LLMCohesionJudge | None:
+    """Construct an LLMCohesionJudge from environment when ALL of:
+    ``MNEMO_ANALYZE_LLM_JUDGE`` is truthy, ``ANTHROPIC_API_KEY`` is
+    set, and ``anthropic`` is importable. Shares the flag + model
+    override with the other auditor judges."""
+    flag = os.environ.get("MNEMO_ANALYZE_LLM_JUDGE", "").strip().lower()
+    if flag not in {"1", "true", "yes", "on"}:
+        return None
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        return None
+    try:
+        import anthropic  # type: ignore[import-untyped]
+    except ImportError:
+        log.warning(
+            "god_object_judge_from_env: flag set but anthropic not installed; "
+            "god_object stays deterministic (candidate)."
+        )
+        return None
+    model = os.environ.get("MNEMO_ANALYZE_JUDGE_MODEL", "claude-sonnet-4-6")
+    return LLMCohesionJudge(client=anthropic.Anthropic(), model=model)
+
+
+def _member_names(store: Store, member_ids: list[str]) -> list[str]:
+    """Resolve member node-ids to names (skipping any that no longer
+    exist). Used only for god_object candidates when the cohesion
+    judge is enabled -- bounded to the few candidates."""
+    names: list[str] = []
+    for mid in member_ids:
+        n = store.get_node(mid)
+        if n is not None:
+            names.append(n.name or mid)
+    return names
+
+
+def detect_god_object(store: Store, *, judge: Any | None = None) -> list[dict[str, Any]]:
     """Surface oversized classes + modules by EXACT structural edge
     counts (Tier-1 ``method_of`` / ``defines`` edges are complete, not
-    best-effort -- so this is precise without an LLM judge).
+    best-effort -- so the candidate gate is precise without an LLM).
 
     - **god class**: ``code_class`` with > ``GOD_CLASS_METHOD_THRESHOLD``
       inbound ``method_of`` edges (= methods).
@@ -1312,8 +1413,11 @@ def detect_god_object(store: Store) -> list[dict[str, Any]]:
       outbound ``defines`` edges (= top-level definitions), excluding
       test files (they legitimately define many test functions).
 
-    Severity ``candidate`` -- a high count is a real refactoring smell
-    but the user judges whether it's a cohesive facade or a grab-bag.
+    Without a ``judge`` every candidate ships severity ``candidate``.
+    With an opt-in :class:`LLMCohesionJudge`, each candidate's member
+    names are graded: a grab-bag (``should_split``) becomes severity
+    ``high``; a cohesive facade (or any judge error) is DROPPED
+    (judge-authoritative-when-enabled, matching the other detectors).
     """
     # method_of: src=method, dst=class -> inbound count per class.
     try:
@@ -1321,8 +1425,11 @@ def detect_god_object(store: Store) -> list[dict[str, Any]]:
     except Exception:  # noqa: BLE001 -- empty stores / missing table
         method_edges = []
     methods_per_class: dict[str, int] = {}
+    members_by_class: dict[str, list[str]] = {}
     for e in method_edges:
         methods_per_class[e.dst_id] = methods_per_class.get(e.dst_id, 0) + 1
+        if judge is not None:
+            members_by_class.setdefault(e.dst_id, []).append(e.src_id)
 
     # defines: src=module, dst=decl -> outbound count per module.
     try:
@@ -1330,14 +1437,34 @@ def detect_god_object(store: Store) -> list[dict[str, Any]]:
     except Exception:  # noqa: BLE001
         defines_edges = []
     defines_per_module: dict[str, int] = {}
+    members_by_module: dict[str, list[str]] = {}
     for e in defines_edges:
         defines_per_module[e.src_id] = defines_per_module.get(e.src_id, 0) + 1
+        if judge is not None:
+            members_by_module.setdefault(e.src_id, []).append(e.dst_id)
 
     findings: list[dict[str, Any]] = []
+
+    def _maybe_escalate(kind: str, node: Node, member_ids: list[str]) -> str | None:
+        """Return the severity for a candidate, or None to DROP it.
+        Without a judge: 'candidate'. With a judge: 'high' if it
+        should split, else None (cohesive / error -> dropped)."""
+        if judge is None:
+            return "candidate"
+        members = _member_names(store, member_ids)
+        try:
+            should_split = bool(judge.judge(kind=kind, name=node.name or "", members=members))
+        except Exception as exc:  # noqa: BLE001 -- judge must never break the audit
+            log.warning("detect_god_object: judge raised (%s); dropping candidate", exc)
+            return None
+        return "high" if should_split else None
 
     for node in _iter_all_nodes(store, type="code_class"):
         count = methods_per_class.get(node.id, 0)
         if count > GOD_CLASS_METHOD_THRESHOLD:
+            severity = _maybe_escalate("class", node, members_by_class.get(node.id, []))
+            if severity is None:
+                continue
             findings.append(
                 {
                     "type": "god_object",
@@ -1345,9 +1472,13 @@ def detect_god_object(store: Store) -> list[dict[str, Any]]:
                     "description": (
                         f"Class {node.name!r} ({node.source_path}) defines "
                         f"{count} methods (> {GOD_CLASS_METHOD_THRESHOLD}); "
-                        f"consider splitting responsibilities."
+                        + (
+                            "LLM judge confirmed unrelated responsibilities -- split it."
+                            if severity == "high"
+                            else "consider splitting responsibilities."
+                        )
                     ),
-                    "severity": "candidate",
+                    "severity": severity,
                     "symbol": node.name,
                 }
             )
@@ -1357,6 +1488,9 @@ def detect_god_object(store: Store) -> list[dict[str, Any]]:
             continue
         count = defines_per_module.get(node.id, 0)
         if count > GOD_MODULE_DEFINES_THRESHOLD:
+            severity = _maybe_escalate("module", node, members_by_module.get(node.id, []))
+            if severity is None:
+                continue
             findings.append(
                 {
                     "type": "god_object",
@@ -1364,9 +1498,13 @@ def detect_god_object(store: Store) -> list[dict[str, Any]]:
                     "description": (
                         f"Module {node.name!r} ({node.source_path}) defines "
                         f"{count} top-level symbols (> {GOD_MODULE_DEFINES_THRESHOLD}); "
-                        f"consider splitting it."
+                        + (
+                            "LLM judge confirmed unrelated responsibilities -- split it."
+                            if severity == "high"
+                            else "consider splitting it."
+                        )
                     ),
-                    "severity": "candidate",
+                    "severity": severity,
                     "symbol": node.name,
                 }
             )
@@ -1417,6 +1555,7 @@ def analyze(
     proposer: Any | None = None,
     lens: str | None = None,
     dead_code_judge: Any | None = None,
+    god_object_judge: Any | None = None,
 ) -> dict[str, Any]:
     """Run the requested detectors + return a canonical envelope.
 
@@ -1499,7 +1638,10 @@ def analyze(
         )
         findings.extend(detect_dead_code(store, judge=resolved_dc_judge))
     if "god_object" in requested:
-        findings.extend(detect_god_object(store))
+        resolved_go_judge = (
+            god_object_judge if god_object_judge is not None else god_object_judge_from_env()
+        )
+        findings.extend(detect_god_object(store, judge=resolved_go_judge))
 
     # refactor_actions enrichment (v5.15.0). Opt-in: resolve the
     # proposer lazily (caller-provided > env-derived > None). The

@@ -1071,7 +1071,7 @@ wheels = [
 
 [[package]]
 name = "mnemo"
-version = "5.17.1"
+version = "5.18.0"
 source = { editable = "." }
 dependencies = [
     { name = "anthropic" },
