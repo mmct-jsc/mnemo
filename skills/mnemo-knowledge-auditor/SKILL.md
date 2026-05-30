@@ -272,6 +272,13 @@ running agnostic detectors on a code corpus floods).
     the description. A large count is a real smell, but a cohesive
     facade may be acceptable; surface it for the user's judgment,
     NEVER auto-refactor.
+  - **Cohesion judge (v5.18.0)**: with `MNEMO_ANALYZE_LLM_JUDGE=1` +
+    `ANTHROPIC_API_KEY`, each god_object candidate is re-graded on
+    its member names — a cohesive single-responsibility facade
+    (Store / Repository / domain Service) is DROPPED; a grab-bag of
+    unrelated responsibilities is escalated to severity `high`. So
+    `high` god_object findings are LLM-confirmed split targets;
+    `candidate` ones (judge off) still need your judgment.
 
 ### Future lenses (later releases)
 

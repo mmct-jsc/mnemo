@@ -2,6 +2,75 @@
 
 All notable changes to mnemo are documented here.
 
+## [5.18.0] - 2026-05-30
+
+**god_object cohesion judge — the `_LLMHelper` payoff.**
+
+`god_object` (v5.17.0) is precise about COUNT but blind to COHESION:
+on the live corpus it flags 26 candidates, but several are
+legitimate facades (a `Store` with 80 storage methods; a domain
+`*Service`). v5.18.0 adds an opt-in **cohesion judge** that sees a
+flagged unit's member NAMES and distinguishes a cohesive
+single-responsibility facade (dropped) from a grab-bag of unrelated
+responsibilities that should be split (escalated to `high`).
+
+This is the 5th LLM judge — and the concrete payoff of the v5.17.1
+`_LLMHelper` refactor: `LLMCohesionJudge(_LLMHelper)` is ~30 lines
+(prompt + interpretation) instead of ~50, with the create/parse/
+graceful-degradation routine inherited.
+
+### Features
+
+- **`LLMCohesionJudge(_LLMHelper)`** + **`god_object_judge_from_env()`**
+  in `daemon/mnemo/analyzer.py`. `judge(kind, name, members) -> bool`
+  (`should_split`); member list capped at `_COHESION_MEMBERS_CAP`
+  (80). Reuses the shared `MNEMO_ANALYZE_LLM_JUDGE` +
+  `MNEMO_ANALYZE_JUDGE_MODEL` opt-in.
+- **`detect_god_object(store, judge=None)`** — when a judge is
+  given, collects each candidate's member names (a class's methods
+  via `method_of` src; a module's definitions via `defines` dst;
+  resolved via `get_node`, bounded to the ~26 candidates) and
+  escalates: `should_split=True` → `high`; cohesive OR any judge
+  error → DROPPED (judge-authoritative-when-enabled, matching the
+  other detectors). Without a judge: byte-identical `candidate`.
+- **`analyze(god_object_judge=None)`** — caller > env > None,
+  mirroring the `dead_code_judge` wiring.
+
+### Surface
+
+- `mnemo_analyze` description notes god_object is now LLM-judgeable
+  via the shared opt-in flag. **No new MCP param** (env-gated like
+  dead_code); 27-tool name/signature unchanged; wire snapshot regen
+  for the description only.
+- `mnemo-knowledge-auditor` SKILL.md god_object section gains the
+  cohesion-judge note.
+
+### Anti-goals preserved
+
+- Deterministic path byte-stable: without the opt-in flag,
+  god_object returns the SAME 26 candidates as v5.17.0.
+- No new env flag (reuses `MNEMO_ANALYZE_LLM_JUDGE`), no new MCP
+  param, no threshold change (the count gate only PRODUCES the
+  candidates the judge re-grades).
+- NEVER auto-apply. No new daemon dependencies.
+
+### Tests
+
+- `tests/unit/test_cohesion_judge.py` (9) — env gate, should_split
+  true/false, graceful, rationale_log, members-reach-the-model.
+- Extended `test_god_object_detector.py` (+5) — judge elevates
+  grab-bag → high, drops cohesive, receives member names,
+  no-judge → candidate, analyze() wiring.
+- `tests/unit/_snapshots/mcp_tool_list.json` regenerated.
+
+**Daemon suite: targeting 1647+ (+12 vs v5.17.1).** Ruff clean.
+
+### Carry-forward to v5.19.0+
+
+- `cyclic_imports` / `orphan_modules` (need a cyclic corpus/fixture).
+- More lenses (`vietnamese-law`, `research-notes` — need domain corpus).
+- Phase 4: proactive auditor on reindex + confirm-then-apply.
+
 ## [5.17.1] - 2026-05-30
 
 **Internal refactor: shared `_LLMHelper` base for the analyzer LLM
