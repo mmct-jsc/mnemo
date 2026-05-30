@@ -73,6 +73,7 @@
               <th>Type</th>
               <th>Node(s)</th>
               <th>Description</th>
+              <th>Proposed action</th>
             </tr>
           </thead>
           <tbody>
@@ -86,10 +87,30 @@
                   </template>
                 </td>
                 <td x-text="f.description"></td>
+                <td>
+                  <!-- v5.15.0 refactor_actions: present only when the
+                       opt-in enrichment ran + this finding was eligible. -->
+                  <template x-if="f.action && f.action.kind && f.action.kind !== 'none'">
+                    <div class="proposed-action">
+                      <span class="badge badge-action" x-text="f.action.kind"></span>
+                      <code x-show="f.action.primitive" x-text="f.action.primitive"></code>
+                      <div class="action-rationale" x-text="f.action.rationale"></div>
+                    </div>
+                  </template>
+                  <template x-if="!f.action || !f.action.kind || f.action.kind === 'none'">
+                    <span class="muted">&mdash;</span>
+                  </template>
+                </td>
               </tr>
             </template>
           </tbody>
         </table>
+        <p class="hint" x-show="(report.summary._refactor_actions_skipped || 0) > 0">
+          <strong x-text="report.summary._refactor_actions_skipped"></strong>
+          eligible finding(s) were not enriched with an action because the
+          per-audit cap was reached. Re-run with a tighter <code>types</code>
+          filter to propose actions for them.
+        </p>
       </template>
     </div>
   </template>

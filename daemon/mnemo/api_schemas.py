@@ -865,13 +865,22 @@ class AnalyzeIn(BaseModel):
     """``POST /v1/analyze`` body. All fields optional.
 
     ``types`` filter: any subset of
-    ``{"stale", "duplicates", "orphan_references"}``. Omit / None for
-    "run all detectors". Unknown values are silently ignored so the
-    daemon can add detectors without breaking pre-existing callers.
+    ``{"stale", "duplicates", "orphan_references", "contradictions",
+    "semantic_orphans"}``. Omit / None for "run all detectors".
+    Unknown values are silently ignored so the daemon can add
+    detectors without breaking pre-existing callers.
+
+    ``propose_actions`` (v5.15.0): opt-in refactor_actions
+    enrichment. ``True`` proposes one concrete action per high/medium
+    finding (requires the proposer env opt-in + API key); ``False``
+    disables it; ``None`` (default) enables only when the env-derived
+    proposer exists. Backward-compatible: pre-existing callers omit
+    it and get the byte-stable deterministic response.
     """
 
     types: list[str] | None = None
-    project_key: str | None = None  # reserved for v5.13.0 scoping
+    project_key: str | None = None  # reserved for future scoping
+    propose_actions: bool | None = None  # v5.15.0 Phase 2c
 
 
 class AnalyzeFinding(BaseModel):
@@ -882,6 +891,14 @@ class AnalyzeFinding(BaseModel):
     description: str
     severity: str
     missing_targets: list[str] | None = None
+    # v5.14.0: the concept a semantic_orphan finding flags as
+    # referenced-but-undefined. Declared here so it survives HTTP
+    # serialization (pydantic strips undeclared fields).
+    concept: str | None = None
+    # v5.15.0: an LLM-proposed refactor action for this finding.
+    # Present only when the opt-in enrichment ran AND this finding
+    # was eligible (high/medium) + within the cap.
+    action: dict | None = None
 
 
 class AnalyzeOut(BaseModel):
