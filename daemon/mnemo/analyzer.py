@@ -1512,6 +1512,123 @@ def detect_god_object(store: Store, *, judge: Any | None = None) -> list[dict[st
     return findings
 
 
+# --- Phase 3c (v5.19.0) -- code lens: cyclic_imports -------------------
+
+
+def _tarjan_sccs(adj: dict[str, set[str]]) -> list[list[str]]:
+    """Iterative Tarjan strongly-connected-components.
+
+    Iterative (NOT recursive) so a deep import chain can't hit
+    Python's recursion limit inside the daemon. Returns every SCC as
+    a list of node ids (including singletons; the caller decides what
+    counts as a cycle)."""
+    index_of: dict[str, int] = {}
+    lowlink: dict[str, int] = {}
+    on_stack: dict[str, bool] = {}
+    stack: list[str] = []
+    counter = 0
+    sccs: list[list[str]] = []
+
+    for root in list(adj.keys()):
+        if root in index_of:
+            continue
+        # work stack of (node, neighbour-iterator)
+        work: list[tuple[str, Any]] = [(root, iter(adj.get(root, ())))]
+        index_of[root] = lowlink[root] = counter
+        counter += 1
+        stack.append(root)
+        on_stack[root] = True
+        while work:
+            node, it = work[-1]
+            descended = False
+            for w in it:
+                if w not in index_of:
+                    index_of[w] = lowlink[w] = counter
+                    counter += 1
+                    stack.append(w)
+                    on_stack[w] = True
+                    work.append((w, iter(adj.get(w, ()))))
+                    descended = True
+                    break
+                if on_stack.get(w):
+                    lowlink[node] = min(lowlink[node], index_of[w])
+            if descended:
+                continue
+            # All neighbours processed -> close this node.
+            if lowlink[node] == index_of[node]:
+                comp: list[str] = []
+                while True:
+                    x = stack.pop()
+                    on_stack[x] = False
+                    comp.append(x)
+                    if x == node:
+                        break
+                sccs.append(comp)
+            work.pop()
+            if work:
+                parent = work[-1][0]
+                lowlink[parent] = min(lowlink[parent], lowlink[node])
+    return sccs
+
+
+def detect_cyclic_imports(store: Store) -> list[dict[str, Any]]:
+    """Surface module import cycles via an iterative Tarjan SCC over
+    the ``imports`` edge graph (src=importer, dst=imported).
+
+    A cycle is an SCC of size >= 2, OR a single module with a
+    self-import edge. Deterministic + precise -- a cycle is
+    unambiguous, so there is no LLM judge. Severity ``medium``: the
+    cycle's existence is certain (peer to ``duplicates``); whether to
+    break it is the user's call.
+    """
+    try:
+        import_edges = store.get_edges(relation="imports")
+    except Exception:  # noqa: BLE001 -- empty stores / missing table
+        import_edges = []
+
+    adj: dict[str, set[str]] = {}
+    self_loops: set[str] = set()
+    for e in import_edges:
+        adj.setdefault(e.src_id, set()).add(e.dst_id)
+        adj.setdefault(e.dst_id, set())  # ensure dst is a node in the graph
+        if e.src_id == e.dst_id:
+            self_loops.add(e.src_id)
+
+    findings: list[dict[str, Any]] = []
+    seen: set[frozenset[str]] = set()
+
+    def _emit(members: list[str]) -> None:
+        key = frozenset(members)
+        if key in seen:
+            return
+        seen.add(key)
+        ids = sorted(members)
+        names = []
+        for nid in ids:
+            n = store.get_node(nid)
+            names.append(n.name if (n and n.name) else nid)
+        findings.append(
+            {
+                "type": "cyclic_import",
+                "node_ids": ids,
+                "description": (
+                    f"Import cycle among {len(ids)} modules: "
+                    f"{', '.join(names)}; an import cycle breaks modularity "
+                    f"(complicates testing + import order) -- consider "
+                    f"breaking it (extract a shared module, invert a "
+                    f"dependency, or defer an import)."
+                ),
+                "severity": "medium",
+            }
+        )
+
+    for comp in _tarjan_sccs(adj):
+        if len(comp) >= 2 or len(comp) == 1 and comp[0] in self_loops:
+            _emit(comp)
+
+    return findings
+
+
 # --- Orchestrator ------------------------------------------------------
 
 
@@ -1538,7 +1655,8 @@ KNOWN_DETECTOR_TYPES = (
 # semantic_orphans floods a code corpus). Unknown lenses run nothing
 # (permissive, matching the ``types`` contract).
 LENS_DETECTORS: dict[str, tuple[str, ...]] = {
-    "code": ("dead_code", "god_object"),  # v5.16.0 dead_code; v5.17.0 god_object
+    # v5.16.0 dead_code; v5.17.0 god_object; v5.19.0 cyclic_imports
+    "code": ("dead_code", "god_object", "cyclic_imports"),
 }
 KNOWN_LENSES = tuple(LENS_DETECTORS)
 
@@ -1642,6 +1760,8 @@ def analyze(
             god_object_judge if god_object_judge is not None else god_object_judge_from_env()
         )
         findings.extend(detect_god_object(store, judge=resolved_go_judge))
+    if "cyclic_imports" in requested:
+        findings.extend(detect_cyclic_imports(store))
 
     # refactor_actions enrichment (v5.15.0). Opt-in: resolve the
     # proposer lazily (caller-provided > env-derived > None). The

@@ -198,3 +198,26 @@ def test_known_lenses_unchanged_and_dead_code_still_default_excluded(store) -> N
     assert "god_object" not in types_seen, (
         f"agnostic default must not run god_object; got {types_seen}"
     )
+
+
+def test_code_lens_has_three_detectors(store) -> None:
+    """v5.19.0: the code suite now holds dead_code + god_object +
+    cyclic_imports. types isolates each."""
+    from mnemo.analyzer import LENS_DETECTORS, analyze
+
+    assert set(LENS_DETECTORS["code"]) == {"dead_code", "god_object", "cyclic_imports"}
+
+    # A 2-module import cycle -> cyclic_import via the code lens.
+    for m in ("A", "B"):
+        store.upsert_node(_mkcode(id=m, name=m, type="code_module"))
+    store.add_edge("A", "B", "imports")
+    store.add_edge("B", "A", "imports")
+
+    only_cyc = {
+        f["type"] for f in analyze(store, lens="code", types=["cyclic_imports"])["findings"]
+    }
+    assert only_cyc == {"cyclic_import"}, f"types=[cyclic_imports] must isolate it; got {only_cyc}"
+
+    # dead_code isolation still excludes cyclic_import.
+    only_dead = {f["type"] for f in analyze(store, lens="code", types=["dead_code"])["findings"]}
+    assert "cyclic_import" not in only_dead

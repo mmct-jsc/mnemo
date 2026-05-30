@@ -279,6 +279,16 @@ running agnostic detectors on a code corpus floods).
     unrelated responsibilities is escalated to severity `high`. So
     `high` god_object findings are LLM-confirmed split targets;
     `candidate` ones (judge off) still need your judgment.
+- **cyclic_imports** (v5.19.0): module import cycles, found by a
+  Tarjan SCC over the `imports` edge graph (a strongly-connected
+  component of ≥ 2 modules, or a self-import). Deterministic +
+  precise (no LLM judge — a cycle is unambiguous). Severity
+  `medium`; `node_ids` lists the cycle members.
+  - **Workflow**: for each `cyclic_import` finding, propose breaking
+    the cycle — extract a shared module, invert a dependency, or
+    defer an import to runtime — citing the cycle members from
+    `node_ids`. The cycle's existence is certain; whether/how to
+    break it is the user's call. NEVER auto-edit.
 
 ### Future lenses (later releases)
 
