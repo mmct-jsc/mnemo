@@ -13,12 +13,24 @@
 </nav>
 <script>
   (function () {
-    var p = location.pathname, h = location.hash;
-    var sel = p === '/settings' ? 'retrieval'
-      : (h === '#companion' ? 'companion'
-        : h === '#permissions' ? 'permissions' : 'providers');
-    document.querySelectorAll('.settings-tabs a').forEach(function (a) {
-      if (a.getAttribute('data-tab') === sel) a.classList.add('active');
-    });
+    function syncActiveTab() {
+      var p = location.pathname, h = location.hash;
+      var sel = p === '/settings' ? 'retrieval'
+        : (h === '#companion' ? 'companion'
+          : h === '#permissions' ? 'permissions' : 'providers');
+      document.querySelectorAll('.settings-tabs a').forEach(function (a) {
+        // toggle (not just add) so the OLD active tab is also cleared
+        // when re-resolving -- otherwise two tabs read as active.
+        a.classList.toggle('active', a.getAttribute('data-tab') === sel);
+      });
+    }
+    syncActiveTab();
+    // The three /settings/chat tabs differ only by #hash, so clicking
+    // between them does NOT reload the page -- the one-shot pass above
+    // would leave the highlight frozen on the landing tab while the
+    // content (chat_settings.html) switches via its own hashchange
+    // listener. Re-resolve on hashchange so the strip tracks the
+    // visible section (the "weird" desync this fixes).
+    window.addEventListener('hashchange', syncActiveTab);
   })();
 </script>

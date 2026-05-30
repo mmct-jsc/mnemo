@@ -1022,9 +1022,11 @@ def _mnemo_run_skill(ctx: ToolContext, *, skill_name: str) -> dict:
         "(v5.17.0; oversized classes/modules by exact method/definition "
         "count -- deterministic, and v5.18.0 LLM-judged for cohesion "
         "when ``MNEMO_ANALYZE_LLM_JUDGE`` is set: a grab-bag becomes "
-        "'high', a cohesive facade is dropped) and ``cyclic_imports`` "
+        "'high', a cohesive facade is dropped), ``cyclic_imports`` "
         "(v5.19.0; module import cycles via Tarjan SCC over the imports "
-        "graph -- deterministic, severity medium). Returns "
+        "graph -- deterministic, severity medium), and ``duplicate_code`` "
+        "(v5.20.0; near-identical function/method bodies via embedding "
+        "cosine >= 0.97 -- deterministic, severity medium). Returns "
         "``{ran_at, node_count_scanned, findings, summary}``. Optional "
         "``types`` filter restricts detectors. Phase 1 + 2 + 3 of "
         "mnemo's Understanding arc."
@@ -1039,7 +1041,8 @@ def _mnemo_run_skill(ctx: ToolContext, *, skill_name: str) -> dict:
                     'Agnostic (no lens): ["stale", "duplicates", '
                     '"orphan_references", "contradictions", '
                     '"semantic_orphans"]. With lens="code": '
-                    '["dead_code", "god_object", "cyclic_imports"].'
+                    '["dead_code", "god_object", "cyclic_imports", '
+                    '"duplicate_code"].'
                 ),
             },
             "project_key": {
@@ -1063,8 +1066,8 @@ def _mnemo_run_skill(ctx: ToolContext, *, skill_name: str) -> dict:
                 "description": (
                     "v5.16.0: optional domain lens. null = agnostic "
                     'detectors. "code" = the code lens (dead_code + '
-                    "god_object + cyclic_imports). A lens REPLACES the "
-                    "agnostic suite; unknown lens runs nothing."
+                    "god_object + cyclic_imports + duplicate_code). A lens "
+                    "REPLACES the agnostic suite; unknown lens runs nothing."
                 ),
             },
         },

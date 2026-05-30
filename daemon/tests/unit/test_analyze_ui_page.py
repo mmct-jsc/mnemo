@@ -113,3 +113,27 @@ def test_analyze_page_proposed_action_is_not_auto_applied(client) -> None:
             f"v5.15.0 anti-goal violated: page exposes {danger!r}; "
             f"refactor_actions are proposals the user reviews, never applied."
         )
+
+
+def test_analyze_page_does_not_autorun(client) -> None:
+    """v5.21.0: the page must NOT re-run the audit on every visit (the
+    user's complaint). It restores the last result + scope instead;
+    the audit fires only on the explicit Run button."""
+    raw = client.get("/analyze").text
+    assert 'x-init="restore()"' in raw, "page should restore (not auto-run) on load"
+    assert 'x-init="run()"' not in raw, (
+        "page must NOT auto-run the audit on load (v5.21.0 anti-goal)"
+    )
+
+
+def test_analyze_page_has_scope_controls_and_pagination(client) -> None:
+    """v5.21.0: scope chips (heavy detectors opt-in) + an explicit Run +
+    client pagination + the node-label 'where' rendering."""
+    raw = client.get("/analyze").text
+    assert "scope-chip" in raw, "page should expose detector scope chips"
+    assert "Run audit" in raw, "page should have an explicit Run audit button"
+    assert "totalPages" in raw, "page should paginate findings"
+    assert "pager" in raw, "page should render a pager"
+    # the inline 'where' uses the response node_labels map.
+    assert "node_labels" in raw, "findings should read the node_labels map"
+    assert "nodeName" in raw, "findings should render the node name from node_labels"

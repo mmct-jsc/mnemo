@@ -1629,6 +1629,162 @@ def detect_cyclic_imports(store: Store) -> list[dict[str, Any]]:
     return findings
 
 
+# --- Phase 3d (v5.20.0) -- code lens: duplicate_code -------------------
+
+# Cosine threshold for near-identical code bodies. Higher than the prose
+# ``DUPLICATE_COSINE_THRESHOLD`` (0.95) because code has more structural
+# near-similarity (shared idioms / scaffolding) -- 0.97 isolates genuine
+# copy-paste. Probe of the live corpus (9301 functions/methods): at 0.97
+# + the min-lines gate the candidate set is small and every sampled hit
+# was a true duplicate (copy-pasted React components, duplicated test
+# helpers).
+DUPLICATE_CODE_COSINE_THRESHOLD = 0.97
+
+# Minimum non-empty body lines for a duplicate_code candidate. Trivial
+# one-liners (getters, single-return helpers) are legitimately similar
+# across a codebase; flagging them floods. 5 is the probe-tuned floor
+# that keeps real components/helpers while dropping one-liners.
+_MIN_DUPLICATE_CODE_LINES = 5
+
+# Both callable code types share one search bucket -- a function and a
+# method with identical bodies are still duplication.
+_DUPLICATE_CODE_NODE_TYPES = ("code_function", "code_method")
+
+# Batch size for the stored-embedding bulk read. 400 (node_id, chunk)
+# pairs == 800 SQL params, safely under SQLite's conservative 999
+# variable limit on every build in the CI matrix.
+_CHUNK_EMB_BATCH = 400
+
+# Row-block size for the within-project all-pairs cosine matmul. Bounds
+# peak memory to ~_DUP_BLOCK x n_project floats even if one project is
+# huge (so the matmul never materializes a full n x n matrix at once).
+_DUP_BLOCK = 512
+
+
+def _nonempty_line_count(body: str | None) -> int:
+    """Count non-blank lines in a body (the duplicate_code size gate)."""
+    if not body:
+        return 0
+    return sum(1 for ln in body.splitlines() if ln.strip())
+
+
+def detect_duplicate_code(store: Store) -> list[dict[str, Any]]:
+    """Surface WITHIN-project pairs of near-identical code bodies
+    (copy-paste duplication) among ``code_function`` / ``code_method``
+    nodes.
+
+    Reads the STORED chunk embeddings (the corpus is already indexed).
+    Re-embedding every code node per audit took ~16 min live (one
+    ``model.encode`` call per node); reading the existing index is
+    seconds (see the design-doc revision / lesson #120). Uses EMBEDDINGS,
+    NOT the ``imports`` graph (too sparse -- see the orphan_modules
+    rejection). The code-lens analogue of :func:`detect_duplicates`
+    (which intentionally skips code nodes): same embedding-NN mechanism,
+    but a refactoring framing (extract a shared helper) rather than a
+    prose-body merge.
+
+    Candidate gate (deterministic, probe-validated):
+    - node type in ``_DUPLICATE_CODE_NODE_TYPES``;
+    - NOT a test symbol (``_is_test_symbol`` -- intentional test dup is
+      common; consistency with dead_code / god_object);
+    - body has >= ``_MIN_DUPLICATE_CODE_LINES`` non-empty lines;
+    - the pair's cosine >= ``DUPLICATE_CODE_COSINE_THRESHOLD``;
+    - both nodes share a ``project_key`` -- a copy across two unrelated
+      repos isn't an actionable "extract a shared helper" (and would
+      inflate the count with cross-repo coincidences).
+
+    Detection is an in-memory all-pairs cosine WITHIN each project
+    (numpy BLAS matmul, row-blocked), NOT a per-node vec_search KNN loop
+    -- the KNN loop was O(N * corpus) and ran ~11 min on the 9k-function
+    corpus, timing out the MCP / HTTP surface (lesson #121). Grouping by
+    project both scopes the result (actionable) AND shrinks each matmul
+    to n_project^2. Severity ``medium`` (a refactor suggestion, peer to
+    ``duplicates``); NO LLM judge -- the threshold is precise (matches
+    the cyclic_imports objective-signal precedent; avoids judge debt).
+    Returns ``[]`` on a store with no code embeddings (clean fallback).
+    """
+    # Eligible gate. Code nodes (<= ~60 lines) are single-chunk, so
+    # chunk 0 IS the whole body.
+    eligible: list[Node] = []
+    for ntype in _DUPLICATE_CODE_NODE_TYPES:
+        for node in _iter_all_nodes(store, type=ntype):
+            if _is_test_symbol(node.name, node.source_path):
+                continue
+            if _nonempty_line_count(node.body) < _MIN_DUPLICATE_CODE_LINES:
+                continue
+            eligible.append(node)
+    if not eligible:
+        return []
+    names: dict[str, str] = {n.id: (n.name or n.id) for n in eligible}
+    project_of: dict[str, str | None] = {n.id: n.project_key for n in eligible}
+
+    # Bulk-read STORED chunk-0 embeddings -- no re-embedding (the slow
+    # path; see docstring). Batched (400 pairs = 800 SQL params) so a
+    # large corpus stays under SQLite's variable limit on every build.
+    pairs = [(n.id, 0) for n in eligible]
+    embeddings: dict[tuple[str, int], list[float]] = {}
+    try:
+        for i in range(0, len(pairs), _CHUNK_EMB_BATCH):
+            embeddings.update(store.get_chunk_embeddings(pairs[i : i + _CHUNK_EMB_BATCH]))
+    except Exception:  # noqa: BLE001 -- vec table missing on empty stores
+        return []
+    if not embeddings:
+        return []
+
+    try:
+        import numpy as np
+    except ImportError:  # pragma: no cover -- numpy ships with the embed stack
+        log.warning("detect_duplicate_code: numpy unavailable; skipping")
+        return []
+
+    # Group eligible ids by project_key (within-project only) -- the
+    # all-pairs matmul runs per group, so cross-repo coincidences never
+    # compare and each matrix is just n_project x dim.
+    groups: dict[str | None, list[str]] = {}
+    for node in eligible:
+        if (node.id, 0) in embeddings:
+            groups.setdefault(project_of.get(node.id), []).append(node.id)
+
+    findings: list[dict[str, Any]] = []
+    for ids in groups.values():
+        if len(ids) < 2:
+            continue
+        mat = np.asarray([embeddings[(nid, 0)] for nid in ids], dtype=np.float32)
+        # Re-normalize defensively (the float32 serialize round-trip can
+        # drift the stored unit vectors slightly) so dot == exact cosine.
+        norms = np.linalg.norm(mat, axis=1, keepdims=True)
+        norms[norms == 0] = 1.0
+        mat = mat / norms
+        n = mat.shape[0]
+        for r0 in range(0, n, _DUP_BLOCK):
+            r1 = min(n, r0 + _DUP_BLOCK)
+            sim = mat[r0:r1] @ mat.T  # (block, n) cosine rows
+            for bi in range(r1 - r0):
+                i = r0 + bi
+                # only j > i so each unordered pair is emitted once.
+                hits = np.nonzero(sim[bi, i + 1 :] >= DUPLICATE_CODE_COSINE_THRESHOLD)[0]
+                for off in hits:
+                    j = i + 1 + int(off)
+                    cosine = float(sim[bi, j])
+                    a_id, b_id = sorted((ids[i], ids[j]))
+                    a_name, b_name = names.get(a_id, a_id), names.get(b_id, b_id)
+                    findings.append(
+                        {
+                            "type": "duplicate_code",
+                            "node_ids": [a_id, b_id],
+                            "description": (
+                                f"Two code symbols {a_name!r} / {b_name!r} in the same "
+                                f"project share cosine similarity {cosine:.3f} "
+                                f"(near-identical bodies); consider extracting a shared "
+                                f"helper / component."
+                            ),
+                            "severity": "medium",
+                            "symbol": f"{a_name} / {b_name}",
+                        }
+                    )
+    return findings
+
+
 # --- Orchestrator ------------------------------------------------------
 
 
@@ -1655,8 +1811,9 @@ KNOWN_DETECTOR_TYPES = (
 # semantic_orphans floods a code corpus). Unknown lenses run nothing
 # (permissive, matching the ``types`` contract).
 LENS_DETECTORS: dict[str, tuple[str, ...]] = {
-    # v5.16.0 dead_code; v5.17.0 god_object; v5.19.0 cyclic_imports
-    "code": ("dead_code", "god_object", "cyclic_imports"),
+    # v5.16.0 dead_code; v5.17.0 god_object; v5.19.0 cyclic_imports;
+    # v5.20.0 duplicate_code
+    "code": ("dead_code", "god_object", "cyclic_imports", "duplicate_code"),
 }
 KNOWN_LENSES = tuple(LENS_DETECTORS)
 
@@ -1762,6 +1919,8 @@ def analyze(
         findings.extend(detect_god_object(store, judge=resolved_go_judge))
     if "cyclic_imports" in requested:
         findings.extend(detect_cyclic_imports(store))
+    if "duplicate_code" in requested:
+        findings.extend(detect_duplicate_code(store))
 
     # refactor_actions enrichment (v5.15.0). Opt-in: resolve the
     # proposer lazily (caller-provided > env-derived > None). The
