@@ -140,3 +140,39 @@ def test_mnemo_analyze_propose_actions_in_schema() -> None:
     assert "propose_actions" in props, (
         f"mnemo_analyze must advertise propose_actions; got {sorted(props)}"
     )
+
+
+def test_mnemo_analyze_lens_in_schema() -> None:
+    """v5.16.0: the tool advertises the optional ``lens`` param."""
+    spec = TOOLS["mnemo_analyze"]
+    props = spec.parameters["properties"]
+    assert "lens" in props, f"mnemo_analyze must advertise lens; got {sorted(props)}"
+
+
+def test_mnemo_analyze_lens_code_surfaces_dead_code(ctx) -> None:
+    """v5.16.0: calling with lens='code' runs the code suite."""
+    import time
+
+    now = int(time.time())
+    ctx.store.upsert_node(
+        Node(
+            id="f1",
+            type="code_function",
+            name="_dead_helper",
+            description="",
+            body="def _dead_helper(): ...",
+            source_path="/proj/mod.py:1-3",
+            source_kind="code",
+            project_key="proj",
+            frontmatter_json=None,
+            hash="",
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    spec = TOOLS["mnemo_analyze"]
+    result = spec.fn(ctx, lens="code")
+    types_seen = {f["type"] for f in result["findings"]}
+    assert "dead_code" in types_seen, (
+        f"lens=code must surface dead_code on MCP path; got {types_seen}"
+    )

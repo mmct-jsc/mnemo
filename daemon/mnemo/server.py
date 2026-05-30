@@ -764,6 +764,7 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
             types=body.types,
             project_key=body.project_key,
             propose_actions=body.propose_actions,
+            lens=body.lens,
         )
         return AnalyzeOut(**result)
 

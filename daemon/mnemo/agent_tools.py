@@ -1014,10 +1014,14 @@ def _mnemo_run_skill(ctx: ToolContext, *, skill_name: str) -> dict:
         "supersede / delete / create_definition / fix_citation) to "
         "each high/medium finding -- requires "
         "``MNEMO_ANALYZE_PROPOSE_ACTIONS=1`` + key; actions are "
-        "proposals the user reviews, never auto-applied. Returns "
+        "proposals the user reviews, never auto-applied. Pass "
+        '``lens="code"`` (v5.16.0) to run a DOMAIN lens instead of '
+        "the agnostic detectors: the code lens surfaces ``dead_code`` "
+        "(private, uncalled functions/methods via the call graph), "
+        "LLM-judged when the opt-in flag is set. Returns "
         "``{ran_at, node_count_scanned, findings, summary}``. Optional "
-        "``types`` filter restricts detectors. Phase 1 + 2a + 2b + 2c "
-        "of mnemo's Understanding arc."
+        "``types`` filter restricts detectors. Phase 1 + 2 + 3 of "
+        "mnemo's Understanding arc."
     ),
     parameters=_obj(
         {
@@ -1025,9 +1029,10 @@ def _mnemo_run_skill(ctx: ToolContext, *, skill_name: str) -> dict:
                 "type": "array",
                 "items": {"type": "string"},
                 "description": (
-                    "Optional filter: subset of "
-                    '["stale", "duplicates", "orphan_references", '
-                    '"contradictions", "semantic_orphans"]. Default = all.'
+                    "Optional filter: subset of the active suite. "
+                    'Agnostic (no lens): ["stale", "duplicates", '
+                    '"orphan_references", "contradictions", '
+                    '"semantic_orphans"]. With lens="code": ["dead_code"].'
                 ),
             },
             "project_key": {
@@ -1045,6 +1050,16 @@ def _mnemo_run_skill(ctx: ToolContext, *, skill_name: str) -> dict:
                     "ANTHROPIC_API_KEY); null/omit = off."
                 ),
             },
+            "lens": {
+                "type": ["string", "null"],
+                "default": None,
+                "description": (
+                    "v5.16.0: optional domain lens. null = agnostic "
+                    'detectors. "code" = the code lens (dead_code). A '
+                    "lens REPLACES the agnostic suite; unknown lens runs "
+                    "nothing."
+                ),
+            },
         },
         [],
     ),
@@ -1055,6 +1070,7 @@ def _mnemo_analyze(
     types: list[str] | None = None,
     project_key: str | None = None,
     propose_actions: bool | None = None,
+    lens: str | None = None,
 ) -> dict:
     from mnemo import analyzer
 
@@ -1064,4 +1080,5 @@ def _mnemo_analyze(
         types=types,
         project_key=project_key,
         propose_actions=propose_actions,
+        lens=lens,
     )

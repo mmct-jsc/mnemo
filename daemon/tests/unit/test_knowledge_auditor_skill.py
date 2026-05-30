@@ -95,3 +95,13 @@ def test_skill_auto_actions_still_never_auto_applied() -> None:
         "skill must preserve the NEVER auto-apply anti-goal even with "
         "the v5.15.0 auto-proposed actions"
     )
+
+
+def test_skill_documents_code_lens() -> None:
+    """v5.16.0: the skill documents the code lens + dead_code +
+    how to invoke it."""
+    text = SKILL_FILE.read_text(encoding="utf-8")
+    assert 'lens="code"' in text or "lens=code" in text or 'lens="code"' in text, (
+        "skill must document how to invoke the code lens"
+    )
+    assert "dead_code" in text, "skill must describe the dead_code detector"

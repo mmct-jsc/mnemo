@@ -163,6 +163,75 @@ def test_analyze_endpoint_accepts_propose_actions_field(app_client) -> None:
     assert "_refactor_actions_skipped" not in body["summary"]
 
 
+def test_analyze_endpoint_accepts_lens_field(app_client) -> None:
+    """v5.16.0: ``lens`` is an accepted body field. lens="code" runs
+    the code suite (dead_code) instead of the agnostic detectors."""
+    client, store = app_client
+    # A private uncalled function -> dead_code candidate under lens=code.
+    import time
+
+    now = int(time.time())
+    store.upsert_node(
+        Node(
+            id="f1",
+            type="code_function",
+            name="_dead_helper",
+            description="",
+            body="def _dead_helper(): ...",
+            source_path="/proj/mod.py:1-3",
+            source_kind="code",
+            project_key="proj",
+            frontmatter_json=None,
+            hash="",
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    r = client.post("/v1/analyze", json={"lens": "code"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    types_seen = {f["type"] for f in body["findings"]}
+    assert "dead_code" in types_seen, f"lens=code must surface dead_code; got {types_seen}"
+
+
+def test_analyze_endpoint_unknown_lens_returns_empty(app_client) -> None:
+    """v5.16.0: an unknown lens runs nothing (permissive)."""
+    client, _store = app_client
+    r = client.post("/v1/analyze", json={"lens": "no-such-lens"})
+    assert r.status_code == 200, r.text
+    assert r.json()["findings"] == []
+
+
+def test_analyze_endpoint_dead_code_carries_symbol(app_client) -> None:
+    """v5.16.0: the dead_code finding's ``symbol`` survives HTTP
+    serialization (declared on AnalyzeFinding -- MCP/HTTP parity)."""
+    client, store = app_client
+    import time
+
+    now = int(time.time())
+    store.upsert_node(
+        Node(
+            id="f1",
+            type="code_function",
+            name="_dead_helper",
+            description="",
+            body="def _dead_helper(): ...",
+            source_path="/proj/mod.py:1-3",
+            source_kind="code",
+            project_key="proj",
+            frontmatter_json=None,
+            hash="",
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    r = client.post("/v1/analyze", json={"lens": "code"})
+    dead = next(f for f in r.json()["findings"] if f["type"] == "dead_code")
+    assert dead.get("symbol") == "_dead_helper", (
+        f"dead_code finding must carry symbol over HTTP; got {dead}"
+    )
+
+
 def test_analyze_endpoint_finding_carries_action_and_concept_fields(app_client) -> None:
     """v5.15.0: the AnalyzeFinding schema declares ``action`` +
     ``concept`` so they survive HTTP serialization (the v5.14.0
