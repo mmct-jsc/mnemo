@@ -928,8 +928,15 @@ function nebula() {
             // SILKY: very low alpha + additive -> overlapping
             // filaments along the arms sum into a smooth luminous
             // band (silk), not a harsh wire tangle; outskirts faint.
-            edge: [0.42, 0.54, 0.86, 0.085],
-            glow: 0.9,
+            // v5.20.0: dimmer + cooler filaments so the STARS carry the
+            // galaxy -- edges are a faint structural wash, not bright
+            // wire (the user's "edge thinner + less light"). Paired with
+            // the slimmer ribbon half-width in nebula-gl.js.
+            edge: [0.40, 0.50, 0.82, 0.05],
+            // v5.20.0: brighter additive star bloom -> the field reads
+            // as a luminous galaxy of countless small glowing stars,
+            // not flat dots ("make the node more galaxy").
+            glow: 1.35,
             accent: this._rgbTriplet(this._theme.accent),
           },
         });

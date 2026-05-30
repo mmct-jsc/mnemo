@@ -5,7 +5,12 @@
 <section class="settings" x-data="settingsPage()" x-init="load()">
   <header class="page-hero">
     <div class="hero-text">
-      <h1>Companion settings</h1>
+      {# v5.20.0: the heading tracks the ACTIVE tab -- this route hosts
+         three tabs (Providers & keys / Companion / Permissions &
+         history), so a static "Companion settings" mis-titled the other
+         two (the user's "title still shows Companion settings"). The
+         static text is the pre-Alpine fallback. #}
+      <h1 x-text="tabTitle">Companion settings</h1>
       <p>BYO API keys, Mnem's personality, and chat history retention.
          Keys go to the OS keychain &mdash; never to <code>settings.json</code>.
          Retrieval tuning lives on the <a href="/settings">main settings</a> page.</p>
@@ -127,6 +132,15 @@ function settingsPage() {
     registry: [],
     keyInput: {},
     retention: '',
+    // v5.20.0: heading text for the active tab (the strip + the H1 stay
+    // in lock-step). Falls back to the umbrella title for any unknown tab.
+    get tabTitle() {
+      return ({
+        providers: 'Providers & keys',
+        companion: 'Companion',
+        permissions: 'Permissions & history',
+      })[this.tab] || 'Companion settings';
+    },
     // C4 (v4.2): registry-driven -- every REGISTERED provider appears,
     // not just configured ones (union with any config-only names).
     get providerNames() {

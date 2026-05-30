@@ -429,7 +429,7 @@
         zoom: function () { return cam.zoom; },
         res: function (c) { return res(c); },
         uA: function () { return gA; },
-        hw: function () { return 2.4 * dpr; },  // ribbon half-width px
+        hw: function () { return 1.5 * dpr; },  // ribbon half-width px (v5.20.0: thinner filaments)
         wr: function () { return worldR; },
         uz: function () { return cam.zoom; },
         uf: function () { return fitZoom || 1; },

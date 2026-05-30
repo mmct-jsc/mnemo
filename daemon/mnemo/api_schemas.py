@@ -909,6 +909,16 @@ class AnalyzeFinding(BaseModel):
     symbol: str | None = None
 
 
+class NodeLabel(BaseModel):
+    """v5.21.0: per-node display info for the /analyze table so a finding
+    shows WHERE the problem is (name + file) without a click. HTTP-
+    response convenience only -- NOT emitted on the MCP raw-dict path."""
+
+    name: str
+    type: str
+    source_path: str | None = None
+
+
 class AnalyzeOut(BaseModel):
     """``POST /v1/analyze`` response envelope."""
 
@@ -916,3 +926,7 @@ class AnalyzeOut(BaseModel):
     node_count_scanned: int
     findings: list[AnalyzeFinding]
     summary: dict[str, int]
+    # v5.21.0: id -> {name, type, source_path} for every cited node so
+    # the UI renders the name + path inline. Additive; defaults empty for
+    # pre-existing callers + the MCP path.
+    node_labels: dict[str, NodeLabel] = {}

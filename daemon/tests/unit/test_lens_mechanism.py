@@ -200,12 +200,17 @@ def test_known_lenses_unchanged_and_dead_code_still_default_excluded(store) -> N
     )
 
 
-def test_code_lens_has_three_detectors(store) -> None:
-    """v5.19.0: the code suite now holds dead_code + god_object +
-    cyclic_imports. types isolates each."""
+def test_code_lens_has_four_detectors(store) -> None:
+    """v5.20.0: the code suite now holds dead_code + god_object +
+    cyclic_imports + duplicate_code. types isolates each."""
     from mnemo.analyzer import LENS_DETECTORS, analyze
 
-    assert set(LENS_DETECTORS["code"]) == {"dead_code", "god_object", "cyclic_imports"}
+    assert set(LENS_DETECTORS["code"]) == {
+        "dead_code",
+        "god_object",
+        "cyclic_imports",
+        "duplicate_code",
+    }
 
     # A 2-module import cycle -> cyclic_import via the code lens.
     for m in ("A", "B"):
@@ -221,3 +226,9 @@ def test_code_lens_has_three_detectors(store) -> None:
     # dead_code isolation still excludes cyclic_import.
     only_dead = {f["type"] for f in analyze(store, lens="code", types=["dead_code"])["findings"]}
     assert "cyclic_import" not in only_dead
+
+    # duplicate_code is a known type in the suite but inert without an
+    # embedder -> types=[duplicate_code] with no embedder yields nothing
+    # (clean fallback) rather than erroring.
+    only_dup = analyze(store, lens="code", types=["duplicate_code"])["findings"]
+    assert all(f["type"] == "duplicate_code" for f in only_dup)
