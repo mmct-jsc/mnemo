@@ -236,13 +236,39 @@ Format as a Markdown report:
 - **NEVER hide low-severity findings to "make the report shorter".**
   Show them all; the user decides what to ignore.
 
-## Domain lenses (future v5.14.0+)
+## Domain lenses (v5.16.0+)
 
-Phase 1 ships the three universal detectors above. Phase 3 adds
-pluggable domain lenses:
-- `lens=vietnamese-law`: detects hierarchy violations + missing
-  exception cross-refs in a legal corpus.
-- `lens=code`: dead-code detection across modules.
+The five detectors above are domain-AGNOSTIC. A **domain lens**
+(`mnemo_analyze(lens=...)`) runs a suite of domain-SPECIFIC
+detectors INSTEAD of the agnostic ones (a lens replaces, not adds —
+running agnostic detectors on a code corpus floods).
+
+### `lens="code"` (shipped v5.16.0)
+
+- **dead_code**: PRIVATE (`_`-prefixed, non-dunder) `code_function`
+  / `code_method` nodes with ZERO inbound `calls` edges, excluding
+  test entry points. Default severity `candidate`. With
+  `MNEMO_ANALYZE_LLM_JUDGE=1` + `ANTHROPIC_API_KEY`, each candidate
+  is graded: genuinely-dead → `high`; reached dynamically
+  (dispatch table / getattr / decorator / framework hook) →
+  dropped.
+- **Workflow**: call `mnemo_analyze(lens="code")`. For each
+  `dead_code` finding, propose `mnemo_delete_node(node_id)` (or, in
+  the source, deleting the function) for confirmed-dead `high`
+  findings; for `candidate` findings, explicitly flag that the user
+  should verify it isn't reached dynamically before deleting. NEVER
+  delete automatically.
+- Only PRIVATE symbols are flagged — public dead code needs
+  cross-file/external/dynamic call resolution mnemo doesn't have, so
+  flagging public symbols would flood with false positives.
+
+### Future lenses (later releases)
+
+- `lens=vietnamese-law`: hierarchy violations + missing exception
+  cross-refs in a legal corpus.
 - `lens=research-notes`: un-cited claims, hypothesis drift.
+- Additional `code` detectors (`cyclic_imports`, `orphan_modules`)
+  land when a corpus exercises them.
 
-Domain lenses are out of scope for this skill in v5.12.0.
+To discover valid lenses programmatically, the analyzer exports
+`KNOWN_LENSES`; an unknown lens runs no detectors (returns empty).

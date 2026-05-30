@@ -1154,6 +1154,209 @@ def propose_refactor_actions(
     return findings, skipped
 
 
+# --- Phase 3 (v5.16.0) -- code lens: dead_code -------------------------
+
+# Callable node types the dead_code detector scans.
+_DEAD_CODE_NODE_TYPES = ("code_function", "code_method")
+
+_DEAD_CODE_JUDGE_SYSTEM_PROMPT = (
+    "You are a strict dead-code grader for a codebase. Given a "
+    "PRIVATE function/method (its name, source path, and body) that "
+    "the static call graph found NO callers for, decide whether it "
+    "is genuinely dead (safe to delete) or whether it is reached by "
+    "a pattern the static graph misses -- a dispatch table, getattr, "
+    "a decorator/registration callback, a framework hook, or an "
+    "implicitly-invoked protocol method. Respond with ONLY a JSON "
+    'object of the shape {"is_dead": true|false, "rationale": '
+    '"<one short paragraph>"}. No prose outside the JSON. No '
+    "markdown fences."
+)
+
+# Body excerpt cap sent to the dead_code judge.
+_DEAD_CODE_BODY_CAP = 1500
+
+
+def _is_private_symbol(name: str | None) -> bool:
+    """A private symbol starts with ``_`` but is not a dunder
+    (``__x__``). Private symbols are only reachable within their own
+    module, where the Tier-2 call resolver is high-confidence -- so a
+    private symbol with zero resolved inbound calls is a strong dead
+    signal. Public symbols are excluded (cross-file / external /
+    dynamic resolution is sparse; flagging them would flood)."""
+    if not name:
+        return False
+    if name.startswith("__") and name.endswith("__"):
+        return False
+    return name.startswith("_")
+
+
+def _is_test_symbol(name: str | None, source_path: str | None) -> bool:
+    """Test entry points are invoked by the test runner, not by
+    in-graph callers -- exclude them from dead_code."""
+    n = name or ""
+    if n.startswith("test_") or n.startswith("_test_"):
+        return True
+    sp = (source_path or "").replace("\\", "/").lower()
+    return "/tests/" in sp or "/test/" in sp
+
+
+@dataclass
+class LLMDeadCodeJudge:
+    """Opt-in binary judge for dead_code candidates. Sibling to the
+    v5.13.0/v5.14.0 judges (lesson #109). Wraps an Anthropic client;
+    tests pass a MagicMock. Graceful: any parse/exception path
+    returns False (keeps the deterministic 'candidate'; never falsely
+    promotes to 'high')."""
+
+    client: Any
+    model: str = "claude-sonnet-4-6"
+    max_tokens: int = 400
+    rationale_log: list[dict[str, Any]] = field(default_factory=list)
+
+    def judge(self, *, name: str, body: str, source_path: str) -> bool:
+        """Return True if the symbol is genuinely dead; False
+        otherwise (including on every error path)."""
+        snippet = (body or "")[:_DEAD_CODE_BODY_CAP]
+        user_msg = (
+            f"## Symbol\nname: {name}\npath: {source_path}\n\n"
+            f"## Body\n{snippet}\n\n"
+            "## Task\nIs this private symbol genuinely dead (no caller, "
+            "not dispatched/registered/implicit)? Respond with ONLY the JSON."
+        )
+        try:
+            response = self.client.messages.create(
+                model=self.model,
+                max_tokens=self.max_tokens,
+                system=_DEAD_CODE_JUDGE_SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": user_msg}],
+            )
+            text = response.content[0].text
+            parsed = json.loads(text)
+            result = bool(parsed.get("is_dead", False))
+            self.rationale_log.append(
+                {
+                    "name": name,
+                    "source_path": source_path,
+                    "is_dead": result,
+                    "rationale": parsed.get("rationale", ""),
+                    "parsed_ok": True,
+                }
+            )
+            return result
+        except (json.JSONDecodeError, KeyError, AttributeError, IndexError, TypeError) as exc:
+            log.warning("LLMDeadCodeJudge: parse error (%s); returning False", exc)
+            self.rationale_log.append(
+                {
+                    "name": name,
+                    "source_path": source_path,
+                    "is_dead": False,
+                    "rationale": f"PARSE_ERROR: {exc}",
+                    "parsed_ok": False,
+                }
+            )
+            return False
+        except Exception as exc:  # noqa: BLE001
+            log.warning("LLMDeadCodeJudge: client error (%s); returning False", exc)
+            self.rationale_log.append(
+                {
+                    "name": name,
+                    "source_path": source_path,
+                    "is_dead": False,
+                    "rationale": f"CLIENT_ERROR: {exc}",
+                    "parsed_ok": False,
+                }
+            )
+            return False
+
+
+def dead_code_judge_from_env() -> LLMDeadCodeJudge | None:
+    """Construct an LLMDeadCodeJudge from environment when ALL of:
+    ``MNEMO_ANALYZE_LLM_JUDGE`` is truthy, ``ANTHROPIC_API_KEY`` is
+    set, and ``anthropic`` is importable. Shares the flag + model
+    override with the other auditor judges."""
+    flag = os.environ.get("MNEMO_ANALYZE_LLM_JUDGE", "").strip().lower()
+    if flag not in {"1", "true", "yes", "on"}:
+        return None
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        return None
+    try:
+        import anthropic  # type: ignore[import-untyped]
+    except ImportError:
+        log.warning(
+            "dead_code_judge_from_env: flag set but anthropic not installed; "
+            "falling back to deterministic candidates."
+        )
+        return None
+    model = os.environ.get("MNEMO_ANALYZE_JUDGE_MODEL", "claude-sonnet-4-6")
+    return LLMDeadCodeJudge(client=anthropic.Anthropic(), model=model)
+
+
+def detect_dead_code(store: Store, *, judge: Any | None = None) -> list[dict[str, Any]]:
+    """Surface PRIVATE, uncalled functions/methods (candidate dead
+    code).
+
+    Candidate gate (deterministic):
+    - node type in ``_DEAD_CODE_NODE_TYPES``;
+    - private symbol (``_``-prefixed, non-dunder);
+    - not a test entry point (name / path);
+    - ZERO inbound ``calls`` edges (id not among call-edge dst_ids).
+
+    Optional LLM confirmation: when ``judge`` is provided, each
+    candidate's body is graded; confirmed -> severity ``high``;
+    rejected (dispatched/registered/implicit) -> dropped. Without a
+    judge, candidates ship with severity ``candidate``.
+    """
+    try:
+        call_edges = store.get_edges(relation="calls")
+    except Exception:  # noqa: BLE001 -- empty stores / missing table
+        call_edges = []
+    called_ids = {e.dst_id for e in call_edges}
+
+    findings: list[dict[str, Any]] = []
+    for ntype in _DEAD_CODE_NODE_TYPES:
+        for node in _iter_all_nodes(store, type=ntype):
+            if not _is_private_symbol(node.name):
+                continue
+            if _is_test_symbol(node.name, node.source_path):
+                continue
+            if node.id in called_ids:
+                continue
+
+            if judge is not None:
+                confirmed = bool(
+                    judge.judge(
+                        name=node.name or "",
+                        body=node.body or "",
+                        source_path=node.source_path or "",
+                    )
+                )
+                if not confirmed:
+                    continue
+                severity = "high"
+            else:
+                severity = "candidate"
+
+            findings.append(
+                {
+                    "type": "dead_code",
+                    "node_ids": [node.id],
+                    "description": (
+                        f"Private {ntype} {node.name!r} ({node.source_path}) "
+                        f"has zero inbound call edges; "
+                        + (
+                            "LLM judge confirmed it is genuinely dead -- consider deleting it."
+                            if severity == "high"
+                            else "review whether it is dead or reached "
+                            "dynamically (dispatch / decorator / hook)."
+                        )
+                    ),
+                    "severity": severity,
+                    "symbol": node.name,
+                }
+            )
+    return findings
+
+
 # --- Orchestrator ------------------------------------------------------
 
 
@@ -1173,6 +1376,17 @@ KNOWN_DETECTOR_TYPES = (
     "semantic_orphans",  # v5.14.0 Phase 2b
 )
 
+# Phase 3 (v5.16.0): pluggable domain lenses. Each lens maps to a
+# suite of domain-SPECIFIC detector type names. A lens REPLACES the
+# agnostic suite above (it does not add to it) -- a lens is a focused
+# domain audit; mixing suites would bury the signal (e.g.
+# semantic_orphans floods a code corpus). Unknown lenses run nothing
+# (permissive, matching the ``types`` contract).
+LENS_DETECTORS: dict[str, tuple[str, ...]] = {
+    "code": ("dead_code",),
+}
+KNOWN_LENSES = tuple(LENS_DETECTORS)
+
 
 def analyze(
     store: Store,
@@ -1184,6 +1398,8 @@ def analyze(
     orphan_judge: Any | None = None,
     propose_actions: bool | None = None,
     proposer: Any | None = None,
+    lens: str | None = None,
+    dead_code_judge: Any | None = None,
 ) -> dict[str, Any]:
     """Run the requested detectors + return a canonical envelope.
 
@@ -1220,13 +1436,29 @@ def analyze(
             how many eligible findings the cap dropped.
         proposer: optional ``LLMRefactorProposer``. Caller-provided
             takes precedence over the env-derived one.
+        lens: optional domain lens (v5.16.0). ``None`` (default) runs
+            the agnostic suite (``KNOWN_DETECTOR_TYPES``). A known
+            lens (see ``KNOWN_LENSES``, e.g. ``"code"``) REPLACES the
+            agnostic suite with that lens's domain-specific detectors
+            (e.g. ``dead_code``). ``types`` filters WITHIN the active
+            suite. An unknown lens runs no detectors (permissive).
+        dead_code_judge: optional ``LLMDeadCodeJudge`` (lens="code").
+            Caller-provided > env-derived (:func:`dead_code_judge_from_env`)
+            > None. Confirmed -> ``high``; rejected -> dropped.
 
     Returns:
         ``{ran_at, node_count_scanned, findings, summary}``. When the
         enrichment ran, eligible findings carry an ``action`` field
         and ``summary`` includes ``_refactor_actions_skipped``.
     """
-    requested = set(types) if types else set(KNOWN_DETECTOR_TYPES)
+    # Resolve the active detector suite. A lens REPLACES the agnostic
+    # suite; ``types`` filters WITHIN whichever suite is active.
+    # Intersecting with the suite keeps lens detectors lens-only and
+    # agnostic detectors agnostic-only (a stray ``types`` value not in
+    # the active suite simply runs nothing).
+    # A lens REPLACES the agnostic suite; an unknown lens -> empty.
+    suite = set(LENS_DETECTORS.get(lens, ())) if lens is not None else set(KNOWN_DETECTOR_TYPES)
+    requested = (set(types) & suite) if types else set(suite)
 
     findings: list[dict[str, Any]] = []
     if "stale" in requested:
@@ -1244,6 +1476,11 @@ def analyze(
             orphan_judge if orphan_judge is not None else semantic_orphan_judge_from_env()
         )
         findings.extend(detect_semantic_orphans(store, judge=resolved_orphan_judge))
+    if "dead_code" in requested:
+        resolved_dc_judge = (
+            dead_code_judge if dead_code_judge is not None else dead_code_judge_from_env()
+        )
+        findings.extend(detect_dead_code(store, judge=resolved_dc_judge))
 
     # refactor_actions enrichment (v5.15.0). Opt-in: resolve the
     # proposer lazily (caller-provided > env-derived > None). The
