@@ -198,6 +198,90 @@ def test_non_code_nodes_ignored(store) -> None:
 # --- orchestrator via the code lens ------------------------------------
 
 
+# --- v5.18.0: opt-in cohesion judge -----------------------------------
+
+
+def test_god_object_judge_elevates_grab_bag_to_high(store) -> None:
+    """With a judge that says should_split=True, the candidate becomes
+    severity 'high'."""
+    from unittest.mock import MagicMock
+
+    from mnemo.analyzer import GOD_CLASS_METHOD_THRESHOLD, detect_god_object
+
+    _mkclass(store, id="C", name="KitchenSink", n_methods=GOD_CLASS_METHOD_THRESHOLD + 1)
+    judge = MagicMock()
+    judge.judge.return_value = True
+    findings = detect_god_object(store, judge=judge)
+    god = next(f for f in findings if f["node_ids"] == ["C"])
+    assert god["severity"] == "high", f"grab-bag should be elevated to high; got {god}"
+
+
+def test_god_object_judge_drops_cohesive_facade(store) -> None:
+    """With a judge that says should_split=False (cohesive), the
+    candidate is DROPPED."""
+    from unittest.mock import MagicMock
+
+    from mnemo.analyzer import GOD_CLASS_METHOD_THRESHOLD, detect_god_object
+
+    _mkclass(store, id="C", name="Store", n_methods=GOD_CLASS_METHOD_THRESHOLD + 1)
+    judge = MagicMock()
+    judge.judge.return_value = False
+    findings = detect_god_object(store, judge=judge)
+    ids = {f["node_ids"][0] for f in findings if f["type"] == "god_object"}
+    assert "C" not in ids, f"cohesive facade should be dropped; got {findings}"
+
+
+def test_god_object_judge_receives_member_names(store) -> None:
+    """The judge is given the candidate's member names (the cohesion
+    signal)."""
+    from unittest.mock import MagicMock
+
+    from mnemo.analyzer import GOD_CLASS_METHOD_THRESHOLD, detect_god_object
+
+    _mkclass(store, id="C", name="HugeService", n_methods=GOD_CLASS_METHOD_THRESHOLD + 1)
+    captured = {}
+
+    def _capture(*, kind, name, members):
+        captured["kind"] = kind
+        captured["name"] = name
+        captured["members"] = members
+        return True
+
+    judge = MagicMock()
+    judge.judge.side_effect = _capture
+    detect_god_object(store, judge=judge)
+    assert captured["kind"] == "class"
+    assert captured["name"] == "HugeService"
+    # Member names are the public method_N names created by _mkclass.
+    assert any(m.startswith("method_") for m in captured["members"]), (
+        f"judge must receive member names; got {captured.get('members')}"
+    )
+
+
+def test_god_object_default_no_judge_is_candidate(store) -> None:
+    """Without a judge the candidate keeps severity 'candidate'
+    (byte-stable deterministic path)."""
+    from mnemo.analyzer import GOD_CLASS_METHOD_THRESHOLD, detect_god_object
+
+    _mkclass(store, id="C", name="HugeService", n_methods=GOD_CLASS_METHOD_THRESHOLD + 1)
+    god = next(f for f in detect_god_object(store) if f["node_ids"] == ["C"])
+    assert god["severity"] == "candidate"
+
+
+def test_analyze_god_object_judge_wires_through(store) -> None:
+    """analyze(lens='code', god_object_judge=...) escalates."""
+    from unittest.mock import MagicMock
+
+    from mnemo.analyzer import GOD_CLASS_METHOD_THRESHOLD, analyze
+
+    _mkclass(store, id="C", name="KitchenSink", n_methods=GOD_CLASS_METHOD_THRESHOLD + 1)
+    judge = MagicMock()
+    judge.judge.return_value = True
+    result = analyze(store, lens="code", types=["god_object"], god_object_judge=judge)
+    god = next(f for f in result["findings"] if f["type"] == "god_object")
+    assert god["severity"] == "high"
+
+
 def test_god_object_via_code_lens(store) -> None:
     from mnemo.analyzer import GOD_CLASS_METHOD_THRESHOLD, analyze
 
