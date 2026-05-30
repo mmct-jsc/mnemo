@@ -2,6 +2,63 @@
 
 All notable changes to mnemo are documented here.
 
+## [5.17.1] - 2026-05-30
+
+**Internal refactor: shared `_LLMHelper` base for the analyzer LLM
+helpers.** No public behaviour change.
+
+The four sibling LLM helper classes in `daemon/mnemo/analyzer.py` —
+`LLMContradictionJudge` (v5.13.0), `LLMSemanticOrphanJudge` (v5.14.0),
+`LLMRefactorProposer` (v5.15.0), `LLMDeadCodeJudge` (v5.16.0) — each
+duplicated the same four dataclass fields + the same
+create→parse→graceful-degradation control flow (~100 duplicated
+lines, and the four copies had already drifted: two caught a 4-tuple
+of exceptions, two a 5-tuple). Lesson #109 chose siblings over a
+parameterized abstraction at 2-3 copies; at four, the v5.16.0 +
+v5.17.0 handovers flagged the consolidation as a dedicated pass to do
+BEFORE a 5th judge is added.
+
+### Change
+
+- New `_LLMHelper` dataclass base owns `client` / `model` /
+  `max_tokens` / `rationale_log` + `_invoke_json(system, user) ->
+  (parsed_dict | None, error_marker | None)` — the create + parse +
+  two-branch graceful-degradation routine. Never raises.
+- The four classes now inherit `_LLMHelper` and delegate the network
+  /parse to `_invoke_json`, keeping their own prompts, field
+  interpretation, return types, and `rationale_log` entry schemas.
+  `LLMRefactorProposer` / `LLMDeadCodeJudge` redeclare their
+  `max_tokens` defaults (700 / 400).
+
+### Behaviour preservation
+
+- Public class names, method signatures, return types, the
+  `*_from_env()` factories, and every `rationale_log` schema are
+  unchanged. The four existing judge/proposer test files pass
+  UNCHANGED (the regression net).
+- The ONLY intentional difference is a degenerate, untested path: a
+  `TypeError` raised during parse in the two classes that previously
+  caught only a 4-tuple now logs `PARSE_ERROR` instead of
+  `CLIENT_ERROR` — same return value (the safe default); only the
+  `rationale_log` marker string differs.
+- Zero change outside `analyzer.py`: the MCP wire snapshot, HTTP
+  schemas, UI, and SKILL are byte-identical (verified).
+
+### Payoff
+
+The 5th judge (e.g. the queued god_object cohesion judge) is now
+~15 lines (subclass + prompt + interpretation) instead of ~50.
+
+### Tests
+
+- `tests/unit/test_llm_helper_base.py` (6) — `_invoke_json` success
+  / parse-error / client-error / malformed-response / arg-forwarding
+  / defaults.
+- The four judge test files unchanged + green.
+
+**Daemon suite: 1635 passed / 2 skipped (+6 base tests vs v5.17.0).**
+Ruff clean. No wire-snapshot change.
+
 ## [5.17.0] - 2026-05-30
 
 **Understanding Phase 3b: god_object detector (code lens).**

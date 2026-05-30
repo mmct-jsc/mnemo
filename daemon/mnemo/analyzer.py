@@ -175,35 +175,75 @@ def _has_negation(body: str | None) -> bool:
     return any(p in lowered for p in _NEGATION_PATTERNS)
 
 
+# --- Shared LLM-helper base (v5.17.1) ----------------------------------
+
+
+@dataclass
+class _LLMHelper:
+    """Shared base for the opt-in LLM judge/proposer helpers
+    (contradictions / semantic_orphans / refactor_actions /
+    dead_code). It owns ONLY the create->parse->graceful-degradation
+    routine + the four common fields; each subclass keeps its own
+    prompt, field interpretation, and ``rationale_log`` entry schema.
+
+    Wraps an Anthropic client; tests pass a MagicMock so no network
+    call is made."""
+
+    client: Any
+    """The Anthropic client. Any object with ``messages.create(...)``
+    works (tests pass a MagicMock)."""
+
+    model: str = "claude-sonnet-4-6"
+    """Default grader model. Sonnet is lower latency + cost than
+    Opus. Override via ``MNEMO_ANALYZE_JUDGE_MODEL`` env var (the
+    ``*_from_env`` factories read it)."""
+
+    max_tokens: int = 512
+    """Token budget for the structured reply. Subclasses redeclare
+    this default where they need a different ceiling."""
+
+    rationale_log: list[dict[str, Any]] = field(default_factory=list)
+    """Per-call audit trail. Operators can dump this after a sweep to
+    inspect decisions. Each subclass appends its own entry shape."""
+
+    def _invoke_json(self, *, system: str, user: str) -> tuple[dict[str, Any] | None, str | None]:
+        """Call the model + parse its JSON reply. Returns
+        ``(parsed_dict, None)`` on success, or ``(None, error_marker)``
+        on any parse/network error. NEVER raises -- the caller maps a
+        ``None`` result to its own safe default + ``rationale_log``
+        entry.
+
+        The error marker is ``"PARSE_ERROR: ..."`` for a malformed /
+        wrong-shape reply (``json.JSONDecodeError`` / ``KeyError`` /
+        ``AttributeError`` / ``IndexError`` / ``TypeError``) and
+        ``"CLIENT_ERROR: ..."`` for any other exception (network / SDK)."""
+        try:
+            response = self.client.messages.create(
+                model=self.model,
+                max_tokens=self.max_tokens,
+                system=system,
+                messages=[{"role": "user", "content": user}],
+            )
+            text = response.content[0].text
+            return json.loads(text), None
+        except (json.JSONDecodeError, KeyError, AttributeError, IndexError, TypeError) as exc:
+            log.warning("%s: parse/structure error (%s); degrading", type(self).__name__, exc)
+            return None, f"PARSE_ERROR: {exc}"
+        except Exception as exc:  # noqa: BLE001
+            log.warning("%s: client error (%s); degrading", type(self).__name__, exc)
+            return None, f"CLIENT_ERROR: {exc}"
+
+
 # --- Phase 2a (v5.13.0) -- LLM judge -----------------------------------
 
 
 @dataclass
-class LLMContradictionJudge:
+class LLMContradictionJudge(_LLMHelper):
     """Opt-in binary judge for contradiction candidates.
 
-    Wraps an Anthropic client; tests pass a MagicMock so no network
-    call is made. Graceful: any parse/exception path returns False
-    (the pair stays a deterministic 'candidate'; no false-positive
-    'high')."""
-
-    client: Any
-    """The Anthropic client. Any object with
-    ``messages.create(...)`` works (tests pass a MagicMock)."""
-
-    model: str = "claude-sonnet-4-6"
-    """Default judge model. Sonnet is the recommended grader for
-    bench-style sweeps (lower latency + cost than Opus). Override
-    via ``MNEMO_ANALYZE_JUDGE_MODEL`` env var."""
-
-    max_tokens: int = 512
-    """Token budget for the judge response. The structured output is
-    small (~50-100 tokens for {contradiction, rationale}); 512 is a
-    comfortable ceiling."""
-
-    rationale_log: list[dict[str, Any]] = field(default_factory=list)
-    """Per-pair audit trail. Operators can dump this after a sweep
-    to inspect grading decisions."""
+    Graceful: any parse/exception path returns False (the pair stays
+    a deterministic 'candidate'; no false-positive 'high'). Shares
+    the create+parse routine + the four fields with :class:`_LLMHelper`."""
 
     def judge(self, *, a_body: str, b_body: str) -> bool:
         """Return True if the two bodies represent a mutual
@@ -219,57 +259,29 @@ class LLMContradictionJudge:
             "## Task\n"
             "Decide: do A and B contradict each other? Respond with ONLY the JSON."
         )
-        try:
-            response = self.client.messages.create(
-                model=self.model,
-                max_tokens=self.max_tokens,
-                system=_JUDGE_SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": user_msg}],
-            )
-            text = response.content[0].text
-            parsed = json.loads(text)
-            result = bool(parsed.get("contradiction", False))
-            self.rationale_log.append(
-                {
-                    "a_body": a,
-                    "b_body": b,
-                    "contradiction": result,
-                    "rationale": parsed.get("rationale", ""),
-                    "parsed_ok": True,
-                }
-            )
-            return result
-        except (json.JSONDecodeError, KeyError, AttributeError, IndexError) as exc:
-            log.warning(
-                "LLMContradictionJudge: parse/structure error (%s); "
-                "returning False (degrades to candidate-only)",
-                exc,
-            )
+        parsed, err = self._invoke_json(system=_JUDGE_SYSTEM_PROMPT, user=user_msg)
+        if parsed is None:
             self.rationale_log.append(
                 {
                     "a_body": a,
                     "b_body": b,
                     "contradiction": False,
-                    "rationale": f"PARSE_ERROR: {exc}",
+                    "rationale": err,
                     "parsed_ok": False,
                 }
             )
             return False
-        except Exception as exc:  # noqa: BLE001
-            log.warning(
-                "LLMContradictionJudge: client error (%s); returning False",
-                exc,
-            )
-            self.rationale_log.append(
-                {
-                    "a_body": a,
-                    "b_body": b,
-                    "contradiction": False,
-                    "rationale": f"CLIENT_ERROR: {exc}",
-                    "parsed_ok": False,
-                }
-            )
-            return False
+        result = bool(parsed.get("contradiction", False))
+        self.rationale_log.append(
+            {
+                "a_body": a,
+                "b_body": b,
+                "contradiction": result,
+                "rationale": parsed.get("rationale", ""),
+                "parsed_ok": True,
+            }
+        )
+        return result
 
 
 def judge_from_env() -> LLMContradictionJudge | None:
@@ -680,20 +692,15 @@ _ORPHAN_JUDGE_SYSTEM_PROMPT = (
 
 
 @dataclass
-class LLMSemanticOrphanJudge:
+class LLMSemanticOrphanJudge(_LLMHelper):
     """Opt-in binary judge for semantic-orphan candidates.
 
-    Sibling to :class:`LLMContradictionJudge` -- different prompt
-    + different return semantics. Wraps an Anthropic client; tests
-    pass a MagicMock so no network call is made. Graceful: any
-    parse/exception path returns False (the candidate is DROPPED
-    when the judge is enabled; no false-positive 'high').
+    Sibling to :class:`LLMContradictionJudge` -- different prompt +
+    different return semantics. Graceful: any parse/exception path
+    returns False (the candidate is DROPPED when the judge is
+    enabled; no false-positive 'high'). Shares the create+parse
+    routine + fields with :class:`_LLMHelper`.
     """
-
-    client: Any
-    model: str = "claude-sonnet-4-6"
-    max_tokens: int = 512
-    rationale_log: list[dict[str, Any]] = field(default_factory=list)
 
     def judge(self, *, concept: str, context: str) -> bool:
         """Return True if the concept needs its own definition node;
@@ -706,57 +713,29 @@ class LLMSemanticOrphanJudge:
             "Decide: does this concept need its own definition node in "
             "the corpus? Respond with ONLY the JSON."
         )
-        try:
-            response = self.client.messages.create(
-                model=self.model,
-                max_tokens=self.max_tokens,
-                system=_ORPHAN_JUDGE_SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": user_msg}],
-            )
-            text = response.content[0].text
-            parsed = json.loads(text)
-            result = bool(parsed.get("needs_definition", False))
-            self.rationale_log.append(
-                {
-                    "concept": concept,
-                    "context": ctx,
-                    "needs_definition": result,
-                    "rationale": parsed.get("rationale", ""),
-                    "parsed_ok": True,
-                }
-            )
-            return result
-        except (json.JSONDecodeError, KeyError, AttributeError, IndexError) as exc:
-            log.warning(
-                "LLMSemanticOrphanJudge: parse/structure error (%s); "
-                "returning False (candidate dropped)",
-                exc,
-            )
+        parsed, err = self._invoke_json(system=_ORPHAN_JUDGE_SYSTEM_PROMPT, user=user_msg)
+        if parsed is None:
             self.rationale_log.append(
                 {
                     "concept": concept,
                     "context": ctx,
                     "needs_definition": False,
-                    "rationale": f"PARSE_ERROR: {exc}",
+                    "rationale": err,
                     "parsed_ok": False,
                 }
             )
             return False
-        except Exception as exc:  # noqa: BLE001
-            log.warning(
-                "LLMSemanticOrphanJudge: client error (%s); returning False",
-                exc,
-            )
-            self.rationale_log.append(
-                {
-                    "concept": concept,
-                    "context": ctx,
-                    "needs_definition": False,
-                    "rationale": f"CLIENT_ERROR: {exc}",
-                    "parsed_ok": False,
-                }
-            )
-            return False
+        result = bool(parsed.get("needs_definition", False))
+        self.rationale_log.append(
+            {
+                "concept": concept,
+                "context": ctx,
+                "needs_definition": result,
+                "rationale": parsed.get("rationale", ""),
+                "parsed_ok": True,
+            }
+        )
+        return result
 
 
 def semantic_orphan_judge_from_env() -> LLMSemanticOrphanJudge | None:
@@ -987,20 +966,17 @@ def _empty_action(reason: str) -> dict[str, Any]:
 
 
 @dataclass
-class LLMRefactorProposer:
+class LLMRefactorProposer(_LLMHelper):
     """Opt-in structured action generator for audit findings.
 
-    UNLIKE the v5.13.0 / v5.14.0 judges (binary classifiers returning
-    bool), this is a GENERATOR: it returns an action dict. Wraps an
-    Anthropic client; tests pass a MagicMock so no network call is
-    made. Graceful: any parse/exception path returns an ``_empty_action``
-    (``kind="none"``) so the finding still ships with an empty action.
-    """
+    UNLIKE the binary-classifier judges, this is a GENERATOR: it
+    returns an action dict. Graceful: any parse/exception path returns
+    an ``_empty_action`` (``kind="none"``) so the finding still ships
+    with an empty action. Shares the create+parse routine + fields
+    with :class:`_LLMHelper` (with a larger ``max_tokens`` default for
+    the structured action)."""
 
-    client: Any
-    model: str = "claude-sonnet-4-6"
     max_tokens: int = 700
-    rationale_log: list[dict[str, Any]] = field(default_factory=list)
 
     def propose(self, *, finding: dict[str, Any], node_bodies: dict[str, str]) -> dict[str, Any]:
         """Return an action dict for the finding. Never raises; every
@@ -1020,62 +996,38 @@ class LLMRefactorProposer:
             "## Task\n"
             "Propose ONE action. Respond with ONLY the JSON."
         )
-        try:
-            response = self.client.messages.create(
-                model=self.model,
-                max_tokens=self.max_tokens,
-                system=_PROPOSER_SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": user_msg}],
+        parsed, err = self._invoke_json(system=_PROPOSER_SYSTEM_PROMPT, user=user_msg)
+        if parsed is None:
+            self.rationale_log.append(
+                {
+                    "finding_type": finding.get("type"),
+                    "node_ids": finding.get("node_ids"),
+                    "kind": "none",
+                    "rationale": err,
+                    "parsed_ok": False,
+                }
             )
-            text = response.content[0].text
-            parsed = json.loads(text)
-            kind = str(parsed.get("kind", "none"))
-            if kind not in _REFACTOR_ACTION_KINDS:
-                kind = "none"
-            action = {
-                "kind": kind,
-                "primitive": parsed.get("primitive") if kind != "none" else None,
-                "target_node_id": parsed.get("target_node_id"),
-                "args_hint": parsed.get("args_hint", {}) or {},
-                "rationale": str(parsed.get("rationale", "")),
+            return _empty_action(err or "")
+        kind = str(parsed.get("kind", "none"))
+        if kind not in _REFACTOR_ACTION_KINDS:
+            kind = "none"
+        action = {
+            "kind": kind,
+            "primitive": parsed.get("primitive") if kind != "none" else None,
+            "target_node_id": parsed.get("target_node_id"),
+            "args_hint": parsed.get("args_hint", {}) or {},
+            "rationale": str(parsed.get("rationale", "")),
+        }
+        self.rationale_log.append(
+            {
+                "finding_type": finding.get("type"),
+                "node_ids": finding.get("node_ids"),
+                "kind": action["kind"],
+                "rationale": action["rationale"],
+                "parsed_ok": True,
             }
-            self.rationale_log.append(
-                {
-                    "finding_type": finding.get("type"),
-                    "node_ids": finding.get("node_ids"),
-                    "kind": action["kind"],
-                    "rationale": action["rationale"],
-                    "parsed_ok": True,
-                }
-            )
-            return action
-        except (json.JSONDecodeError, KeyError, AttributeError, IndexError, TypeError) as exc:
-            log.warning(
-                "LLMRefactorProposer: parse/structure error (%s); returning kind='none'",
-                exc,
-            )
-            self.rationale_log.append(
-                {
-                    "finding_type": finding.get("type"),
-                    "node_ids": finding.get("node_ids"),
-                    "kind": "none",
-                    "rationale": f"PARSE_ERROR: {exc}",
-                    "parsed_ok": False,
-                }
-            )
-            return _empty_action(f"PARSE_ERROR: {exc}")
-        except Exception as exc:  # noqa: BLE001
-            log.warning("LLMRefactorProposer: client error (%s); returning kind='none'", exc)
-            self.rationale_log.append(
-                {
-                    "finding_type": finding.get("type"),
-                    "node_ids": finding.get("node_ids"),
-                    "kind": "none",
-                    "rationale": f"CLIENT_ERROR: {exc}",
-                    "parsed_ok": False,
-                }
-            )
-            return _empty_action(f"CLIENT_ERROR: {exc}")
+        )
+        return action
 
 
 def refactor_proposer_from_env() -> LLMRefactorProposer | None:
@@ -1201,17 +1153,15 @@ def _is_test_symbol(name: str | None, source_path: str | None) -> bool:
 
 
 @dataclass
-class LLMDeadCodeJudge:
+class LLMDeadCodeJudge(_LLMHelper):
     """Opt-in binary judge for dead_code candidates. Sibling to the
-    v5.13.0/v5.14.0 judges (lesson #109). Wraps an Anthropic client;
-    tests pass a MagicMock. Graceful: any parse/exception path
-    returns False (keeps the deterministic 'candidate'; never falsely
-    promotes to 'high')."""
+    other judges. Graceful: any parse/exception path returns False
+    (keeps the deterministic 'candidate'; never falsely promotes to
+    'high'). Shares the create+parse routine + fields with
+    :class:`_LLMHelper` (smaller ``max_tokens`` default -- the reply
+    is a tiny {is_dead, rationale})."""
 
-    client: Any
-    model: str = "claude-sonnet-4-6"
     max_tokens: int = 400
-    rationale_log: list[dict[str, Any]] = field(default_factory=list)
 
     def judge(self, *, name: str, body: str, source_path: str) -> bool:
         """Return True if the symbol is genuinely dead; False
@@ -1223,50 +1173,29 @@ class LLMDeadCodeJudge:
             "## Task\nIs this private symbol genuinely dead (no caller, "
             "not dispatched/registered/implicit)? Respond with ONLY the JSON."
         )
-        try:
-            response = self.client.messages.create(
-                model=self.model,
-                max_tokens=self.max_tokens,
-                system=_DEAD_CODE_JUDGE_SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": user_msg}],
-            )
-            text = response.content[0].text
-            parsed = json.loads(text)
-            result = bool(parsed.get("is_dead", False))
-            self.rationale_log.append(
-                {
-                    "name": name,
-                    "source_path": source_path,
-                    "is_dead": result,
-                    "rationale": parsed.get("rationale", ""),
-                    "parsed_ok": True,
-                }
-            )
-            return result
-        except (json.JSONDecodeError, KeyError, AttributeError, IndexError, TypeError) as exc:
-            log.warning("LLMDeadCodeJudge: parse error (%s); returning False", exc)
+        parsed, err = self._invoke_json(system=_DEAD_CODE_JUDGE_SYSTEM_PROMPT, user=user_msg)
+        if parsed is None:
             self.rationale_log.append(
                 {
                     "name": name,
                     "source_path": source_path,
                     "is_dead": False,
-                    "rationale": f"PARSE_ERROR: {exc}",
+                    "rationale": err,
                     "parsed_ok": False,
                 }
             )
             return False
-        except Exception as exc:  # noqa: BLE001
-            log.warning("LLMDeadCodeJudge: client error (%s); returning False", exc)
-            self.rationale_log.append(
-                {
-                    "name": name,
-                    "source_path": source_path,
-                    "is_dead": False,
-                    "rationale": f"CLIENT_ERROR: {exc}",
-                    "parsed_ok": False,
-                }
-            )
-            return False
+        result = bool(parsed.get("is_dead", False))
+        self.rationale_log.append(
+            {
+                "name": name,
+                "source_path": source_path,
+                "is_dead": result,
+                "rationale": parsed.get("rationale", ""),
+                "parsed_ok": True,
+            }
+        )
+        return result
 
 
 def dead_code_judge_from_env() -> LLMDeadCodeJudge | None:
