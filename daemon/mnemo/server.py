@@ -53,6 +53,7 @@ from mnemo.api_schemas import (
     ActiveWorkspaceOut,
     AnalyzeIn,
     AnalyzeOut,
+    AnalyzeQueueOut,
     ChatBookmarkIn,
     ChatBookmarkOut,
     ChatCreateIn,
@@ -81,6 +82,8 @@ from mnemo.api_schemas import (
     QueryAuditOut,
     QueryIn,
     QueryOut,
+    QueueFinding,
+    QueueStatusIn,
     ReindexReportOut,
     ReindexReportSectionsOut,
     RetuneIn,
@@ -445,6 +448,46 @@ def _node_labels_for_findings(
     return labels
 
 
+# v5.22.0 Phase 4a: the scoped detector set the proactive auditor runs after
+# each reindex -- the cheap deterministic detectors only. No embedder, no
+# LLM, and explicitly NOT the embedding floods (semantic_orphans ~29k /
+# contradictions) so the sweep stays invisible. ``_PROACTIVE_SCOPE`` is the
+# plural ``types=`` vocabulary ``analyze()`` expects; ``_PROACTIVE_FINDING_TYPES``
+# is the singular ``finding['type']`` vocabulary the reconcile auto-resolve
+# guard compares against (orphan_references -> orphan_reference per finding).
+_PROACTIVE_SCOPE = ("stale", "orphan_references")
+_PROACTIVE_FINDING_TYPES = ("stale", "orphan_reference")
+
+
+def run_proactive_audit(store: Store) -> dict[str, int]:
+    """Run the Phase 4a scoped audit and reconcile its findings into the
+    read-only ``audit_queue``. Returns the reconcile counts
+    (``{"new", "reopened", "resolved", "unchanged"}``).
+
+    Strictly read-only w.r.t. the node graph -- it only writes queue
+    metadata, never a node. May raise; callers run it inside a guarded
+    background worker so a sweep failure can never break reindex."""
+    from mnemo import analyzer
+
+    result = analyzer.analyze(store, types=list(_PROACTIVE_SCOPE))
+    return store.reconcile_audit_queue(result.get("findings", []), _PROACTIVE_FINDING_TYPES)
+
+
+def _spawn_proactive_audit(store: Store) -> None:
+    """Fire-and-forget :func:`run_proactive_audit` on a daemon thread so
+    reindex returns immediately and the corpus is never locked by the sweep.
+    Guarded so a failure is logged, never propagated."""
+
+    def _worker() -> None:
+        try:
+            counts = run_proactive_audit(store)
+            log.info("proactive audit reconciled audit_queue: %s", counts)
+        except Exception:  # noqa: BLE001 -- a sweep failure must not break reindex
+            log.exception("proactive audit failed")
+
+    threading.Thread(target=_worker, name="mnemo-proactive-audit", daemon=True).start()
+
+
 def create_app(*, store: Store | None = None, embedder: Embedder | None = None) -> FastAPI:
     """Build a FastAPI app. ``store`` and ``embedder`` may be injected for tests.
 
@@ -650,6 +693,8 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
                     "removed": report.removed,
                 },
             )
+            # v5.22.0 Phase 4a: proactive post-reindex audit (async, guarded).
+            _spawn_proactive_audit(s)
             return ReindexReportOut.from_report(report)
         finally:
             state.reindex_started_at = None
@@ -718,6 +763,8 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
                         "removed": (final_payload or {}).get("removed", 0),
                     },
                 )
+                # v5.22.0 Phase 4a: proactive post-reindex audit (async, guarded).
+                _spawn_proactive_audit(s)
             finally:
                 state.reindex_started_at = None
                 state.reindex_progress = None  # v5.9.0
@@ -797,6 +844,46 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
         # WHERE each problem is (name + path) without a click.
         node_labels = _node_labels_for_findings(s, result.get("findings", []))
         return AnalyzeOut(**result, node_labels=node_labels)
+
+    @v1.get("/analyze/queue", response_model=AnalyzeQueueOut)
+    def analyze_queue_route(
+        status: str = "open",
+        limit: int = 25,
+        offset: int = 0,
+        s: Store = Depends(get_store),
+    ) -> AnalyzeQueueOut:
+        """v5.22.0 Phase 4a: the proactive audit queue (READ-ONLY).
+
+        Lists the persisted findings the post-reindex auditor reconciled
+        into ``audit_queue`` -- ``open`` by default. ``status=all`` (or
+        empty) lists every row. Paginated; ``counts`` is the full-queue
+        open/dismissed/resolved tally (drives the nav badge) and
+        ``node_labels`` resolves cited ids to name/type/source_path so the
+        UI renders WHERE inline. No node mutation.
+        """
+        status_filter = None if status in ("", "all") else status
+        rows = s.list_audit_queue(status=status_filter, limit=limit, offset=offset)
+        node_labels = _node_labels_for_findings(s, [{"node_ids": r.node_ids} for r in rows])
+        return AnalyzeQueueOut(
+            findings=[QueueFinding.from_finding(r) for r in rows],
+            total=s.count_audit_queue(status_filter),
+            counts=s.audit_queue_counts(),
+            node_labels=node_labels,
+        )
+
+    @v1.post("/analyze/queue/{fingerprint}/status")
+    def analyze_queue_status_route(
+        fingerprint: str,
+        body: QueueStatusIn,
+        s: Store = Depends(get_store),
+    ) -> JSONResponse:
+        """v5.22.0 Phase 4a: flip ONE queued finding's status (the user's
+        "ignore" / "restore"). This is queue METADATA -- NOT a node edit;
+        it honours the forever no-silent-edits anti-goal. 404 when the
+        fingerprint is unknown."""
+        if not s.set_audit_finding_status(fingerprint, body.status):
+            raise HTTPException(status_code=404, detail="unknown finding fingerprint")
+        return JSONResponse({"fingerprint": fingerprint, "status": body.status})
 
     # --- v2.6 phase 4 + 5: dual-source proposal + workspaces --------------
 

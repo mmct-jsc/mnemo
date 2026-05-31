@@ -1092,3 +1092,59 @@ def _mnemo_analyze(
         propose_actions=propose_actions,
         lens=lens,
     )
+
+
+# --- mnemo_audit_queue (v5.22.0, Phase 4a) ------------------------------
+
+
+@_tool(
+    name="mnemo_audit_queue",
+    risk=RISK_SAFE,
+    description=(
+        "List the proactive audit queue (READ-ONLY). After every reindex "
+        "mnemo runs a scoped deterministic audit (stale + orphan_references) "
+        "and reconciles the findings into a persistent, de-duplicated queue "
+        "with a sticky status (open / dismissed / resolved). Use this to "
+        "answer 'what's wrong with my corpus?' from the standing queue "
+        "without re-running an audit. ``status`` filters (default 'open'; "
+        "'all' lists every row); ``limit`` caps the page. Returns "
+        "``{findings, total, counts}`` where each finding carries "
+        "``{fingerprint, type, severity, node_ids, description, locus, "
+        "status}``. To run a fresh on-demand audit instead, use "
+        "``mnemo_analyze``. This tool never mutates a node; applying a fix "
+        "is a separate later capability (Phase 4b)."
+    ),
+    parameters=_obj(
+        {
+            "status": {
+                "type": "string",
+                "default": "open",
+                "description": (
+                    "Filter by lifecycle status: 'open' (default), "
+                    "'dismissed', 'resolved', or 'all' for every row."
+                ),
+            },
+            "limit": {"type": "integer", "default": 20},
+        },
+        [],
+    ),
+)
+def _mnemo_audit_queue(ctx: ToolContext, *, status: str = "open", limit: int = 20) -> dict:
+    status_filter = None if status in ("", "all") else status
+    rows = ctx.store.list_audit_queue(status=status_filter, limit=limit, offset=0)
+    return {
+        "findings": [
+            {
+                "fingerprint": r.fingerprint,
+                "type": r.type,
+                "severity": r.severity,
+                "node_ids": r.node_ids,
+                "description": r.description,
+                "locus": r.locus,
+                "status": r.status,
+            }
+            for r in rows
+        ],
+        "total": ctx.store.count_audit_queue(status_filter),
+        "counts": ctx.store.audit_queue_counts(),
+    }

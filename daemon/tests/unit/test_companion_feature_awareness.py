@@ -18,6 +18,12 @@ def test_prompt_mentions_the_auditor() -> None:
     )
 
 
+def test_prompt_mentions_audit_queue() -> None:
+    assert "mnemo_audit_queue" in DEFAULT_SYSTEM, (
+        "Mnem must know about the proactive audit queue (mnemo_audit_queue)"
+    )
+
+
 def test_prompt_enumerates_core_tool_families() -> None:
     # One representative tool per capability area.
     for tool in (

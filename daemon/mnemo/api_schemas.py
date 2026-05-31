@@ -14,6 +14,7 @@ from mnemo.ingest import ReindexReport
 from mnemo.retrieve import RetrievalResult
 from mnemo.store import (
     ActiveProject,
+    AuditFinding,
     ChatBookmark,
     ChatMessage,
     Conversation,
@@ -930,3 +931,60 @@ class AnalyzeOut(BaseModel):
     # the UI renders the name + path inline. Additive; defaults empty for
     # pre-existing callers + the MCP path.
     node_labels: dict[str, NodeLabel] = {}
+
+
+# --- Proactive audit queue (v5.22.0, Phase 4a) ---------------------------
+
+
+class QueueFinding(BaseModel):
+    """One persisted, status-tracked row of the proactive audit queue.
+
+    Mirrors :class:`mnemo.store.AuditFinding`. ``locus`` is the problem
+    locus the fingerprint keys on (joined missing targets / concept /
+    symbol) or ``None``. ``status`` is one of open / dismissed / resolved.
+    """
+
+    fingerprint: str
+    type: str
+    severity: str
+    node_ids: list[str]
+    description: str
+    locus: str | None = None
+    status: str
+    first_seen: int
+    last_seen: int
+
+    @classmethod
+    def from_finding(cls, f: AuditFinding) -> QueueFinding:
+        return cls(
+            fingerprint=f.fingerprint,
+            type=f.type,
+            severity=f.severity,
+            node_ids=list(f.node_ids),
+            description=f.description,
+            locus=f.locus,
+            status=f.status,
+            first_seen=f.first_seen,
+            last_seen=f.last_seen,
+        )
+
+
+class AnalyzeQueueOut(BaseModel):
+    """``GET /v1/analyze/queue`` envelope. Read-only.
+
+    ``counts`` is the full-queue ``{open, dismissed, resolved}`` tally
+    (feeds the nav badge); ``total`` is the count for the requested status
+    filter (drives pagination). ``node_labels`` resolves cited ids to
+    name / type / source_path so the UI renders WHERE inline."""
+
+    findings: list[QueueFinding]
+    total: int
+    counts: dict[str, int]
+    node_labels: dict[str, NodeLabel] = {}
+
+
+class QueueStatusIn(BaseModel):
+    """``POST /v1/analyze/queue/{fingerprint}/status`` body. The flip is
+    queue metadata (the user's ignore / restore), NOT a node edit."""
+
+    status: str = Field(pattern="^(open|dismissed|resolved)$")

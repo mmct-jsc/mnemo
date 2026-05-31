@@ -577,7 +577,10 @@
       <a href="/chat"         @click="close()" class="{% if page == 'chat' %}active{% endif %}">Chat</a>
       <a href="/sources-page" @click="close()" class="{% if page == 'sources' %}active{% endif %}">Sources</a>
       <a href="/audit-page"   @click="close()" class="{% if page == 'audit' %}active{% endif %}">Audit</a>
-      <a href="/analyze"      @click="close()" class="{% if page == 'analyze' %}active{% endif %}">Analyze</a>
+      <a href="/analyze"      @click="close()" class="{% if page == 'analyze' %}active{% endif %}">Analyze<span
+          class="nav-badge" x-data="analyzeNavBadge()" x-init="load()"
+          x-show="count > 0" x-cloak x-text="count"
+          :title="count + ' open audit finding(s)'"></span></a>
       <a href="/settings"     @click="close()" class="{% if page == 'settings' %}active{% endif %}">Settings</a>
     </nav>
       <span class="help">
@@ -776,6 +779,34 @@
 
     <div class="nav-scrim" x-show="open" x-cloak @click="close()" aria-hidden="true"></div>
   </header>
+
+  <script>
+    // v5.22.0 Phase 4a: the nav "Analyze" badge shows the OPEN count from
+    // the proactive audit queue. Polls the cheap counts (limit=1, no
+    // findings payload) on load + every 60s so a background reindex's new
+    // findings surface without a manual refresh. Plain inline (runs before
+    // the deferred Alpine boots) -- same pattern as mnemDock().
+    function analyzeNavBadge() {
+      return {
+        count: 0,
+        load() {
+          const hit = () => fetch('/v1/analyze/queue?status=open&limit=1')
+            .then((r) => (r.ok ? r.json() : null))
+            .then((d) => { if (d && d.counts) this.count = d.counts.open || 0; })
+            .catch(() => { /* badge stays hidden on error */ });
+          hit();
+          setInterval(hit, 60000);
+        },
+      };
+    }
+  </script>
+  <style>
+    .nav-badge {
+      display: inline-block; min-width: 1.1em; padding: 0 0.35em; margin-left: 0.35em;
+      border-radius: var(--radius-pill); background: #f43f5e; color: #fff;
+      font-size: 0.66rem; font-weight: 700; line-height: 1.5; text-align: center; vertical-align: middle;
+    }
+  </style>
 
   {% block layout %}
   <main>
