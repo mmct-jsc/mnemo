@@ -10,6 +10,7 @@ database is safe.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sqlite3
@@ -387,6 +388,61 @@ class ActiveProject:
     since: int
 
 
+# --- Audit queue (v5.22.0, Phase 4a) -----------------------------------
+
+_AUDIT_STATUSES = ("open", "dismissed", "resolved")
+
+
+@dataclass
+class AuditFinding:
+    """One row of the proactive ``audit_queue``.
+
+    ``node_ids`` is decoded from the stored JSON array; ``locus`` is the
+    problem locus the fingerprint keys on (joined missing targets /
+    concept / symbol) or ``None``. Times are epoch seconds.
+    """
+
+    fingerprint: str
+    type: str
+    severity: str
+    node_ids: list[str]
+    description: str
+    locus: str | None
+    status: str
+    first_seen: int
+    last_seen: int
+
+
+def _finding_locus(finding: dict) -> str | None:
+    """The problem locus a finding's fingerprint keys on, derived from the
+    detector's per-finding extras: orphan_reference -> joined
+    ``missing_targets``; semantic_orphan -> ``concept``; dead_code /
+    god_object -> ``symbol``. Deterministic (sorted) so the fingerprint is
+    stable across audit runs. ``None`` when the finding has no extra locus
+    (e.g. ``stale``)."""
+    missing = finding.get("missing_targets")
+    if missing:
+        return ",".join(sorted(missing))
+    concept = finding.get("concept")
+    if concept:
+        return str(concept)
+    symbol = finding.get("symbol")
+    if symbol:
+        return str(symbol)
+    return None
+
+
+def _finding_fingerprint(finding: dict) -> str:
+    """Stable, order-independent identity for a finding:
+    ``sha1(type + "\\n" + sorted(node_ids) + "\\n" + (locus or ""))``. Two
+    audit runs that produce the same logical finding map to the same
+    fingerprint, so the queue de-duplicates + tracks status across runs."""
+    node_ids = ",".join(sorted(finding.get("node_ids", [])))
+    locus = _finding_locus(finding) or ""
+    raw = f"{finding.get('type', '')}\n{node_ids}\n{locus}"
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()
+
+
 # v3 phase 1: agentic chat companion (design doc S5). Roles map 1:1
 # to the provider message protocol; tool_call / tool_result are the
 # agent-loop turns surfaced as collapsible rows in the UI.
@@ -728,6 +784,30 @@ CREATE TABLE IF NOT EXISTS usage_period (
 );
 
 CREATE INDEX IF NOT EXISTS idx_usage_period_key ON usage_period(api_key_id);
+
+-- v5.22.0 Phase 4a: proactive audit queue. The deterministic auditor runs
+-- after each reindex and reconciles its findings into this table by a
+-- stable fingerprint (sha1 of type + sorted node_ids + locus), so the same
+-- finding is de-duplicated + status-tracked across runs. READ-ONLY w.r.t.
+-- the node graph -- nothing here mutates a node; only queue metadata
+-- changes. Lives in the ALWAYS-run SCHEMA_SQL (not the lazy VEC_SCHEMA_SQL)
+-- so the table exists on stores that never touch embeddings. Status
+-- lifecycle: open (the nav badge counts these) / dismissed (user "ignore";
+-- sticky) / resolved (auto when an open finding disappears; reopens if
+-- re-detected).
+CREATE TABLE IF NOT EXISTS audit_queue (
+  fingerprint TEXT PRIMARY KEY,
+  type        TEXT NOT NULL,
+  severity    TEXT NOT NULL,
+  node_ids    TEXT NOT NULL,                 -- JSON array
+  description TEXT NOT NULL,
+  locus       TEXT,                          -- nullable problem locus
+  status      TEXT NOT NULL DEFAULT 'open',  -- open|dismissed|resolved
+  first_seen  INTEGER NOT NULL,
+  last_seen   INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_queue_status ON audit_queue(status);
 """
 
 
@@ -1456,6 +1536,187 @@ class Store:
                 (scope_key, fingerprint, positions_json, int(time.time())),
             )
             self.conn.commit()
+
+    # --- Audit queue (v5.22.0, Phase 4a) -----------------------------------
+
+    def reconcile_audit_queue(
+        self,
+        findings: list[dict],
+        detector_types: tuple[str, ...],
+        *,
+        now: int | None = None,
+    ) -> dict[str, int]:
+        """Upsert the proactive auditor's findings into ``audit_queue`` and
+        scope-guarded auto-resolve. Read-only w.r.t. the node graph -- only
+        the queue table changes (Phase 4a anti-goal: no node mutation).
+
+        Lifecycle per fingerprint:
+
+        - not present -> insert as ``open``
+        - present (open / dismissed) -> bump ``last_seen``, refresh
+          severity / description / node_ids / locus, KEEP status
+          (``dismissed`` is sticky)
+        - present + ``resolved`` + re-detected -> reopen to ``open``
+        - an ``open`` row whose ``type`` is in ``detector_types`` but which
+          the fresh ``findings`` no longer produce -> ``resolved``
+
+        ``detector_types`` are the finding ``type`` values this audit is
+        authoritative for, in the SAME form ``finding['type']`` carries
+        (singular, e.g. ``"orphan_reference"``). Auto-resolve is guarded by
+        this set so a type the audit did not run is never wrongly closed.
+
+        Returns ``{"new", "reopened", "resolved", "unchanged"}`` counts.
+        """
+        ts = int(time.time()) if now is None else int(now)
+        fresh: dict[str, dict] = {_finding_fingerprint(f): f for f in findings}
+        counts = {"new": 0, "reopened": 0, "resolved": 0, "unchanged": 0}
+        with self._lock:
+            for fp, f in fresh.items():
+                row = self.conn.execute(
+                    "SELECT status FROM audit_queue WHERE fingerprint = ?", (fp,)
+                ).fetchone()
+                node_ids_json = json.dumps(list(f.get("node_ids", [])))
+                locus = _finding_locus(f)
+                severity = f.get("severity", "low")
+                description = f.get("description", "")
+                if row is None:
+                    self.conn.execute(
+                        """
+                        INSERT INTO audit_queue
+                          (fingerprint, type, severity, node_ids, description,
+                           locus, status, first_seen, last_seen)
+                        VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?)
+                        """,
+                        (
+                            fp,
+                            f.get("type", ""),
+                            severity,
+                            node_ids_json,
+                            description,
+                            locus,
+                            ts,
+                            ts,
+                        ),
+                    )
+                    counts["new"] += 1
+                elif row["status"] == "resolved":
+                    self.conn.execute(
+                        """
+                        UPDATE audit_queue
+                           SET status = 'open', severity = ?, description = ?,
+                               node_ids = ?, locus = ?, last_seen = ?
+                         WHERE fingerprint = ?
+                        """,
+                        (severity, description, node_ids_json, locus, ts, fp),
+                    )
+                    counts["reopened"] += 1
+                else:
+                    # open or dismissed -> refresh, keep status
+                    self.conn.execute(
+                        """
+                        UPDATE audit_queue
+                           SET severity = ?, description = ?, node_ids = ?,
+                               locus = ?, last_seen = ?
+                         WHERE fingerprint = ?
+                        """,
+                        (severity, description, node_ids_json, locus, ts, fp),
+                    )
+                    counts["unchanged"] += 1
+
+            scope = tuple(dict.fromkeys(detector_types))  # de-dup, keep order
+            if scope:
+                placeholders = ",".join("?" * len(scope))
+                open_rows = self.conn.execute(
+                    "SELECT fingerprint FROM audit_queue "
+                    f"WHERE status = 'open' AND type IN ({placeholders})",
+                    scope,
+                ).fetchall()
+                for r in open_rows:
+                    if r["fingerprint"] not in fresh:
+                        self.conn.execute(
+                            "UPDATE audit_queue SET status = 'resolved', "
+                            "last_seen = ? WHERE fingerprint = ?",
+                            (ts, r["fingerprint"]),
+                        )
+                        counts["resolved"] += 1
+            self.conn.commit()
+        return counts
+
+    @staticmethod
+    def _audit_queue_where(status: str | None) -> tuple[str, tuple]:
+        """Shared WHERE builder so list + count never drift. ``None`` /
+        ``"all"`` -> no filter."""
+        if status is None or status == "all":
+            return "", ()
+        return "WHERE status = ?", (status,)
+
+    def list_audit_queue(
+        self, *, status: str | None = "open", limit: int = 25, offset: int = 0
+    ) -> list[AuditFinding]:
+        """Page of queued findings, severity-ranked (high -> candidate) then
+        most-recently-seen first (``fingerprint`` tiebreak keeps pages
+        stable). ``status=None`` / ``"all"`` lists every row."""
+        where, params = self._audit_queue_where(status)
+        sql = (
+            "SELECT fingerprint, type, severity, node_ids, description, locus, "
+            "status, first_seen, last_seen FROM audit_queue "
+            f"{where} ORDER BY "
+            "CASE severity WHEN 'high' THEN 0 WHEN 'medium' THEN 1 "
+            "WHEN 'low' THEN 2 WHEN 'candidate' THEN 3 ELSE 4 END, "
+            "last_seen DESC, fingerprint LIMIT ? OFFSET ?"
+        )
+        with self._lock:
+            rows = self.conn.execute(sql, (*params, int(limit), int(offset))).fetchall()
+        return [
+            AuditFinding(
+                fingerprint=r["fingerprint"],
+                type=r["type"],
+                severity=r["severity"],
+                node_ids=json.loads(r["node_ids"]),
+                description=r["description"],
+                locus=r["locus"],
+                status=r["status"],
+                first_seen=r["first_seen"],
+                last_seen=r["last_seen"],
+            )
+            for r in rows
+        ]
+
+    def count_audit_queue(self, status: str | None = None) -> int:
+        """COUNT(*) of the queue, same WHERE as :meth:`list_audit_queue`."""
+        where, params = self._audit_queue_where(status)
+        with self._lock:
+            row = self.conn.execute(
+                f"SELECT COUNT(*) AS n FROM audit_queue {where}", params
+            ).fetchone()
+        return int(row["n"])
+
+    def audit_queue_counts(self) -> dict[str, int]:
+        """One aggregate pass -> ``{"open", "dismissed", "resolved"}`` (each
+        defaulting to 0). Feeds the nav badge + the UI status chips."""
+        out = dict.fromkeys(_AUDIT_STATUSES, 0)
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT status, COUNT(*) AS n FROM audit_queue GROUP BY status"
+            ).fetchall()
+        for r in rows:
+            if r["status"] in out:
+                out[r["status"]] = int(r["n"])
+        return out
+
+    def set_audit_finding_status(self, fingerprint: str, status: str) -> bool:
+        """Flip one finding's status (the user's "ignore" / "restore"). This
+        is queue metadata, NOT a node edit. Returns ``True`` if a row
+        matched. Raises ``ValueError`` on an unknown status."""
+        if status not in _AUDIT_STATUSES:
+            raise ValueError(f"unknown audit status: {status!r}")
+        with self._lock:
+            cur = self.conn.execute(
+                "UPDATE audit_queue SET status = ? WHERE fingerprint = ?",
+                (status, fingerprint),
+            )
+            self.conn.commit()
+        return cur.rowcount > 0
 
     # --- Query audit log ---------------------------------------------------
 
