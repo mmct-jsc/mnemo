@@ -2,6 +2,42 @@
 
 All notable changes to mnemo are documented here.
 
+## [5.22.0] - 2026-05-31
+
+**Phase 4a: the proactive audit queue (read-only).**
+
+The knowledge auditor was on-demand only -- you opened `/analyze` and
+pressed Run. v5.22.0 makes it proactive: after every reindex mnemo runs a
+scoped, deterministic audit in the background and reconciles the findings
+into a persistent, de-duplicated, status-tracked queue. ZERO node
+mutation -- the queue is metadata only (the forever no-silent-edits
+anti-goal; applying a fix is a later, hard-gated capability).
+
+- **Post-reindex trigger.** When a reindex completes, a background
+  (non-blocking, guarded) audit runs the cheap detectors only -- `stale` +
+  `orphan_references` (no embedder, no LLM, none of the `semantic_orphans`
+  ~29k / `contradictions` floods). Reindex returns immediately; the corpus
+  is never locked by the sweep.
+- **`audit_queue` table + reconcile.** Findings are keyed by a stable
+  fingerprint (`sha1(type + sorted node_ids + locus)`) and carry a
+  three-state lifecycle: `open` (the nav badge counts these) / `dismissed`
+  (sticky) / `resolved` (auto when an open finding disappears; reopens if
+  re-detected). Auto-resolve is scope-guarded by detector type so a type
+  the audit did not run is never wrongly closed.
+- **`GET /v1/analyze/queue`** (read-only, paginated, with counts + inline
+  `node_labels`) and **`POST /v1/analyze/queue/{fingerprint}/status`** (a
+  queue-metadata flip -- ignore / restore -- never a node edit).
+- **New read-only MCP tool `mnemo_audit_queue`** (27 -> 28 tools) so Mnem
+  can answer "what's wrong with my corpus?" from the standing queue.
+- **UI.** `/analyze` gains a **Queue** view (the default landing view)
+  with open / dismissed / resolved status chips, 25/page pagination,
+  inline name / path / locus + colored badges, and a Dismiss / Restore
+  control. The on-demand Run audit view (heavy-detector scope chips)
+  stays. The nav **Analyze** link shows an open-count badge.
+
+Additive: +1 table, +2 endpoints, +1 read-only tool, +UI. The agnostic /
+code detectors + the 27 prior tools are byte-stable.
+
 ## [5.21.0] - 2026-05-30
 
 **Knowledge auditor UX overhaul + companion feature-awareness.**

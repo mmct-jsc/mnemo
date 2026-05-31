@@ -85,6 +85,26 @@
     "risk": "confirm"
   },
   {
+    "description": "List the proactive audit queue (READ-ONLY). After every reindex mnemo runs a scoped deterministic audit (stale + orphan_references) and reconciles the findings into a persistent, de-duplicated queue with a sticky status (open / dismissed / resolved). Use this to answer 'what's wrong with my corpus?' from the standing queue without re-running an audit. ``status`` filters (default 'open'; 'all' lists every row); ``limit`` caps the page. Returns ``{findings, total, counts}`` where each finding carries ``{fingerprint, type, severity, node_ids, description, locus, status}``. To run a fresh on-demand audit instead, use ``mnemo_analyze``. This tool never mutates a node; applying a fix is a separate later capability (Phase 4b). (risk: safe)",
+    "inputSchema": {
+      "properties": {
+        "limit": {
+          "default": 20,
+          "type": "integer"
+        },
+        "status": {
+          "default": "open",
+          "description": "Filter by lifecycle status: 'open' (default), 'dismissed', 'resolved', or 'all' for every row.",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "mnemo_audit_queue",
+    "risk": "safe"
+  },
+  {
     "description": "Mutate settings.json (scoring / retention / ...). (risk: danger)",
     "inputSchema": {
       "properties": {

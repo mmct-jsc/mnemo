@@ -19,9 +19,98 @@
     </div>
   </header>
 
-  <!-- Scope controls. The agnostic detectors are toggle chips (heavy ones
-       off by default); the lens select swaps to the code suite. Run is
-       explicit -- nothing fires on page load. -->
+  <!-- v5.22.0 Phase 4a: two views -- the STANDING Queue (default) that
+       mnemo auto-fills after each reindex, and the on-demand Run audit. -->
+  <div class="audit-views" role="tablist">
+    <button type="button" class="audit-view-tab" :class="{ on: view === 'queue' }"
+            @click="view = 'queue'">
+      Queue
+      <span class="audit-view-count" x-show="queueCounts.open > 0" x-cloak
+            x-text="queueCounts.open"></span>
+    </button>
+    <button type="button" class="audit-view-tab" :class="{ on: view === 'adhoc' }"
+            @click="view = 'adhoc'">Run audit</button>
+  </div>
+
+  <!-- Queue view: the persisted, de-duplicated findings the post-reindex
+       auditor reconciled (stale + orphan citations). Dismiss/Restore flip
+       QUEUE metadata only -- never a node edit (the forever anti-goal). -->
+  <div class="queue-view" x-show="view === 'queue'" x-cloak>
+    <div class="queue-status-chips">
+      <template x-for="st in ['open', 'dismissed', 'resolved']" :key="st">
+        <button type="button" class="status-chip" :class="{ on: queueStatus === st }"
+                @click="setQueueStatus(st)">
+          <span x-text="st"></span>
+          <span class="status-chip-count" x-text="queueCounts[st] || 0"></span>
+        </button>
+      </template>
+      <span class="audit-meta" x-show="!queueLoading" x-cloak
+            x-text="queueTotal.toLocaleString() + ' ' + queueStatus + ' finding(s)'"></span>
+    </div>
+
+    <template x-if="queueErr">
+      <div class="error"><p>Could not load the queue: <span x-text="queueErr"></span></p></div>
+    </template>
+
+    <template x-if="!queueLoading && !queueErr && queueFindings.length === 0">
+      <div class="audit-landing">
+        <img src="/static/mnem/mark.svg" width="40" height="40" alt="" class="audit-landing-mark">
+        <p x-show="queueStatus === 'open'" x-cloak>Nothing open. mnemo audits
+          <strong>stale</strong> + <strong>orphan</strong> citations after every reindex &mdash;
+          a clean queue means a clean graph.</p>
+        <p x-show="queueStatus !== 'open'" x-cloak x-text="'No ' + queueStatus + ' findings.'"></p>
+        <p class="hint">Need a deeper sweep? Switch to
+          <button type="button" class="link-button" @click="view = 'adhoc'">Run audit</button>
+          for the heavy detectors.</p>
+      </div>
+    </template>
+
+    <div class="audit-findings" x-show="queueFindings.length > 0" x-cloak>
+      <template x-for="f in queueFindings" :key="f.fingerprint">
+        <article class="finding" :style="'--sev-color: ' + sevColor(f.severity)">
+          <div class="finding-head">
+            <span class="badge type-sev" :style="'--type-color: ' + sevColor(f.severity)"
+                  x-text="f.severity"></span>
+            <span class="badge type-finding" :style="'--type-color: ' + findingColor(f.type)"
+                  x-text="f.type"></span>
+            <span class="finding-locus" x-show="f.locus" x-cloak><code x-text="f.locus"></code></span>
+            <span class="finding-spacer"></span>
+            <button type="button" class="finding-act-btn" x-show="f.status === 'open'" x-cloak
+                    @click="dismiss(f.fingerprint)"
+                    title="Ignore this finding (queue metadata; never a node edit)">Dismiss</button>
+            <button type="button" class="finding-act-btn" x-show="f.status !== 'open'" x-cloak
+                    @click="reopen(f.fingerprint)" title="Move back to open">Restore</button>
+          </div>
+          <div class="finding-nodes">
+            <template x-for="nid in f.node_ids" :key="nid">
+              <span class="finding-node">
+                <a class="node-link" :href="'/node/' + encodeURIComponent(nid)"
+                   x-text="qNodeName(nid)"></a>
+                <span class="badge type-node" x-show="qNodeType(nid)" x-cloak
+                      :style="'--type-color: ' + typeColor(qNodeType(nid))"
+                      x-text="qNodeType(nid)"></span>
+                <span class="finding-path" x-show="qNodePath(nid)" x-cloak
+                      x-text="qNodePath(nid)"></span>
+              </span>
+            </template>
+          </div>
+          <div class="finding-desc" x-text="f.description"></div>
+        </article>
+      </template>
+    </div>
+
+    <nav class="pager" x-show="queueTotalPages > 1" x-cloak>
+      <button type="button" class="btn" :disabled="qpage <= 1" @click="qprev()">Prev</button>
+      <span x-text="'Page ' + qpage + ' of ' + queueTotalPages"></span>
+      <button type="button" class="btn" :disabled="qpage >= queueTotalPages" @click="qnext()">Next</button>
+    </nav>
+  </div>
+
+  <!-- Ad-hoc on-demand audit (the v5.21.0 surface). Scope controls. The
+       agnostic detectors are toggle chips (heavy ones off by default);
+       the lens select swaps to the code suite. Run is explicit -- nothing
+       fires on page load. -->
+  <div class="adhoc-view" x-show="view === 'adhoc'" x-cloak>
   <section class="audit-controls">
     <div class="audit-scope" x-show="lens === 'none'" x-cloak>
       <template x-for="d in agnosticDetectors" :key="d.key">
@@ -165,6 +254,7 @@
       </template>
     </div>
   </template>
+  </div><!-- /.adhoc-view -->
 </section>
 
 <style>
@@ -224,6 +314,36 @@
   .finding-action { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-top: 0.45rem; padding-top: 0.45rem; border-top: 1px dashed var(--border-soft); }
   .finding-action .action-rationale { color: var(--fg-muted); font-size: 0.8rem; }
   .pager { display: flex; align-items: center; justify-content: center; gap: 1rem; margin: 1.25rem 0; color: var(--fg-muted); }
+  /* v5.22.0 Phase 4a: view tabs + queue status chips + dismiss/restore. */
+  .audit-views { display: flex; gap: 0.3rem; margin: 0.5rem 0 1rem; border-bottom: 1px solid var(--border); }
+  .audit-view-tab {
+    display: inline-flex; align-items: center; gap: 0.4rem;
+    padding: 0.45rem 0.9rem; background: none; border: none; cursor: pointer;
+    color: var(--fg-muted); font-size: 0.9rem; border-bottom: 2px solid transparent; margin-bottom: -1px;
+  }
+  .audit-view-tab.on { color: var(--fg); border-bottom-color: var(--accent, #7ee7e0); }
+  .audit-view-count {
+    min-width: 1.1em; padding: 0 0.35em; border-radius: var(--radius-pill);
+    background: #f43f5e; color: #fff; font-size: 0.66rem; font-weight: 700; line-height: 1.5; text-align: center;
+  }
+  .queue-status-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; margin: 0.25rem 0 1rem; }
+  .status-chip {
+    display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.3rem 0.7rem;
+    border-radius: var(--radius-pill); background: var(--panel-2); border: 1px solid var(--border);
+    color: var(--fg-muted); cursor: pointer; font-size: 0.8rem; text-transform: capitalize;
+  }
+  .status-chip.on {
+    color: var(--fg); border-color: color-mix(in srgb, var(--accent, #7ee7e0) 45%, transparent);
+    background: color-mix(in srgb, var(--accent, #7ee7e0) 12%, transparent);
+  }
+  .status-chip-count { font-variant-numeric: tabular-nums; color: var(--fg-dim); }
+  .status-chip.on .status-chip-count { color: var(--fg); }
+  .finding-spacer { flex: 1 1 auto; }
+  .finding-act-btn {
+    padding: 0.2rem 0.6rem; border-radius: var(--radius); background: var(--panel-2);
+    border: 1px solid var(--border); color: var(--fg-muted); cursor: pointer; font-size: 0.76rem;
+  }
+  .finding-act-btn:hover { color: var(--fg); border-color: var(--fg-dim); }
 </style>
 
 <script>
@@ -269,6 +389,14 @@ function analyzePage() {
       orphan_references: true, stale: true,
       duplicates: false, contradictions: false, semantic_orphans: false,
     },
+
+    // v5.22.0 Phase 4a: the standing queue view (the default landing view).
+    view: 'queue',
+    queueResp: null,
+    queueStatus: 'open',
+    qpage: 1,
+    queueLoading: false,
+    queueErr: null,
 
     sevColor(s) { return SEV_COLORS[s] || '#94a3b8'; },
     findingColor(t) { return FINDING_COLORS[t] || (window.MNEMO_TYPE_COLOR_FALLBACK || '#7ee7e0'); },
@@ -358,6 +486,8 @@ function analyzePage() {
           this.ranAt = cached.ranAt || (cached.report && cached.report.ran_at) || '';
         }
       } catch (_) { /* ignore */ }
+      // Phase 4a: load the standing queue (the default landing view).
+      this.loadQueue();
     },
 
     _selectedTypes() {
@@ -403,6 +533,54 @@ function analyzePage() {
         this.cacheNote = 'could not cache result (storage full)';
       }
     },
+
+    // --- Phase 4a queue (read-only + dismiss/restore = QUEUE metadata) --
+    get queueCounts() {
+      return (this.queueResp && this.queueResp.counts) || { open: 0, dismissed: 0, resolved: 0 };
+    },
+    get queueFindings() { return (this.queueResp && this.queueResp.findings) || []; },
+    get queueTotal() { return (this.queueResp && this.queueResp.total) || 0; },
+    get queueTotalPages() { return Math.max(1, Math.ceil(this.queueTotal / PAGE_SIZE)); },
+    _qlabel(nid) {
+      return (this.queueResp && this.queueResp.node_labels && this.queueResp.node_labels[nid]) || null;
+    },
+    qNodeName(nid) { const l = this._qlabel(nid); return (l && l.name) || nid; },
+    qNodeType(nid) { const l = this._qlabel(nid); return (l && l.type) || ''; },
+    qNodePath(nid) { const l = this._qlabel(nid); return (l && l.source_path) || ''; },
+
+    async loadQueue() {
+      this.queueLoading = true;
+      this.queueErr = null;
+      const off = (this.qpage - 1) * PAGE_SIZE;
+      try {
+        const r = await fetch('/v1/analyze/queue?status=' + encodeURIComponent(this.queueStatus)
+          + '&limit=' + PAGE_SIZE + '&offset=' + off);
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        this.queueResp = await r.json();
+      } catch (e) {
+        this.queueErr = String(e);
+      } finally {
+        this.queueLoading = false;
+      }
+    },
+    setQueueStatus(s) { this.queueStatus = s; this.qpage = 1; this.loadQueue(); },
+    qprev() { if (this.qpage > 1) { this.qpage -= 1; this.loadQueue(); } },
+    qnext() { if (this.qpage < this.queueTotalPages) { this.qpage += 1; this.loadQueue(); } },
+    async _setFindingStatus(fp, status) {
+      try {
+        const r = await fetch('/v1/analyze/queue/' + encodeURIComponent(fp) + '/status', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status }),
+        });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        await this.loadQueue();
+      } catch (e) {
+        this.queueErr = String(e);
+      }
+    },
+    dismiss(fp) { return this._setFindingStatus(fp, 'dismissed'); },
+    reopen(fp) { return this._setFindingStatus(fp, 'open'); },
   };
 }
 </script>
