@@ -726,7 +726,16 @@ def mcp() -> None:
 
 @hook_app.command("session-start")
 def hook_session_start() -> None:
-    """SessionStart: print a compact mnemo 'memory map' to stdout."""
+    """SessionStart: emit a JSON object -- a one-line user-visible banner
+    (top-level ``systemMessage``, the "notify" channel) plus the memory map
+    as model context (``hookSpecificOutput.additionalContext``). v5.25.0.
+
+    Always ``json.dumps`` a dict (never hand-build) so the output is valid
+    JSON, and FAIL OPEN (emit nothing, exit 0) on any error -- malformed
+    JSON has no documented CC fallback, so a half-built object is worse
+    than silence."""
+    import os
+
     try:
         store = _open_store()
     except Exception:
@@ -741,21 +750,32 @@ def hook_session_start() -> None:
         store.close()
 
     daemon_state = "running" if d.running else "stale" if d.stale else "stopped"
-    typer.echo(
-        "\n".join(
-            [
-                "## mnemo memory map",
-                "",
-                f"- version: {__version__}",
-                f"- nodes: {total} across {sources} source(s)",
-                f"- daemon: {daemon_state}",
-                "",
-                "Use `/mnemo-query <text>` for ad-hoc recall, or call the "
-                "`mnemo_query` tool. Auto-injection adds cited memory to each "
-                "prompt -- prefer it over grep for 'how/where/why' questions.",
-            ]
-        )
+    context = "\n".join(
+        [
+            "## mnemo memory map",
+            "",
+            f"- version: {__version__}",
+            f"- nodes: {total} across {sources} source(s)",
+            f"- daemon: {daemon_state}",
+            "",
+            "Use `/mnemo-query <text>` for ad-hoc recall, or call the "
+            "`mnemo_query` tool. Auto-injection adds cited memory to each "
+            "prompt -- prefer it over grep for 'how/where/why' questions.",
+        ]
     )
+    payload: dict[str, object] = {
+        "hookSpecificOutput": {
+            "hookEventName": "SessionStart",
+            "additionalContext": context,
+        }
+    }
+    # The user-visible one-line banner. Opt-out via MNEMO_NO_SESSION_BANNER=1
+    # (the model context stays either way; presence is never spammy).
+    if not os.environ.get("MNEMO_NO_SESSION_BANNER"):
+        payload["systemMessage"] = (
+            f"mnemo: {total:,} memories across {sources} source(s) -- /mnemo-query to recall"
+        )
+    typer.echo(json.dumps(payload))
 
 
 @hook_app.command("user-prompt-submit")

@@ -77,6 +77,43 @@ def test_hook_session_start_fails_open_on_store_error(
     assert result.stdout.strip() == "", "fail open: emit nothing on error"
 
 
+def test_hook_session_start_emits_json_with_user_visible_banner(
+    runner: CliRunner, tmp_path: Path
+) -> None:
+    """v5.25.0: emit a JSON object so the HUMAN sees a one-line banner
+    (top-level ``systemMessage``) while the MODEL still gets the memory
+    map (``hookSpecificOutput.additionalContext``)."""
+    src = _seed_memory(tmp_path)
+    runner.invoke(app, ["source", "add", str(src), "--kind", "memory_dir"])
+    runner.invoke(app, ["reindex", "--no-embed"])
+    result = runner.invoke(app, ["hook", "session-start"])
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)  # must be valid JSON
+    # user-visible banner
+    assert "mnemo" in payload["systemMessage"].lower()
+    assert "/mnemo-query" in payload["systemMessage"]
+    # model-only context, unchanged
+    hso = payload["hookSpecificOutput"]
+    assert hso["hookEventName"] == "SessionStart"
+    assert "memory map" in hso["additionalContext"].lower()
+
+
+def test_hook_session_start_banner_opt_out(
+    runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """MNEMO_NO_SESSION_BANNER=1 suppresses the user-visible banner but
+    keeps the model context (opt-out, never spammy)."""
+    monkeypatch.setenv("MNEMO_NO_SESSION_BANNER", "1")
+    src = _seed_memory(tmp_path)
+    runner.invoke(app, ["source", "add", str(src), "--kind", "memory_dir"])
+    runner.invoke(app, ["reindex", "--no-embed"])
+    result = runner.invoke(app, ["hook", "session-start"])
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert not payload.get("systemMessage"), "banner must be suppressed"
+    assert payload["hookSpecificOutput"]["additionalContext"], "context stays"
+
+
 # --- user-prompt-submit ---------------------------------------------------
 
 
