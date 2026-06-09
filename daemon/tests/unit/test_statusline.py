@@ -98,3 +98,63 @@ def test_statusline_cli_prints_line(monkeypatch: pytest.MonkeyPatch) -> None:
     result = runner.invoke(app, ["statusline"], input='{"session_id": "z"}')
     assert result.exit_code == 0
     assert result.stdout.strip() == "mnemo 7"
+
+
+# --- settings.json wiring (ensure_statusline + statusline-setup) ----------
+
+
+def test_statusline_is_mnemo() -> None:
+    assert statusline.statusline_is_mnemo({"statusLine": {"command": "mnemo statusline"}})
+    assert not statusline.statusline_is_mnemo({"statusLine": {"command": "/my/bar.sh"}})
+    assert not statusline.statusline_is_mnemo({})
+
+
+def test_ensure_statusline_adds_when_absent() -> None:
+    new, action = statusline.ensure_statusline({"model": "x"})
+    assert action == "added"
+    assert new["statusLine"]["command"] == "mnemo statusline"
+    assert new["model"] == "x", "other keys preserved"
+
+
+def test_ensure_statusline_noclobber_other() -> None:
+    settings = {"statusLine": {"type": "command", "command": "/my/bar.sh"}}
+    new, action = statusline.ensure_statusline(settings)
+    assert action == "exists_other"
+    assert new["statusLine"]["command"] == "/my/bar.sh", "left untouched"
+
+
+def test_ensure_statusline_idempotent_for_mnemo() -> None:
+    settings = {"statusLine": {"type": "command", "command": "mnemo statusline"}}
+    new, action = statusline.ensure_statusline(settings)
+    assert action == "exists_mnemo"
+    new2, action2 = statusline.ensure_statusline(new)
+    assert action2 == "exists_mnemo"
+
+
+def test_statusline_setup_cli_writes_settings(tmp_path: Path) -> None:
+    import json as _json
+
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text("{}", encoding="utf-8")
+    runner = CliRunner()
+    result = runner.invoke(app, ["statusline-setup", "--settings", str(settings_path)])
+    assert result.exit_code == 0, result.stdout
+    data = _json.loads(settings_path.read_text(encoding="utf-8"))
+    assert data["statusLine"]["command"] == "mnemo statusline"
+    # idempotent second run
+    result2 = runner.invoke(app, ["statusline-setup", "--settings", str(settings_path)])
+    assert result2.exit_code == 0
+    assert _json.loads(settings_path.read_text(encoding="utf-8")) == data
+
+
+def test_statusline_setup_cli_noclobber(tmp_path: Path) -> None:
+    import json as _json
+
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(
+        _json.dumps({"statusLine": {"command": "/my/bar.sh"}}), encoding="utf-8"
+    )
+    result = CliRunner().invoke(app, ["statusline-setup", "--settings", str(settings_path)])
+    assert result.exit_code == 0
+    data = _json.loads(settings_path.read_text(encoding="utf-8"))
+    assert data["statusLine"]["command"] == "/my/bar.sh", "must not clobber a user statusline"

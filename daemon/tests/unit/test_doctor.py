@@ -130,3 +130,26 @@ def test_doctor_command_exits_zero_when_all_ok(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr(doctor, "gather", lambda: [CheckResult("x", True, "fine")])
     result = CliRunner().invoke(app, ["doctor"])
     assert result.exit_code == 0, result.stdout
+
+
+def test_check_statusline_configured(tmp_path: Path) -> None:
+    p = tmp_path / "settings.json"
+    p.write_text(json.dumps({"statusLine": {"command": "mnemo statusline"}}), encoding="utf-8")
+    r = doctor.check_statusline(p)
+    assert r.ok is True
+    assert r.required is False
+
+
+def test_check_statusline_absent_is_advisory(tmp_path: Path) -> None:
+    p = tmp_path / "settings.json"
+    p.write_text("{}", encoding="utf-8")
+    r = doctor.check_statusline(p)
+    assert r.ok is None  # [?], not [FAIL] -- optional presence cue
+    assert r.required is False
+    assert "statusline-setup" in r.hint
+
+
+def test_check_statusline_other_is_advisory(tmp_path: Path) -> None:
+    p = tmp_path / "settings.json"
+    p.write_text(json.dumps({"statusLine": {"command": "/other"}}), encoding="utf-8")
+    assert doctor.check_statusline(p).ok is None

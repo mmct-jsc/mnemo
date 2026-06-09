@@ -49,6 +49,35 @@ def format_statusline(health: dict | None, inject_count: int | None = None) -> s
     return line
 
 
+# --- settings.json wiring (installer + doctor share this single source) ----
+
+STATUSLINE_COMMAND = "mnemo statusline"
+
+
+def statusline_is_mnemo(settings: dict) -> bool:
+    """True if settings.json's ``statusLine`` already points at mnemo."""
+    sl = settings.get("statusLine")
+    return isinstance(sl, dict) and STATUSLINE_COMMAND in str(sl.get("command", ""))
+
+
+def ensure_statusline(settings: dict) -> tuple[dict, str]:
+    """Non-clobbering, idempotent add of mnemo's statusLine to a settings
+    dict. Returns ``(settings, action)``:
+
+    - ``"added"``        -- no statusLine existed; mnemo's was inserted (a
+      shallow copy is returned; the input dict is not mutated).
+    - ``"exists_mnemo"`` -- already mnemo's; returned unchanged.
+    - ``"exists_other"`` -- a different statusLine exists; left untouched.
+    """
+    if not settings.get("statusLine"):
+        new = dict(settings)
+        new["statusLine"] = {"type": "command", "command": STATUSLINE_COMMAND, "padding": 0}
+        return new, "added"
+    if statusline_is_mnemo(settings):
+        return settings, "exists_mnemo"
+    return settings, "exists_other"
+
+
 def probe_health(timeout: float = 0.25, port: int = DEFAULT_PORT) -> dict | None:
     """GET /v1/health with a hard timeout. Returns parsed JSON or None.
     Never opens the store; never raises."""

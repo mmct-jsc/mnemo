@@ -854,6 +854,43 @@ def statusline() -> None:
     typer.echo(statusline_mod.render(sys.stdin.read()))
 
 
+@app.command("statusline-setup")
+def statusline_setup(
+    settings: str = typer.Option(
+        "", "--settings", help="settings.json to wire (default: ~/.claude/settings.json)."
+    ),
+) -> None:
+    """Wire mnemo's statusline into Claude Code settings.json.
+
+    Non-clobbering + idempotent: adds a ``statusLine`` entry only when none
+    exists; NEVER overwrites a user's existing status line. Invoked by the
+    installers; safe to run by hand."""
+    from pathlib import Path
+
+    from mnemo import paths
+    from mnemo import statusline as statusline_mod
+
+    path = Path(settings) if settings else (paths.claude_home() / "settings.json")
+    try:
+        current = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        if not isinstance(current, dict):
+            current = {}
+    except Exception:
+        current = {}
+    new, action = statusline_mod.ensure_statusline(current)
+    if action == "added":
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(new, indent=2) + "\n", encoding="utf-8")
+        typer.echo(f"[ok] added mnemo statusline to {path}")
+    elif action == "exists_mnemo":
+        typer.echo("[ok] mnemo statusline already configured")
+    else:  # exists_other
+        typer.echo(
+            f"[warn] a different statusLine is set in {path}; leaving it. To use "
+            f'mnemo, set statusLine.command to "{statusline_mod.STATUSLINE_COMMAND}".'
+        )
+
+
 # --- mnemo key {create,list,revoke} (Phase 3 / Task 2.2) ------------------
 #
 # Issuance + lifecycle of hosted-tier API keys. The hosted tier itself
