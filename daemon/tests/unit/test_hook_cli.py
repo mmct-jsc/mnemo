@@ -159,6 +159,26 @@ def test_hook_user_prompt_submit_bad_json_fails_open(runner: CliRunner) -> None:
     assert result.stdout.strip() == ""
 
 
+def test_hook_user_prompt_submit_records_inject_count(
+    runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """v5.25.0: the hook records the injection size keyed by session_id so
+    `mnemo statusline` can show up{N}."""
+    from mnemo import statusline
+
+    monkeypatch.setattr("mnemo.cli.Embedder", lambda *a, **kw: FakeEmbedder())
+    src = _seed_memory(tmp_path)
+    runner.invoke(app, ["source", "add", str(src), "--kind", "memory_dir"])
+    runner.invoke(app, ["reindex"])
+    result = runner.invoke(
+        app,
+        ["hook", "user-prompt-submit"],
+        input='{"prompt": "the retry rule", "session_id": "sess-xyz"}',
+    )
+    assert result.exit_code == 0
+    assert (statusline.read_inject_count("sess-xyz") or 0) >= 1
+
+
 # --- post-tool-use --------------------------------------------------------
 
 

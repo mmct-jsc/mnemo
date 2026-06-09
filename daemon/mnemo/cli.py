@@ -802,6 +802,15 @@ def hook_user_prompt_submit() -> None:
     finally:
         store.close()
 
+    # v5.25.0: record the injection size for `mnemo statusline` (best-effort;
+    # records 0 too, so the bar drops `up{N}` when nothing was injected).
+    try:
+        from mnemo import statusline as statusline_mod
+
+        statusline_mod.write_inject_count(data.get("session_id"), len(result.hits))
+    except Exception:
+        pass
+
     if not result.hits:
         return
     out = ["## Relevant memory (mnemo)", ""]
@@ -825,6 +834,24 @@ def hook_post_tool_use() -> None:
     file_path = (data.get("tool_input") or {}).get("file_path") or ""
     if _is_memory_shaped(file_path):
         _spawn_background_reindex()
+
+
+# --- mnemo statusline -----------------------------------------------------
+#
+# v5.25.0 (workstream B): a one-line presence cue for the Claude Code status
+# bar, wired into the user's settings.json by the installer. Reads CC's
+# status JSON from stdin and prints `mnemo <count>` / `mnemo offline`. Never
+# opens the store; hard ~250ms daemon probe so it can never hang the bar.
+
+
+@app.command()
+def statusline() -> None:
+    """Print a one-line mnemo status for the Claude Code status bar."""
+    import sys
+
+    from mnemo import statusline as statusline_mod
+
+    typer.echo(statusline_mod.render(sys.stdin.read()))
 
 
 # --- mnemo key {create,list,revoke} (Phase 3 / Task 2.2) ------------------

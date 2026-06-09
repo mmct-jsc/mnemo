@@ -41,6 +41,12 @@ def logs_dir() -> Path:
     return mnemo_home() / "logs"
 
 
+def sessions_dir() -> Path:
+    """Per-session scratch dir (statusline inject counts, keyed by the CC
+    session_id). v5.25.0 -- pruned opportunistically, safe to wipe."""
+    return mnemo_home() / "sessions"
+
+
 def pid_file(port: int = 7373) -> Path:
     """Port-scoped pid file. A preview daemon (7399) and the prod
     daemon (7373) MUST NOT share one pid file -- when they did, each
