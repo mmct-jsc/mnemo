@@ -109,29 +109,37 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - name: Install shellcheck
-        run: sudo apt-get update -y && sudo apt-get install -y shellcheck
-      - name: shellcheck hooks/*.sh
-        run: shellcheck hooks/*.sh
-      - name: Validate plugin.json is valid JSON
-        run: python -c "import json,sys; json.load(open('.claude-plugin/plugin.json'))"
-      - name: Confirm referenced hooks + commands exist on disk
+      - name: Validate plugin.json + marketplace.json + hooks.json
         run: |
           python <<'PY'
           import json, sys
           from pathlib import Path
           mf = json.load(open('.claude-plugin/plugin.json'))
-          missing = []
-          for event, entries in mf.get('hooks', {}).items():
-              for e in entries:
-                  if not Path(e['command']).is_file():
-                      missing.append(e['command'])
-          for cmd in Path('commands').glob('*.md'):
-              if cmd.name == 'README.md':
-                  continue
-          if missing:
-              print('MISSING:', missing); sys.exit(1)
-          print('plugin.json references resolve OK')
+          mk = json.load(open('.claude-plugin/marketplace.json'))
+          hk = json.load(open('hooks/hooks.json'))
+          errs = []
+          # hooks/hooks.json is auto-loaded by CC; referencing it in the
+          # manifest too causes a duplicate-load failure. So the file must
+          # exist and the manifest must NOT point `hooks` at it. Also: no
+          # fictional `platforms` key (the pre-v5.24.0 bug that broke hooks).
+          if not Path('hooks/hooks.json').is_file():
+              errs.append('hooks/hooks.json missing')
+          if mf.get('hooks') == './hooks/hooks.json':
+              errs.append('plugin.json must NOT reference the auto-loaded ./hooks/hooks.json')
+          if 'platforms' in json.dumps(mf):
+              errs.append('plugin.json must not use the fictional `platforms` key')
+          # marketplace.json: single-repo plugin installable as mnemo@mnemo
+          p = mk['plugins'][0]
+          if p.get('name') != 'mnemo' or p.get('source') != './':
+              errs.append('marketplace plugin must be mnemo with source "./"')
+          # hooks.json: nested shape, each event routed through `mnemo hook <event>`
+          for event in ('SessionStart', 'UserPromptSubmit', 'PostToolUse'):
+              cmds = [h['command'] for e in hk['hooks'][event] for h in e['hooks']]
+              if not any(c.startswith('mnemo hook ') for c in cmds):
+                  errs.append(event + ': must invoke `mnemo hook ...`')
+          if errs:
+              print('INVALID:\n  ' + '\n  '.join(errs)); sys.exit(1)
+          print('plugin packaging OK')
           PY
 
   # --- 6. End-to-end smoke on synthetic memory --------------------------

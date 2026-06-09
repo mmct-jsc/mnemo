@@ -6,27 +6,33 @@
 #   1. Verify Python 3.11+ and uv are available.
 #   2. Sync the daemon's dependencies via 'uv sync'.
 #   3. Drop a 'mnemo.cmd' shim into ~/.local/bin so it's on PATH.
-#   4. Junction the plugin scaffold into ~/.claude/plugins/mnemo so Claude
-#      Code picks up the hooks, commands, and skills.
+#   4. Register the 'mnemo mcp' server with Claude Code + print the two
+#      /plugin commands that install the plugin (commands/hooks/skills).
+#      (Modern Claude Code is marketplace-driven: a directory under
+#      ~/.claude/plugins is ignored unless registered, so we no longer
+#      junction there -- that silently did nothing.)
 #   5. Run 'mnemo init' to register Scope B sources.
 #
 # Flags:
 #   -NoInit          Skip step 5.
-#   -NoPluginLink    Skip step 4.
+#   -NoMcp           Skip the 'claude mcp add' registration in step 4.
 #   -BinDir <path>   Override the install dir for the 'mnemo.cmd' shim.
 
 [CmdletBinding()]
 param(
     [switch]$NoInit,
-    [switch]$NoPluginLink,
+    [switch]$NoMcp,
     [string]$BinDir = (Join-Path $HOME '.local\bin')
 )
 
-$ErrorActionPreference = 'Stop'
+# NB: 'Continue', not 'Stop'. On Windows PowerShell 5.1, 'Stop' turns a native
+# tool's stderr progress output (uv, claude) into a terminating NativeCommandError
+# even on exit 0. We instead check $LASTEXITCODE explicitly after native calls
+# (the faithful port of bash's `set -e` for a native-tool orchestration script).
+$ErrorActionPreference = 'Continue'
 
 $RepoRoot   = (Resolve-Path (Split-Path -Parent $PSCommandPath)).Path
 $DaemonDir  = Join-Path $RepoRoot 'daemon'
-$PluginDest = Join-Path $HOME '.claude\plugins\mnemo'
 
 function Log  { param($m) Write-Host "[mnemo] $m" -ForegroundColor Cyan }
 function Ok   { param($m) Write-Host "[ok]    $m" -ForegroundColor Green }
@@ -42,7 +48,10 @@ if (-not $python) {
 if (-not $python) {
     Fail 'python not found. Install Python 3.11+ first.'
 }
-$pyVersion = & $python.Source -c 'import sys; print("%d.%d" % sys.version_info[:2])'
+# NB: single-quote the format string INSIDE a PS double-quoted arg. Windows
+# PowerShell 5.1 mangles embedded double-quotes when passing -c to a native
+# exe, which made python raise a SyntaxError here.
+$pyVersion = & $python.Source -c "import sys; print('%d.%d' % sys.version_info[:2])"
 $parts = $pyVersion.Split('.')
 if ([int]$parts[0] -lt 3 -or ([int]$parts[0] -eq 3 -and [int]$parts[1] -lt 11)) {
     Fail "Python 3.11+ required (found $pyVersion)."
@@ -102,30 +111,33 @@ if ($pathDirs -notcontains $BinDir) {
     Warn '...then open a new shell.'
 }
 
-# --- 4. Plugin link -------------------------------------------------------
+# --- 4. Register the MCP server + print the /plugin commands --------------
+#
+# Claude Code is marketplace-driven: the plugin (commands/hooks/skills) is
+# enabled by two /plugin commands the USER runs INSIDE Claude Code -- not by
+# copying files. We register the MCP tool server here so the mnemo_* tools
+# resolve, then print those two commands at the end.
 
-if (-not $NoPluginLink) {
-    $pluginParent = Split-Path -Parent $PluginDest
-    if (-not (Test-Path $pluginParent)) {
-        New-Item -ItemType Directory -Path $pluginParent -Force | Out-Null
-    }
-    if (Test-Path $PluginDest) {
-        $item = Get-Item $PluginDest -Force
-        $isOurs = $item.Attributes.HasFlag([IO.FileAttributes]::ReparsePoint) -and `
-                  ($item.Target -eq $RepoRoot)
-        if ($isOurs) {
-            Ok "plugin already linked at $PluginDest"
+if (-not $NoMcp) {
+    $claude = Get-Command claude -ErrorAction SilentlyContinue
+    if ($claude) {
+        $listed = & $claude.Source mcp list 2>$null | Select-String -SimpleMatch 'mnemo'
+        if ($listed) {
+            Ok "MCP server 'mnemo' already registered"
         } else {
-            Warn "$PluginDest exists and is not our junction; leaving it alone."
-            Warn 'Move or remove it, then rerun, or pass -NoPluginLink.'
+            # Quote '--' so PowerShell passes it through to claude literally.
+            & $claude.Source mcp add mnemo '--' mnemo mcp 2>$null | Out-Null
+            if ($LASTEXITCODE -eq 0) {
+                Ok 'registered MCP server (claude mcp add mnemo -- mnemo mcp)'
+            } else {
+                Warn 'could not auto-register the MCP server; run it manually:'
+                Warn '  claude mcp add mnemo -- mnemo mcp'
+            }
         }
     } else {
-        # Directory junction: doesn't require admin, works for read-only access.
-        cmd /c mklink /J "$PluginDest" "$RepoRoot" | Out-Null
-        if ($LASTEXITCODE -ne 0) {
-            Fail 'mklink /J failed'
-        }
-        Ok "plugin linked: $PluginDest -> $RepoRoot"
+        Warn "'claude' not on PATH; register the MCP server manually:"
+        Warn '  claude mcp add mnemo -- mnemo mcp'
+        Warn '  (other hosts: see docs/integrations/)'
     }
 }
 
@@ -142,9 +154,14 @@ if (-not $NoInit) {
 # --- Done -----------------------------------------------------------------
 
 Write-Host ''
-Write-Host 'Done. Next steps:'
+Write-Host 'Done. To finish wiring mnemo into Claude Code:'
+Write-Host ''
+Write-Host '  1. In Claude Code, run these two commands, then RESTART Claude Code'
+Write-Host '     (the /mnemo-* commands appear immediately; the hooks load at session start):'
+Write-Host '       /plugin marketplace add mmct-jsc/mnemo'
+Write-Host '       /plugin install mnemo@mnemo'
+Write-Host "  2. Run 'mnemo reindex' to ingest your memory (first run downloads MiniLM ~22MB)."
+Write-Host "  3. Run 'mnemo doctor' to verify every link is green."
 Write-Host ''
 Write-Host "  - If you saw the PATH warning above, add $BinDir to PATH and open a new shell."
-Write-Host "  - Run 'mnemo reindex' to ingest your existing memory (downloads MiniLM ~22MB on first run)."
-Write-Host "  - Run 'mnemo daemon start' to enable the web UI at http://127.0.0.1:7373/."
-Write-Host '  - Restart Claude Code so the plugin loads its hooks and slash commands.'
+Write-Host "  - 'mnemo daemon start' enables the web UI at http://127.0.0.1:7373/ (optional)."
