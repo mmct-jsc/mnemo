@@ -1718,6 +1718,30 @@ class Store:
             self.conn.commit()
         return cur.rowcount > 0
 
+    def get_audit_finding(self, fingerprint: str) -> AuditFinding | None:
+        """One queued finding by fingerprint, or ``None``. Used by the
+        confirm-then-apply path (v5.23.0) to reconstruct the target node +
+        dead-citation set from the persisted row."""
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT fingerprint, type, severity, node_ids, description, locus, "
+                "status, first_seen, last_seen FROM audit_queue WHERE fingerprint = ?",
+                (fingerprint,),
+            ).fetchone()
+        if row is None:
+            return None
+        return AuditFinding(
+            fingerprint=row["fingerprint"],
+            type=row["type"],
+            severity=row["severity"],
+            node_ids=json.loads(row["node_ids"]),
+            description=row["description"],
+            locus=row["locus"],
+            status=row["status"],
+            first_seen=row["first_seen"],
+            last_seen=row["last_seen"],
+        )
+
     # --- Query audit log ---------------------------------------------------
 
     def log_query(
