@@ -48,7 +48,7 @@ Add a `context_servers` entry (merge with any existing servers):
 
 Then reload Zed: **Cmd/Ctrl+Shift+P → "zed: reload"** (or
 restart). The Assistant panel's context-server list should now
-include `mnemo` with all 26 tools.
+include `mnemo` with all 30 tools.
 
 ### If Zed can't find the `mnemo` command
 
@@ -94,7 +94,7 @@ citations.
 
 ## What this gives you
 
-- The full 26-tool surface from any Zed Assistant session.
+- The full 30-tool surface from any Zed Assistant session.
 - `[mnemo:<id>]` citations Zed's host LLM treats as opaque
   provenance markers (clickable in the mnemo UI).
 - Hybrid Graph-RAG retrieval over memory + code + commits.

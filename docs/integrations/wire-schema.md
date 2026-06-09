@@ -61,7 +61,7 @@ Fields:
   preferred gating field for hosts. Locked by the Phase 1.5
   risk-tags test.
 
-The current full 26-tool surface lives in
+The current full 30-tool surface lives in
 [`mcp_tool_list.json`](../../daemon/tests/unit/_snapshots/mcp_tool_list.json)
 (the snapshot the wire-schema test compares against on every run).
 
