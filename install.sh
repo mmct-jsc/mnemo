@@ -7,13 +7,16 @@
 #   1. Verify Python 3.11+ and `uv` are available.
 #   2. Sync the daemon's dependencies via `uv sync`.
 #   3. Symlink the venv's `mnemo` binary into ~/.local/bin so it's on PATH.
-#   4. Symlink the plugin scaffold into ~/.claude/plugins/mnemo so Claude
-#      Code picks up the hooks, commands, and skills.
+#   4. Register the `mnemo mcp` server with Claude Code + print the two
+#      `/plugin` commands that install the plugin (commands/hooks/skills).
+#      (Modern Claude Code is marketplace-driven: a directory under
+#      ~/.claude/plugins is IGNORED unless registered, so we no longer
+#      symlink there -- that silently did nothing.)
 #   5. Run `mnemo init` to register Scope B sources.
 #
 # Flags:
 #   --no-init          Skip step 5.
-#   --no-plugin-link   Skip step 4.
+#   --no-mcp           Skip the `claude mcp add` registration in step 4.
 #   --bin-dir=<path>   Override the install dir for the `mnemo` shim.
 
 set -euo pipefail
@@ -21,16 +24,15 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
 DAEMON_DIR="$REPO_ROOT/daemon"
 DEFAULT_BIN_DIR="$HOME/.local/bin"
-PLUGIN_DEST="$HOME/.claude/plugins/mnemo"
 
 DO_INIT=1
-DO_PLUGIN_LINK=1
+DO_MCP=1
 BIN_DIR="$DEFAULT_BIN_DIR"
 
 for arg in "$@"; do
     case "$arg" in
         --no-init) DO_INIT=0 ;;
-        --no-plugin-link) DO_PLUGIN_LINK=0 ;;
+        --no-mcp) DO_MCP=0 ;;
         --bin-dir=*) BIN_DIR="${arg#--bin-dir=}" ;;
         --help|-h)
             grep '^#' "$0" | sed 's/^# \?//'
@@ -110,34 +112,27 @@ if ! echo ":$PATH:" | grep -q ":$BIN_DIR:"; then
     warn "  export PATH=\"$BIN_DIR:\$PATH\""
 fi
 
-# --- 4. Plugin link -------------------------------------------------------
+# --- 4. Register the MCP server + print the /plugin commands --------------
+#
+# Claude Code is marketplace-driven: the plugin (commands/hooks/skills) is
+# enabled by two /plugin commands the USER runs INSIDE Claude Code -- not by
+# copying files. We register the MCP tool server here so the mnemo_* tools
+# resolve, then print those two commands at the end.
 
-if [ "$DO_PLUGIN_LINK" -eq 1 ]; then
-    mkdir -p "$(dirname "$PLUGIN_DEST")"
-    if [ -L "$PLUGIN_DEST" ] && [ "$(readlink "$PLUGIN_DEST")" = "$REPO_ROOT" ]; then
-        ok "plugin already linked at $PLUGIN_DEST"
-    elif [ -e "$PLUGIN_DEST" ]; then
-        warn "$PLUGIN_DEST exists and is not our symlink; leaving it alone."
-        warn "Move or remove it, then rerun, or pass --no-plugin-link."
-    else
-        # `ln -s` for directories needs Developer Mode (or admin) on Windows.
-        # Fall back to a junction via cmd /c mklink /J if the symlink fails.
-        if ln -s "$REPO_ROOT" "$PLUGIN_DEST" 2>/dev/null; then
-            ok "plugin linked: $PLUGIN_DEST -> $REPO_ROOT"
-        elif command -v cmd.exe >/dev/null 2>&1; then
-            # Translate /c/foo paths to C:\foo for cmd's mklink.
-            win_dest=$(cygpath -w "$PLUGIN_DEST" 2>/dev/null || echo "$PLUGIN_DEST")
-            win_root=$(cygpath -w "$REPO_ROOT" 2>/dev/null || echo "$REPO_ROOT")
-            if cmd.exe //c "mklink /J \"$win_dest\" \"$win_root\"" >/dev/null 2>&1; then
-                ok "plugin junctioned: $PLUGIN_DEST -> $REPO_ROOT"
-            else
-                warn "could not link plugin (no admin / no Developer Mode / no cmd)."
-                warn "Run install.ps1 from PowerShell, or manually copy the repo to $PLUGIN_DEST."
-            fi
+if [ "$DO_MCP" -eq 1 ]; then
+    if command -v claude >/dev/null 2>&1; then
+        if claude mcp list 2>/dev/null | grep -qw mnemo; then
+            ok "MCP server 'mnemo' already registered"
+        elif claude mcp add mnemo -- mnemo mcp >/dev/null 2>&1; then
+            ok "registered MCP server (claude mcp add mnemo -- mnemo mcp)"
         else
-            warn "ln -s failed and cmd.exe not available; skipping plugin link."
-            warn "Run install.ps1 from PowerShell, or manually copy the repo to $PLUGIN_DEST."
+            warn "could not auto-register the MCP server; run it manually:"
+            warn "  claude mcp add mnemo -- mnemo mcp"
         fi
+    else
+        warn "'claude' not on PATH; register the MCP server manually:"
+        warn "  claude mcp add mnemo -- mnemo mcp"
+        warn "  (other hosts: see docs/integrations/)"
     fi
 fi
 
@@ -152,10 +147,15 @@ fi
 
 cat <<EOF
 
-Done. Next steps:
+Done. To finish wiring mnemo into Claude Code:
 
-  - If you saw the PATH warning above, add $BIN_DIR to PATH and re-source your shell.
-  - Run 'mnemo reindex' to ingest your existing memory (downloads MiniLM ~22MB on first run).
-  - Run 'mnemo daemon start' to enable the web UI at http://127.0.0.1:7373/.
-  - Restart Claude Code so the plugin loads its hooks and slash commands.
+  1. In Claude Code, run these two commands, then RESTART Claude Code
+     (the /mnemo-* commands appear immediately; the hooks load at session start):
+       /plugin marketplace add mmct-jsc/mnemo
+       /plugin install mnemo@mnemo
+  2. Run 'mnemo reindex' to ingest your memory (first run downloads MiniLM ~22MB).
+  3. Run 'mnemo doctor' to verify every link is green.
+
+  - If you saw the PATH warning above, add $BIN_DIR to PATH and re-open your shell.
+  - 'mnemo daemon start' enables the web UI at http://127.0.0.1:7373/ (optional).
 EOF

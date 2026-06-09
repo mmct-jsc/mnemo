@@ -54,10 +54,62 @@ app.add_typer(daemon_app, name="daemon")
 app.add_typer(key_app, name="key")
 app.add_typer(billing_app, name="billing")
 
+# v5.24.0: hook entrypoints invoked by hooks/hooks.json. A subcommand group
+# so the SAME `mnemo` binary serves all three Claude Code hook events
+# cross-platform -- no .sh/.ps1 split, no `python3`-on-PATH dependency, and
+# the logic is unit-testable Python instead of dual shell scripts.
+hook_app = typer.Typer(
+    help="Internal entrypoints invoked by hooks/hooks.json. Not for direct use.",
+    no_args_is_help=True,
+)
+app.add_typer(hook_app, name="hook")
+
 
 def _open_store() -> Store:
     paths.ensure_runtime_dirs()
     return Store(paths.db_path())
+
+
+def _is_memory_shaped(file_path: str) -> bool:
+    """True if an edited path is one mnemo indexes (so a reindex is worth it).
+
+    Mirrors the PostToolUse glob the old hook script used:
+    ``*/memory/*.md`` | ``*/CLAUDE.md`` | ``*/docs/plans/*.md``.
+    """
+    p = (file_path or "").replace("\\", "/")
+    if not p:
+        return False
+    return (
+        ("/memory/" in p and p.endswith(".md"))
+        or p.endswith("/CLAUDE.md")
+        or p == "CLAUDE.md"
+        or ("/docs/plans/" in p and p.endswith(".md"))
+    )
+
+
+def _spawn_background_reindex() -> None:
+    """Fire-and-forget a data-only reindex so later retrievals see the edit.
+
+    Detached + best-effort: never waits, swallows failures. Uses the current
+    interpreter (`-m mnemo.cli`) so it works regardless of how `mnemo` is
+    shimmed onto PATH. Monkeypatched out in tests.
+    """
+    import subprocess
+    import sys
+
+    try:
+        kwargs: dict = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+        if sys.platform == "win32":
+            kwargs["creationflags"] = getattr(subprocess, "DETACHED_PROCESS", 0)
+        else:
+            kwargs["start_new_session"] = True
+        subprocess.Popen(  # noqa: S603
+            [sys.executable, "-m", "mnemo.cli", "reindex", "--no-embed"],
+            **kwargs,
+        )
+    except Exception:
+        # A reindex nudge is best-effort; never let it surface to the hook.
+        pass
 
 
 # --- Top-level commands ----------------------------------------------------
@@ -309,6 +361,22 @@ def status() -> None:
         )
     finally:
         store.close()
+
+
+@app.command()
+def doctor() -> None:
+    """End-to-end install check: PATH, index, plugin registration, daemon, MCP.
+
+    Prints a [ok]/[FAIL]/[?] checklist with a concrete fix for each problem
+    and exits nonzero if a REQUIRED link is broken -- replacing the old
+    silent fail-open where a half-wired install looked identical to a working
+    one. Run it after installing, or any time mnemo "isn't doing anything".
+    """
+    from mnemo import doctor as doctor_mod
+
+    text, code = doctor_mod.render(doctor_mod.gather())
+    typer.echo(text)
+    raise typer.Exit(code=code)
 
 
 # --- source subcommands ----------------------------------------------------
@@ -645,6 +713,98 @@ def mcp() -> None:
     from mnemo import mcp_server
 
     mcp_server.serve_stdio()
+
+
+# --- mnemo hook {session-start,user-prompt-submit,post-tool-use} ----------
+#
+# v5.24.0: the plugin's hooks/hooks.json invokes these. All three follow the
+# CC plugin hook contract verified against the plugin-dev hook-development
+# reference: emit context via raw stdout + exit 0, and FAIL OPEN (exit 0, no
+# output) on any error so a down daemon / missing index never blocks a
+# session. Replaces the 6 hooks/*.sh + *.ps1 scripts.
+
+
+@hook_app.command("session-start")
+def hook_session_start() -> None:
+    """SessionStart: print a compact mnemo 'memory map' to stdout."""
+    try:
+        store = _open_store()
+    except Exception:
+        return
+    try:
+        total = sum(store.count_nodes().values())
+        sources = len(store.list_sources())
+        d = daemon.status()
+    except Exception:
+        return
+    finally:
+        store.close()
+
+    daemon_state = "running" if d.running else "stale" if d.stale else "stopped"
+    typer.echo(
+        "\n".join(
+            [
+                "## mnemo memory map",
+                "",
+                f"- version: {__version__}",
+                f"- nodes: {total} across {sources} source(s)",
+                f"- daemon: {daemon_state}",
+                "",
+                "Use `/mnemo-query <text>` for ad-hoc recall, or call the "
+                "`mnemo_query` tool. Auto-injection adds cited memory to each "
+                "prompt -- prefer it over grep for 'how/where/why' questions.",
+            ]
+        )
+    )
+
+
+@hook_app.command("user-prompt-submit")
+def hook_user_prompt_submit() -> None:
+    """UserPromptSubmit: inject cited memory for the prompt (read from stdin)."""
+    import sys
+
+    try:
+        data = json.loads(sys.stdin.read())
+    except Exception:
+        return
+    prompt = (data.get("prompt") or data.get("user_prompt") or "").strip()
+    if not prompt:
+        return
+
+    try:
+        store = _open_store()
+    except Exception:
+        return
+    try:
+        result = retrieve.query(store, Embedder(), prompt, k=5, budget_tokens=800)
+    except Exception:
+        return
+    finally:
+        store.close()
+
+    if not result.hits:
+        return
+    out = ["## Relevant memory (mnemo)", ""]
+    for h in result.hits:
+        desc = (h.description or "").replace("\n", " ")
+        out.append(f"- {h.citation} [{h.type}] {h.name}: {desc}")
+    out.append("")
+    out.append(f"intent: {', '.join(result.intent_tags) or 'none'} | k: {len(result.hits)}")
+    typer.echo("\n".join(out))
+
+
+@hook_app.command("post-tool-use")
+def hook_post_tool_use() -> None:
+    """PostToolUse: reindex (data-only, detached) when a memory file is edited."""
+    import sys
+
+    try:
+        data = json.loads(sys.stdin.read())
+    except Exception:
+        return
+    file_path = (data.get("tool_input") or {}).get("file_path") or ""
+    if _is_memory_shaped(file_path):
+        _spawn_background_reindex()
 
 
 # --- mnemo key {create,list,revoke} (Phase 3 / Task 2.2) ------------------

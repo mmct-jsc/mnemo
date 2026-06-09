@@ -1,0 +1,29 @@
+{
+  "description": "mnemo: inject a memory map at session start, inject cited memory per prompt, and reindex when memory files are edited. All three route through the cross-platform `mnemo hook <event>` CLI.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear",
+        "hooks": [
+          { "type": "command", "command": "mnemo hook session-start" }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "*",
+        "hooks": [
+          { "type": "command", "command": "mnemo hook user-prompt-submit" }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          { "type": "command", "command": "mnemo hook post-tool-use" }
+        ]
+      }
+    ]
+  }
+}
