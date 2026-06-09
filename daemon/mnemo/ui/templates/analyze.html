@@ -75,6 +75,10 @@
                   x-text="f.type"></span>
             <span class="finding-locus" x-show="f.locus" x-cloak><code x-text="f.locus"></code></span>
             <span class="finding-spacer"></span>
+            <button type="button" class="finding-act-btn apply-btn"
+                    x-show="f.type === 'orphan_reference' && f.status === 'open'" x-cloak
+                    @click="openApply(f)"
+                    title="Preview + apply the fix (removes the dead citation from the node body)">Apply</button>
             <button type="button" class="finding-act-btn" x-show="f.status === 'open'" x-cloak
                     @click="dismiss(f.fingerprint)"
                     title="Ignore this finding (queue metadata; never a node edit)">Dismiss</button>
@@ -104,6 +108,51 @@
       <span x-text="'Page ' + qpage + ' of ' + queueTotalPages"></span>
       <button type="button" class="btn" :disabled="qpage >= queueTotalPages" @click="qnext()">Next</button>
     </nav>
+
+    <!-- Phase 4b: preview -> confirm apply modal (the orphan-fix). Shows the
+         exact before/after + the removed tokens; Confirm posts the preview's
+         node_hash (the stale-check handshake). No bulk apply -- one finding
+         at a time, each previewed + confirmed. -->
+    <div class="apply-scrim" x-show="applyModal" x-cloak @click="closeApply()">
+      <div class="apply-modal" @click.stop>
+        <header class="apply-modal-head">
+          <strong>Apply orphan-fix</strong>
+          <button type="button" class="apply-modal-x" @click="closeApply()" aria-label="close">&times;</button>
+        </header>
+        <template x-if="applyModal">
+          <div class="apply-modal-body">
+            <p class="hint">
+              <a class="node-link" :href="'/node/' + encodeURIComponent(applyModal.node_id)"
+                 x-text="applyModal.node_name || applyModal.node_id"></a>
+              <template x-if="applyModal.applyable">
+                <span> &mdash; removing <span x-text="(applyModal.removed || []).length"></span>
+                  dead citation(s): <code x-text="(applyModal.removed || []).join(', ')"></code></span>
+              </template>
+            </p>
+            <div class="apply-not-applyable" x-show="!applyModal.applyable" x-cloak
+                 x-text="applyModal.reason"></div>
+            <div class="apply-diff">
+              <div class="apply-col">
+                <div class="apply-col-h">before</div>
+                <pre x-text="applyModal.before"></pre>
+              </div>
+              <div class="apply-col">
+                <div class="apply-col-h">after</div>
+                <pre x-text="applyModal.after"></pre>
+              </div>
+            </div>
+            <div class="apply-err" x-show="applyErr" x-cloak x-text="applyErr"></div>
+            <div class="apply-modal-actions">
+              <button type="button" class="btn" @click="closeApply()">Cancel</button>
+              <button type="button" class="btn primary"
+                      :disabled="!applyModal.applyable || applyBusy" @click="confirmApply()">
+                <span x-text="applyBusy ? 'Applying…' : 'Confirm + apply'"></span>
+              </button>
+            </div>
+          </div>
+        </template>
+      </div>
+    </div>
   </div>
 
   <!-- Ad-hoc on-demand audit (the v5.21.0 surface). Scope controls. The
@@ -344,6 +393,32 @@
     border: 1px solid var(--border); color: var(--fg-muted); cursor: pointer; font-size: 0.76rem;
   }
   .finding-act-btn:hover { color: var(--fg); border-color: var(--fg-dim); }
+  /* Phase 4b: Apply button + preview/confirm modal. */
+  .apply-btn { color: var(--accent, #7ee7e0); border-color: color-mix(in srgb, var(--accent, #7ee7e0) 40%, transparent); }
+  .apply-scrim {
+    position: fixed; inset: 0; background: rgba(0, 0, 0, 0.55);
+    display: flex; align-items: center; justify-content: center; z-index: 60; padding: 1rem;
+  }
+  .apply-modal {
+    background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+    width: min(760px, 96vw); max-height: 88vh; overflow: auto; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
+  }
+  .apply-modal-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0.7rem 1rem; border-bottom: 1px solid var(--border);
+  }
+  .apply-modal-x { background: none; border: none; color: var(--fg-muted); font-size: 1.2rem; cursor: pointer; }
+  .apply-modal-body { padding: 0.8rem 1rem 1rem; }
+  .apply-not-applyable { color: var(--type-medium, #fb923c); font-size: 0.85rem; margin: 0.3rem 0 0.6rem; }
+  .apply-diff { display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem; margin: 0.6rem 0; }
+  .apply-col-h { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--fg-dim); margin-bottom: 0.2rem; }
+  .apply-col pre {
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 0.5rem; font-size: 0.74rem; white-space: pre-wrap; word-break: break-word;
+    max-height: 40vh; overflow: auto;
+  }
+  .apply-err { color: #f43f5e; font-size: 0.82rem; margin-top: 0.4rem; }
+  .apply-modal-actions { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 0.8rem; }
 </style>
 
 <script>
@@ -397,6 +472,10 @@ function analyzePage() {
     qpage: 1,
     queueLoading: false,
     queueErr: null,
+    // Phase 4b: the preview->confirm apply modal (orphan-fix).
+    applyModal: null,
+    applyBusy: false,
+    applyErr: null,
 
     sevColor(s) { return SEV_COLORS[s] || '#94a3b8'; },
     findingColor(t) { return FINDING_COLORS[t] || (window.MNEMO_TYPE_COLOR_FALLBACK || '#7ee7e0'); },
@@ -581,6 +660,50 @@ function analyzePage() {
     },
     dismiss(fp) { return this._setFindingStatus(fp, 'dismissed'); },
     reopen(fp) { return this._setFindingStatus(fp, 'open'); },
+
+    // --- Phase 4b: preview -> confirm apply (orphan-fix) ----------------
+    async openApply(f) {
+      this.applyErr = null;
+      this.applyBusy = false;
+      this.applyModal = null;
+      try {
+        const r = await fetch(
+          '/v1/analyze/queue/' + encodeURIComponent(f.fingerprint) + '/apply/preview',
+          { method: 'POST' },
+        );
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        this.applyModal = await r.json();
+      } catch (e) {
+        if (window.toast) window.toast('Could not preview the fix: ' + e, 'error');
+      }
+    },
+    closeApply() { this.applyModal = null; this.applyErr = null; this.applyBusy = false; },
+    async confirmApply() {
+      if (!this.applyModal || !this.applyModal.applyable) return;
+      this.applyBusy = true;
+      this.applyErr = null;
+      try {
+        const r = await fetch(
+          '/v1/analyze/queue/' + encodeURIComponent(this.applyModal.fingerprint) + '/apply',
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ node_hash: this.applyModal.node_hash }),
+          },
+        );
+        if (!r.ok) {
+          const d = await r.json().catch(() => ({}));
+          throw new Error(d.detail || ('HTTP ' + r.status));
+        }
+        if (window.toast) window.toast('Applied — dead citation removed; finding resolved.', 'success');
+        this.applyModal = null;
+        await this.loadQueue();
+      } catch (e) {
+        this.applyErr = String(e);
+      } finally {
+        this.applyBusy = false;
+      }
+    },
   };
 }
 </script>

@@ -1148,3 +1148,53 @@ def _mnemo_audit_queue(ctx: ToolContext, *, status: str = "open", limit: int = 2
         "total": ctx.store.count_audit_queue(status_filter),
         "counts": ctx.store.audit_queue_counts(),
     }
+
+
+# --- mnemo_apply_finding (v5.23.0, Phase 4b -- the first node mutation) --
+
+
+@_tool(
+    name="mnemo_apply_finding",
+    risk=RISK_CONFIRM,
+    description=(
+        "Apply the deterministic fix for ONE queued audit finding (v5.23.0 "
+        "Phase 4b -- the FIRST node mutation). Currently supports "
+        "orphan_reference findings: removes the dead [mnemo:<id>] citation "
+        "token(s) from the node body. TWO-STEP + hard-gated: call WITHOUT "
+        "confirm_node_hash first to PREVIEW (read-only -- returns "
+        "{before, after, removed, applyable, reason, node_hash}); then call "
+        "again WITH confirm_node_hash set to the preview's node_hash to "
+        "APPLY (edits the body + marks the finding resolved). The apply "
+        "refuses if the node changed since the preview (stale) or if the "
+        "finding is not applyable -- e.g. the cited target is a "
+        "documentation placeholder ([mnemo:<id>]) rather than a real dead "
+        "id (only id-shaped 32-hex dead targets are ever strippable). "
+        "risk=confirm: the host prompts before the apply. To SEE findings "
+        "first, use mnemo_audit_queue."
+    ),
+    parameters=_obj(
+        {
+            "fingerprint": {
+                "type": "string",
+                "description": "the queued finding's fingerprint (from mnemo_audit_queue)",
+            },
+            "confirm_node_hash": {
+                "type": ["string", "null"],
+                "default": None,
+                "description": (
+                    "omit / null to PREVIEW (read-only); set to the preview's "
+                    "node_hash to APPLY the fix"
+                ),
+            },
+        },
+        ["fingerprint"],
+    ),
+)
+def _mnemo_apply_finding(
+    ctx: ToolContext, *, fingerprint: str, confirm_node_hash: str | None = None
+) -> dict:
+    from mnemo import apply
+
+    if confirm_node_hash is None:
+        return apply.preview_orphan_fix(ctx.store, fingerprint)
+    return apply.apply_orphan_fix(ctx.store, fingerprint, confirm_node_hash)

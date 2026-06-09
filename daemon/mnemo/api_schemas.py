@@ -988,3 +988,43 @@ class QueueStatusIn(BaseModel):
     queue metadata (the user's ignore / restore), NOT a node edit."""
 
     status: str = Field(pattern="^(open|dismissed|resolved)$")
+
+
+# --- Confirm-then-apply (v5.23.0, Phase 4b -- the first node mutation) ----
+
+
+class ApplyPreviewOut(BaseModel):
+    """``POST /v1/analyze/queue/{fingerprint}/apply/preview`` -- the
+    READ-ONLY preview of the deterministic orphan-fix. ``node_hash`` is the
+    confirm token for the apply handshake; ``applyable=false`` (+``reason``)
+    when the finding can't be auto-fixed (placeholders / already fixed /
+    unsupported type)."""
+
+    fingerprint: str
+    node_id: str | None
+    node_name: str | None = None
+    before: str
+    after: str
+    removed: list[str]
+    applyable: bool
+    reason: str | None = None
+    node_hash: str
+    finding_type: str
+
+
+class ApplyConfirmIn(BaseModel):
+    """``POST /v1/analyze/queue/{fingerprint}/apply`` body -- the
+    ``node_hash`` the caller got from the preview. The apply refuses (409)
+    if it no longer matches the live node body."""
+
+    node_hash: str
+
+
+class ApplyResultOut(BaseModel):
+    """``POST .../apply`` 200 body. The finding is now ``resolved``."""
+
+    applied: bool
+    fingerprint: str
+    node_id: str | None
+    removed: list[str]
+    status: str
