@@ -1,46 +1,11 @@
 {
   "name": "mnemo",
-  "version": "5.23.0",
+  "version": "5.24.0",
   "description": "Local-first knowledge memory + code intelligence for Claude Code: aggregate memory and source across projects into a typed graph, retrieve via hybrid Graph-RAG with budget-capped context injected every session, chat through an agentic companion (Mnem), and explore the whole graph as a custom WebGL galaxy.",
-  "author": "mnemo contributors",
+  "author": { "name": "mnemo contributors" },
   "license": "MIT",
   "homepage": "https://github.com/mmct-jsc/mnemo",
-  "skills": "skills/",
-  "commands": "commands/",
-  "hooks": {
-    "SessionStart": [
-      {
-        "command": "hooks/session-start.sh",
-        "platforms": ["linux", "darwin"]
-      },
-      {
-        "command": "hooks/session-start.ps1",
-        "platforms": ["win32"]
-      }
-    ],
-    "UserPromptSubmit": [
-      {
-        "command": "hooks/user-prompt-submit.sh",
-        "platforms": ["linux", "darwin"]
-      },
-      {
-        "command": "hooks/user-prompt-submit.ps1",
-        "platforms": ["win32"]
-      }
-    ],
-    "PostToolUse": [
-      {
-        "matcher": "Edit|Write",
-        "command": "hooks/post-tool-use.sh",
-        "platforms": ["linux", "darwin"]
-      },
-      {
-        "matcher": "Edit|Write",
-        "command": "hooks/post-tool-use.ps1",
-        "platforms": ["win32"]
-      }
-    ]
-  },
+  "keywords": ["memory", "graph-rag", "knowledge", "claude-code", "mcp", "code-intelligence"],
   "config": {
     "daemon_url": "http://127.0.0.1:7373",
     "default_budget_tokens": 800,

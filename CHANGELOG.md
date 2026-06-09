@@ -2,6 +2,45 @@
 
 All notable changes to mnemo are documented here.
 
+## [5.24.0] - 2026-06-09
+
+**Install & register -- make mnemo a real, discoverable Claude Code plugin.**
+
+mnemo shipped 20+ green releases yet stayed invisible: no slash commands, no
+hook output, "nothing related to mnemo." Root cause: mnemo was never a
+*registered* Claude Code plugin -- it shipped no marketplace manifest, its
+`plugin.json` used a fictional `platforms` hook key + a flat shape Claude Code
+does not understand (so the hooks would never fire even if loaded), and the
+installer only symlinked the repo into `~/.claude/plugins/` -- which modern,
+marketplace-driven Claude Code ignores. This release makes mnemo actually
+install + register, verified against the live Claude Code plugin contract.
+
+- **`marketplace.json`.** New `.claude-plugin/marketplace.json` (single-repo,
+  `source: "./"`) so `/plugin marketplace add mmct-jsc/mnemo` then
+  `/plugin install mnemo@mnemo` registers the plugin the supported way --
+  surfacing the 11 `/mnemo-*` commands + the hooks + skills.
+- **Fixed `plugin.json`.** Dropped the invalid bare-string `commands`/`skills`
+  path keys (both auto-discovered) and the fictional `platforms` hook key;
+  hooks now reference the canonical `./hooks/hooks.json`.
+- **Cross-platform hooks via `mnemo hook <event>`.** The 6 `.sh`/`.ps1` hook
+  scripts are replaced by one CLI group (`mnemo hook session-start` /
+  `user-prompt-submit` / `post-tool-use`) wired from `hooks/hooks.json` in the
+  real nested CC schema. No `platforms` selector, no `python3`-on-PATH
+  dependency, and the logic is now unit-tested Python. Each hook fails open.
+- **`mnemo doctor`.** A loud end-to-end verifier: PATH, index, plugin
+  registration (the link that was silently broken), daemon, MCP -- an
+  `[ok]`/`[FAIL]`/`[?]` checklist with a concrete fix per problem; exits
+  nonzero if a required link is broken. Replaces the old silent fail-open.
+- **AI-executable install.** New `mnemo-setup` skill walks an agent through the
+  whole chain (engine -> MCP registration -> the `/plugin` commands -> doctor).
+- **Rewritten installers.** `install.sh` / `install.ps1` drop the obsolete
+  symlink step; they register the `mnemo mcp` server (`claude mcp add`), print
+  the two `/plugin` commands, and point at `mnemo doctor`.
+
+MCP stays registered separately (not bundled in the plugin): bundling would
+rename the tools `mcp__plugin_mnemo_*` and mnemo's Python venv cannot live in
+the git-copied plugin cache. The 29-tool MCP surface is unchanged.
+
 ## [5.23.0] - 2026-06-01
 
 **Phase 4b: confirm-then-apply -- the first node mutation.**
