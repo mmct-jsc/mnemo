@@ -2,6 +2,36 @@
 
 All notable changes to mnemo are documented here.
 
+## [5.23.0] - 2026-06-01
+
+**Phase 4b: confirm-then-apply -- the first node mutation.**
+
+The auditor can now FIX a finding, not just surface it. v5.23.0 adds a
+deterministic, hard-gated apply for `orphan_reference` findings: it removes
+the dead `[mnemo:<id>]` citation token(s) from the node body. No LLM. Every
+apply is previewed + confirmed; nothing is bulk-applied.
+
+- **Deterministic orphan-fix.** Strips only the dead, **id-shaped** (32-hex)
+  citation targets, leaving valid citations + all other text. Documentation
+  placeholders (`[mnemo:<id>]`, `[mnemo:node_id]`) are **refused** -- a
+  finding is applyable only when it cites a real, currently-missing node id.
+- **Preview -> confirm handshake.** `POST /v1/analyze/queue/{fp}/apply/preview`
+  (read-only) returns the before/after + the removed tokens + a `node_hash`
+  body fingerprint. `POST .../apply` requires that `node_hash` back and
+  re-verifies the live body still matches (**409** if it drifted), then edits
+  the body + marks the finding `resolved`. 404 unknown / 422 not-applyable.
+- **New MCP tool `mnemo_apply_finding`** (`risk=confirm`; **28 -> 29**): call
+  without `confirm_node_hash` to preview, with it to apply. The host's
+  confirm-prompt is the second gate.
+- **UI.** `/analyze` orphan rows get an **Apply** button -> a modal shows the
+  before/after diff + the exact removed tokens -> **Confirm** applies. One
+  finding at a time, no bulk apply.
+
+Anti-goals held: no silent edits (preview + node-hash confirm + a risk=confirm
+tool); no LLM; orphan_reference + id-shaped targets only. Additive: +1 module
+(`apply.py`), +2 endpoints, +1 tool, +UI; the 28 prior tools + the read-only
+queue stay byte-stable.
+
 ## [5.22.0] - 2026-05-31
 
 **Phase 4a: the proactive audit queue (read-only).**

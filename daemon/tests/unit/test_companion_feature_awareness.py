@@ -24,6 +24,12 @@ def test_prompt_mentions_audit_queue() -> None:
     )
 
 
+def test_prompt_mentions_apply_finding() -> None:
+    assert "mnemo_apply_finding" in DEFAULT_SYSTEM, (
+        "Mnem must know about confirm-then-apply (mnemo_apply_finding)"
+    )
+
+
 def test_prompt_enumerates_core_tool_families() -> None:
     # One representative tool per capability area.
     for tool in (

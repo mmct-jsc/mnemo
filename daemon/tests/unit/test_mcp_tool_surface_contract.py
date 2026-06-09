@@ -21,12 +21,13 @@ snapshot) is built on top of it.
 
 from mnemo.agent_tools import TOOLS
 
-# Snapshot of the published MCP tool surface as of 2026-05-31
-# (post-v5.22.0). Counts: 11 safe + 13 confirm + 4 danger = 28.
+# Snapshot of the published MCP tool surface as of 2026-06-01
+# (post-v5.23.0). Counts: 11 safe + 14 confirm + 4 danger = 29.
 # v5.12.0 added ``mnemo_analyze`` (safe) for the knowledge auditor;
 # v5.22.0 added ``mnemo_audit_queue`` (safe, read-only) for the Phase 4a
-# proactive audit queue; the 26-tool surface from v4.6.5+ is preserved
-# byte-stable.
+# proactive audit queue; v5.23.0 added ``mnemo_apply_finding`` (confirm)
+# for the Phase 4b confirm-then-apply (the first node mutation); the
+# 26-tool surface from v4.6.5+ is preserved byte-stable.
 EXPECTED_TOOLS: frozenset[str] = frozenset(
     {
         # --- safe reads (Phase 1 substrate-hardening surface) -----------
@@ -44,6 +45,7 @@ EXPECTED_TOOLS: frozenset[str] = frozenset(
         # --- confirm (recoverable mutations + UI directives + skill load)
         "mnemo_create_node",
         "mnemo_update_node",
+        "mnemo_apply_finding",  # v5.23.0: confirm-then-apply (Phase 4b, first mutation)
         "mnemo_thumbs_feedback",
         "mnemo_add_source",
         "mnemo_reindex_source",

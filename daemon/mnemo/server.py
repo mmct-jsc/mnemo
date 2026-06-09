@@ -54,6 +54,9 @@ from mnemo.api_schemas import (
     AnalyzeIn,
     AnalyzeOut,
     AnalyzeQueueOut,
+    ApplyConfirmIn,
+    ApplyPreviewOut,
+    ApplyResultOut,
     ChatBookmarkIn,
     ChatBookmarkOut,
     ChatCreateIn,
@@ -884,6 +887,42 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
         if not s.set_audit_finding_status(fingerprint, body.status):
             raise HTTPException(status_code=404, detail="unknown finding fingerprint")
         return JSONResponse({"fingerprint": fingerprint, "status": body.status})
+
+    @v1.post("/analyze/queue/{fingerprint}/apply/preview", response_model=ApplyPreviewOut)
+    def analyze_queue_apply_preview_route(
+        fingerprint: str, s: Store = Depends(get_store)
+    ) -> ApplyPreviewOut:
+        """v5.23.0 Phase 4b: READ-ONLY preview of the deterministic
+        orphan-fix for one queued finding -- the before/after body + the
+        exact removed `[mnemo:<id>]` tokens + the `node_hash` confirm token.
+        Mutates nothing. 404 if the fingerprint is unknown."""
+        from mnemo import apply
+
+        try:
+            pv = apply.preview_orphan_fix(s, fingerprint)
+        except apply.FindingNotFoundError:
+            raise HTTPException(status_code=404, detail="unknown finding fingerprint") from None
+        return ApplyPreviewOut(**pv)
+
+    @v1.post("/analyze/queue/{fingerprint}/apply", response_model=ApplyResultOut)
+    def analyze_queue_apply_route(
+        fingerprint: str, body: ApplyConfirmIn, s: Store = Depends(get_store)
+    ) -> ApplyResultOut:
+        """v5.23.0 Phase 4b: APPLY the orphan-fix after preview+confirm --
+        the FIRST node mutation. Strips the dead citation token(s) from the
+        node body + marks the finding resolved, ONLY when `node_hash` still
+        matches the live body. 404 unknown / 422 not-applyable / 409 stale."""
+        from mnemo import apply
+
+        try:
+            res = apply.apply_orphan_fix(s, fingerprint, body.node_hash)
+        except apply.FindingNotFoundError:
+            raise HTTPException(status_code=404, detail="unknown finding fingerprint") from None
+        except apply.NotApplyableError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from None
+        except apply.StalePreviewError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from None
+        return ApplyResultOut(**res)
 
     # --- v2.6 phase 4 + 5: dual-source proposal + workspaces --------------
 
