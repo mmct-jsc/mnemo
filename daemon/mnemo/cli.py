@@ -841,7 +841,8 @@ def hook_post_tool_use() -> None:
 # v5.25.0 (workstream B): a one-line presence cue for the Claude Code status
 # bar, wired into the user's settings.json by the installer. Reads CC's
 # status JSON from stdin and prints `mnemo <count>` / `mnemo offline`. Never
-# opens the store; hard ~250ms daemon probe so it can never hang the bar.
+# opens the store; short daemon probe that returns as soon as the daemon
+# answers, and the bar reruns per-message, so it never blocks input.
 
 
 @app.command()

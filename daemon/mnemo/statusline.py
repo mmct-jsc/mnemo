@@ -78,9 +78,17 @@ def ensure_statusline(settings: dict) -> tuple[dict, str]:
     return settings, "exists_other"
 
 
-def probe_health(timeout: float = 0.25, port: int = DEFAULT_PORT) -> dict | None:
-    """GET /v1/health with a hard timeout. Returns parsed JSON or None.
-    Never opens the store; never raises."""
+def probe_health(timeout: float = 2.0, port: int = DEFAULT_PORT) -> dict | None:
+    """GET /v1/health with a short timeout. Returns parsed JSON or None.
+    Never opens the store; never raises.
+
+    NB: 2.0s, not 250ms. Live verify showed /v1/health on a large warm
+    corpus under concurrent load can exceed 250ms, so a tight timeout
+    rendered "mnemo offline" against a HEALTHY daemon. urlopen returns as
+    soon as the daemon answers, and the status bar reruns per assistant
+    message (not per frame), so a higher ceiling only lengthens the rare
+    daemon-down case before it shows "offline". (A cached count + a raw
+    socket-connect liveness probe could make this instant; deferred.)"""
     try:
         url = f"http://127.0.0.1:{port}/v1/health"
         with urllib.request.urlopen(url, timeout=timeout) as resp:
