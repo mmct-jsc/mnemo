@@ -172,21 +172,25 @@ def _read_stdin_json() -> dict | None:
     return data if isinstance(data, dict) else None
 
 
-def _daemon_query(prompt: str, *, k: int = 5, budget_tokens: int = 800) -> dict | None:
+def _daemon_query(
+    prompt: str, *, k: int = 5, budget_tokens: int = 800, cwd: str | None = None
+) -> dict | None:
     """POST /v1/query to the local daemon (warm model, loopback-exempt auth).
 
     Returns the parsed QueryOut dict, or None on ANY failure so the caller
     falls back to the in-process path. The daemon answers in ~100ms; the
     in-process fallback loads the embedder per spawn, which live profiling
-    showed costing up to ~50s under HuggingFace rate limits."""
+    showed costing up to ~50s under HuggingFace rate limits. ``cwd`` lets
+    the server auto-scope the query to the caller's project (v5.26.0)."""
     import urllib.request
 
+    payload: dict[str, object] = {"prompt": prompt, "k": k, "budget_tokens": budget_tokens}
+    if cwd:
+        payload["cwd"] = cwd
     try:
         req = urllib.request.Request(
             f"http://127.0.0.1:{daemon.DEFAULT_PORT}/v1/query",
-            data=json.dumps({"prompt": prompt, "k": k, "budget_tokens": budget_tokens}).encode(
-                "utf-8"
-            ),
+            data=json.dumps(payload).encode("utf-8"),
             headers={"Content-Type": "application/json"},
             method="POST",
         )
@@ -288,6 +292,14 @@ def query(
     budget: int = typer.Option(800, "--budget", help="Token budget"),
     json_out: bool = typer.Option(False, "--json", help="Emit JSON instead of human text"),
     project: str | None = typer.Option(None, "--project", help="Active project key"),
+    auto_scope: bool = typer.Option(
+        True,
+        "--auto-scope/--no-auto-scope",
+        help=(
+            "Scope the query to the current directory's project when it is "
+            "indexed (v5.26.0 default). --project always wins."
+        ),
+    ),
     exclude_local_only: bool = typer.Option(
         False,
         "--exclude-local-only",
@@ -301,10 +313,18 @@ def query(
     ),
 ) -> None:
     """One-shot retrieval. Hooks call this to fetch context."""
+    import os
+
     from mnemo import retrieve
 
     store = _open_store()
     try:
+        # v5.26.0: auto-scope to the cwd's project unless an explicit
+        # --project was given or --no-auto-scope opts out. The has-nodes
+        # guard inside resolve_auto_scope keeps unindexed dirs unscoped.
+        active = project
+        if active is None and auto_scope:
+            active, _indexed = retrieve.resolve_auto_scope(store, os.getcwd())
         embedder = Embedder()
         result = retrieve.query(
             store,
@@ -312,7 +332,7 @@ def query(
             prompt,
             k=k,
             budget_tokens=budget,
-            active_project=project,
+            active_project=active,
             exclude_local_only=exclude_local_only,
         )
         if json_out:
@@ -918,7 +938,15 @@ def hook_user_prompt_submit() -> None:
     if not prompt:
         return
 
-    payload = _daemon_query(prompt)
+    # v5.26.0: auto-scope to the caller's project. CC sends cwd in the hook
+    # payload (and spawns hooks in the project dir, so os.getcwd() is the
+    # faithful fallback). The daemon (or the in-process fallback below)
+    # applies the has-nodes guard.
+    import os
+
+    cwd = str(data.get("cwd") or os.getcwd())
+
+    payload = _daemon_query(prompt, cwd=cwd)
     if payload is not None:
         rows = [
             {
@@ -939,7 +967,10 @@ def hook_user_prompt_submit() -> None:
         try:
             from mnemo import retrieve
 
-            result = retrieve.query(store, Embedder(), prompt, k=5, budget_tokens=800)
+            scope_key, _indexed = retrieve.resolve_auto_scope(store, cwd)
+            result = retrieve.query(
+                store, Embedder(), prompt, k=5, budget_tokens=800, active_project=scope_key
+            )
         except Exception:
             return
         finally:

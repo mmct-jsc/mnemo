@@ -68,6 +68,28 @@ class RetrievalResult:
     local_only_excluded: int = 0
 
 
+def resolve_auto_scope(store: Store, cwd: str | None) -> tuple[str | None, bool]:
+    """Derive the active project from the caller's cwd (v5.26.0 leak fix).
+
+    Returns ``(project_key_to_use, is_indexed)``. The key is applied ONLY
+    when that project actually has nodes -- strict isolation would
+    otherwise filter a fresh, unindexed project's queries to zero. An
+    unindexed cwd returns ``(None, False)`` so callers can keep the query
+    unscoped AND surface the "this project is not indexed -- want to index
+    it?" offer. Strict isolation has existed since v1.2; the cross-project
+    leak was that no production caller passed ``active_project``."""
+    from mnemo import paths
+
+    if not cwd:
+        return None, False
+    key = paths.resolve_project_key(cwd)
+    try:
+        owned = sum(store.count_nodes(project_key=key, include_base=False).values())
+    except Exception:
+        return None, False
+    return (key, True) if owned > 0 else (None, False)
+
+
 def query(
     store: Store,
     embedder: Embedder,

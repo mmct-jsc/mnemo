@@ -274,6 +274,16 @@ def _resolve_query_project(store: Store, body: object) -> str | None:
     legacy_field = getattr(body, "active_project", None)
     if legacy_field:
         return legacy_field
+    # v5.26.0: request-level cwd auto-scope (the cross-project leak fix).
+    # A request that carries the caller's cwd is a stronger, per-request
+    # signal than the daemon-global active workspace -- but it never beats
+    # an explicit key, and it only applies when that project has nodes
+    # (resolve_auto_scope's guard).
+    cwd = getattr(body, "cwd", None)
+    if cwd:
+        key, _indexed = retrieve.resolve_auto_scope(store, cwd)
+        if key is not None:
+            return key
     ws = workspaces.get_active_workspace(store)
     if ws is not None and ws.project_keys:
         return ws.project_keys[0]
