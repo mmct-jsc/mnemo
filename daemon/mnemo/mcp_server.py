@@ -58,12 +58,24 @@ def call_tool(name: str, arguments: dict, ctx: ToolContext) -> dict:
 
 
 def make_context() -> ToolContext:
-    """Production context: the daemon's own SQLite store + embedder."""
+    """Production context: the daemon's own SQLite store + embedder.
+
+    v5.26.0: hosts spawn stdio MCP servers in the project directory --
+    derive the auto-scope once per process. The has-nodes guard inside
+    resolve_auto_scope keeps unindexed dirs unscoped (and flags them so the
+    first mnemo_query notice can offer indexing)."""
+    import os
+
+    from mnemo import retrieve
     from mnemo.embed import Embedder
     from mnemo.store import Store
 
     paths.ensure_runtime_dirs()
-    return ToolContext(store=Store(paths.db_path()), embedder=Embedder())
+    store = Store(paths.db_path())
+    key, indexed = retrieve.resolve_auto_scope(store, os.getcwd())
+    return ToolContext(
+        store=store, embedder=Embedder(), auto_scope_key=key, auto_scope_indexed=indexed
+    )
 
 
 def build_server(ctx: ToolContext | None = None) -> Any:

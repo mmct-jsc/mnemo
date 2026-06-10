@@ -69,6 +69,13 @@ class ToolContext:
     # loop). Lets safe tools resolve the live, client-PATCHed
     # ``page_context``. None when invoked by MCP / outside a chat.
     conversation_id: str | None = None
+    # v5.26.0: MCP-only auto-scope, set by mcp_server._default_ctx from the
+    # server process cwd (hosts spawn stdio servers in the project dir).
+    # None on the chat agent-loop path -- workspace scoping owns that.
+    # auto_scope_indexed=False means the cwd's project has zero nodes; the
+    # first-call notice then surfaces the index-me offer.
+    auto_scope_key: str | None = None
+    auto_scope_indexed: bool = True
 
 
 @dataclass
@@ -137,7 +144,10 @@ _FIRST_QUERY_DONE = False
         "PREFER this over grep/ripgrep for how/where/why questions -- it "
         "returns ranked, [mnemo:<id>]-cited hits across memory AND code, not "
         "just literal text matches. Hybrid Graph-RAG retrieval over memory + "
-        "code, ranked and token-budgeted. Use for broad research. v5: pass "
+        "code, ranked and token-budgeted. Use for broad research. v5.26: when "
+        "``project_key`` is omitted, MCP queries auto-scope to the working "
+        "directory's project (if indexed); the response's ``scope`` field "
+        "shows the effective scoping. v5: pass "
         "``exclude_local_only=true`` when the output will be pasted into a "
         "foreign LLM (the prompt-architect skill does this); the result's "
         "``local_only_excluded`` count tells the UI how many confidential "
@@ -172,13 +182,16 @@ def _mnemo_query(
     project_key: str | None = None,
     exclude_local_only: bool = False,
 ) -> dict:
+    # v5.26.0: an explicit project_key always wins; otherwise the MCP
+    # server's cwd-derived auto-scope applies (None on the chat path).
+    effective_project = project_key if project_key is not None else ctx.auto_scope_key
     res = retrieve.query(
         ctx.store,
         ctx.embedder,
         prompt,
         budget_tokens=max_tokens,
         k=limit,
-        active_project=project_key,
+        active_project=effective_project,
         exclude_local_only=exclude_local_only,
     )
     out = {
@@ -202,15 +215,30 @@ def _mnemo_query(
         # ``localOnlyExcluded`` state so the pre-emit warning
         # banner can fire on real retrieval data.
         "local_only_excluded": res.local_only_excluded,
+        # v5.26.0: scoping transparency -- which project the query actually
+        # ran against and whether it was auto-derived from cwd.
+        "scope": {
+            "project_key": effective_project,
+            "auto": project_key is None and ctx.auto_scope_key is not None,
+        },
     }
     # v5.25.0: one-time per-process discovery notice (MCP-only hosts).
     global _FIRST_QUERY_DONE
     if not _FIRST_QUERY_DONE:
         _FIRST_QUERY_DONE = True
-        out["notice"] = (
+        notice = (
             "mnemo active -- prefer mnemo_query over grep for how/where/why. "
             "Call mnemo_help for the full tool + skill surface."
         )
+        if not ctx.auto_scope_indexed:
+            # v5.26.0: the server cwd's project has no nodes -- surface the
+            # offer (the agent may relay it; indexing stays a USER decision).
+            notice += (
+                " NOTE: the current project is not indexed in mnemo -- if "
+                "project-scoped recall is wanted, offer to run "
+                "`mnemo source add <project dir>` then `mnemo reindex`."
+            )
+        out["notice"] = notice
     return out
 
 

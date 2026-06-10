@@ -119,6 +119,104 @@ def test_hook_sends_cwd_to_daemon_query(monkeypatch: pytest.MonkeyPatch) -> None
     assert captured.get("cwd") == "D:/Repos/myproj", "the hook must forward cwd for auto-scoping"
 
 
+# --- MCP auto-scope (v5.26.0 step 3) -----------------------------------------
+
+
+class _CountStore:
+    """Minimal store stand-in for ToolContext-level tests."""
+
+    def count_nodes(self, **kw: object) -> dict:
+        return {}
+
+    def list_sources(self) -> list:
+        return []
+
+
+def test_mcp_make_context_resolves_auto_scope(monkeypatch: pytest.MonkeyPatch) -> None:
+    import mnemo.mcp_server as mcp
+
+    monkeypatch.setattr("mnemo.retrieve.resolve_auto_scope", lambda store, cwd: ("KEY1", True))
+    ctx = mcp.make_context()
+    try:
+        assert ctx.auto_scope_key == "KEY1"
+        assert ctx.auto_scope_indexed is True
+    finally:
+        ctx.store.close()
+
+
+def test_mnemo_query_uses_ctx_auto_scope_when_no_explicit_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import mnemo.agent_tools as at
+
+    seen: dict = {}
+
+    class _Res:
+        hits: list = []
+        intent_tags: list = []
+        tokens_used = 0
+        query_id = "q"
+        local_only_excluded = 0
+
+    def spy(store, embedder, prompt, **kw):  # type: ignore[no-untyped-def]
+        seen.update(kw)
+        return _Res()
+
+    monkeypatch.setattr(at.retrieve, "query", spy)
+    monkeypatch.setattr(at, "_FIRST_QUERY_DONE", True)
+    ctx = at.ToolContext(store=_CountStore(), embedder=None, auto_scope_key="PAUTO")
+    out = at.TOOLS["mnemo_query"].fn(ctx, prompt="x")
+    assert seen.get("active_project") == "PAUTO"
+    assert out["scope"] == {"project_key": "PAUTO", "auto": True}
+
+
+def test_mnemo_query_explicit_key_beats_ctx_auto_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import mnemo.agent_tools as at
+
+    seen: dict = {}
+
+    class _Res:
+        hits: list = []
+        intent_tags: list = []
+        tokens_used = 0
+        query_id = "q"
+        local_only_excluded = 0
+
+    def spy(store, embedder, prompt, **kw):  # type: ignore[no-untyped-def]
+        seen.update(kw)
+        return _Res()
+
+    monkeypatch.setattr(at.retrieve, "query", spy)
+    monkeypatch.setattr(at, "_FIRST_QUERY_DONE", True)
+    ctx = at.ToolContext(store=_CountStore(), embedder=None, auto_scope_key="PAUTO")
+    out = at.TOOLS["mnemo_query"].fn(ctx, prompt="x", project_key="EXPL")
+    assert seen.get("active_project") == "EXPL"
+    assert out["scope"] == {"project_key": "EXPL", "auto": False}
+
+
+def test_mnemo_query_first_call_notice_mentions_unindexed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import mnemo.agent_tools as at
+
+    class _Res:
+        hits: list = []
+        intent_tags: list = []
+        tokens_used = 0
+        query_id = "q"
+        local_only_excluded = 0
+
+    monkeypatch.setattr(at.retrieve, "query", lambda *a, **k: _Res())
+    monkeypatch.setattr(at, "_FIRST_QUERY_DONE", False)
+    ctx = at.ToolContext(
+        store=_CountStore(), embedder=None, auto_scope_key=None, auto_scope_indexed=False
+    )
+    out = at.TOOLS["mnemo_query"].fn(ctx, prompt="x")
+    assert "not indexed" in out.get("notice", ""), "unindexed cwd must surface the index-me offer"
+
+
 def test_hook_fallback_scopes_in_process(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Daemon down -> the in-process fallback applies resolve_auto_scope."""
     from tests.conftest import FakeEmbedder
