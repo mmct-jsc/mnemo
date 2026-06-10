@@ -878,15 +878,31 @@ def hook_session_start() -> None:
     JSON has no documented CC fallback, so a half-built object is worse
     than silence."""
     import os
+    from pathlib import Path
+
+    data = _read_stdin_json() or {}
+    cwd = str(data.get("cwd") or os.getcwd())
 
     try:
         store = _open_store()
     except Exception:
         return
+    unindexed_project = False
     try:
         total = sum(store.count_nodes().values())
         sources = len(store.list_sources())
         d = daemon.status()
+        # v5.26.0 (user spec): detect the IDE's project; when it looks like
+        # a real project (.git) but has zero indexed nodes, surface the
+        # offer to index it. NEVER auto-index -- it is a user decision.
+        try:
+            if (Path(cwd) / ".git").exists():
+                from mnemo import retrieve
+
+                _key, indexed = retrieve.resolve_auto_scope(store, cwd)
+                unindexed_project = not indexed
+        except Exception:
+            unindexed_project = False
     except Exception:
         return
     finally:
@@ -906,6 +922,13 @@ def hook_session_start() -> None:
             "prompt -- prefer it over grep for 'how/where/why' questions.",
         ]
     )
+    if unindexed_project:
+        context += (
+            "\n\nNOTE: the current project is NOT indexed in mnemo. If the "
+            "user wants project-scoped recall here, you may offer to run "
+            f"`mnemo source add {cwd}` followed by `mnemo reindex` -- ask "
+            "first; indexing is the user's decision."
+        )
     payload: dict[str, object] = {
         "hookSpecificOutput": {
             "hookEventName": "SessionStart",
@@ -915,9 +938,10 @@ def hook_session_start() -> None:
     # The user-visible one-line banner. Opt-out via MNEMO_NO_SESSION_BANNER=1
     # (the model context stays either way; presence is never spammy).
     if not os.environ.get("MNEMO_NO_SESSION_BANNER"):
-        payload["systemMessage"] = (
-            f"mnemo: {total:,} memories across {sources} source(s) -- /mnemo-query to recall"
-        )
+        banner = f"mnemo: {total:,} memories across {sources} source(s) -- /mnemo-query to recall"
+        if unindexed_project:
+            banner += f" | this project is not indexed -- run: mnemo source add {cwd}"
+        payload["systemMessage"] = banner
     typer.echo(json.dumps(payload))
 
 
