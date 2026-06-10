@@ -166,7 +166,15 @@ def query(
     # 3. Graph proximity from candidates.
     graph_scores = graph.compute_graph_scores(store, vec_scores)
 
-    # 4. Score each candidate (union of vector and graph).
+    # 3b. v5.27.0: BM25 lexical RECALL. A name-exact node that misses the
+    # vector top-40 (long prose dominates embeddings) becomes a candidate
+    # here; its rank feeds the zeta/lexical component below.
+    try:
+        bm25_ranks: dict[str, int] = dict(store.bm25_search(prompt, k=max(k * 2, 40)))
+    except Exception:
+        bm25_ranks = {}
+
+    # 4. Score each candidate (union of vector, graph, and BM25).
     # Single batched SELECT for all candidate nodes - cleaner and faster than
     # per-candidate get_node() calls.
     #
@@ -175,7 +183,8 @@ def query(
     # are neither in the active project NOR flagged BASE. Scoring still
     # boosts the project match via epsilon for ranking within the kept set.
     now = time.time()
-    candidate_ids = list(set(vec_scores) | set(graph_scores))
+    prompt_lower = prompt.lower()
+    candidate_ids = list(set(vec_scores) | set(graph_scores) | set(bm25_ranks))
     nodes_by_id = store.get_nodes_by_ids(candidate_ids)
     isolation_mode = getattr(cfg, "project_isolation_mode", "strict")
     scored: list[ScoredHit] = []
@@ -223,7 +232,13 @@ def query(
         c_recency = _recency_score(node.updated_at, now, cfg.recency_half_life_days)
         c_type = type_pri.get(node.type, 0.0)
         c_project = _project_score(node.project_key, scope)
+        # v5.27.0: RRF-style fusion folded into the existing zeta component
+        # -- the substring fraction OR the BM25 rank score (top hit ~1.0,
+        # decaying), whichever is stronger. No 7th weight; the auto-tuner
+        # contract is untouched.
         c_lexical = _lexical_score(q_tokens, node)
+        if nid in bm25_ranks:
+            c_lexical = max(c_lexical, 1.0 / (1.0 + bm25_ranks[nid]))
         s = (
             sw.alpha * c_vector
             + sw.beta * c_graph
@@ -235,6 +250,11 @@ def query(
         if out_of_scope:
             # v4.3.2: deprioritize (don't erase) cross-project matches.
             s *= getattr(cfg, "project_isolation_penalty", 0.85)
+        # v5.27.0: exact-name finisher. Asking for a thing BY NAME is the
+        # strongest intent signal retrieval gets; same multiplicative
+        # pattern as the isolation penalty.
+        if _exact_name_match(node.name, prompt_lower):
+            s *= getattr(cfg, "exact_name_boost", 1.25)
         components_by_node[nid] = {
             "vector": c_vector,
             "graph": c_graph,
@@ -363,6 +383,16 @@ def _recency_score(updated_at: int, now: float, half_life_days: float | None = N
     age_seconds = max(0.0, now - updated_at)
     age_days = age_seconds / 86400.0
     return math.exp(-age_days / half)
+
+
+def _exact_name_match(name: str, prompt: str) -> bool:
+    """True when the candidate's name appears verbatim in the prompt.
+
+    Names shorter than 4 chars are noise ('app', 'db'); the match is
+    case-insensitive substring (qualified/underscored names make token
+    splitting unreliable)."""
+    n = (name or "").strip().lower()
+    return len(n) >= 4 and n in (prompt or "").lower()
 
 
 def _project_score(node_project: str | None, scope: frozenset[str] | None) -> float:
