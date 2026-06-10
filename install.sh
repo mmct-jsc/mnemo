@@ -17,6 +17,7 @@
 # Flags:
 #   --no-init          Skip step 5.
 #   --no-mcp           Skip the `claude mcp add` registration in step 4.
+#   --no-statusline    Skip wiring the Claude Code status line (step 4b).
 #   --bin-dir=<path>   Override the install dir for the `mnemo` shim.
 
 set -euo pipefail
@@ -27,12 +28,14 @@ DEFAULT_BIN_DIR="$HOME/.local/bin"
 
 DO_INIT=1
 DO_MCP=1
+DO_STATUSLINE=1
 BIN_DIR="$DEFAULT_BIN_DIR"
 
 for arg in "$@"; do
     case "$arg" in
         --no-init) DO_INIT=0 ;;
         --no-mcp) DO_MCP=0 ;;
+        --no-statusline) DO_STATUSLINE=0 ;;
         --bin-dir=*) BIN_DIR="${arg#--bin-dir=}" ;;
         --help|-h)
             grep '^#' "$0" | sed 's/^# \?//'
@@ -134,6 +137,16 @@ if [ "$DO_MCP" -eq 1 ]; then
         warn "  claude mcp add mnemo -- mnemo mcp"
         warn "  (other hosts: see docs/integrations/)"
     fi
+fi
+
+# --- 4b. Wire the Claude Code status line (non-clobbering) ----------------
+#
+# A one-line presence cue in CC's status bar. mnemo can't OWN a status line
+# (it's a user-settings feature), so we add `mnemo statusline` to the user's
+# settings.json only when none exists -- never clobbering a custom one.
+
+if [ "$DO_STATUSLINE" -eq 1 ]; then
+    "$SHIM" statusline-setup || warn "statusline setup skipped (run 'mnemo statusline-setup' later)"
 fi
 
 # --- 5. Register default sources ------------------------------------------

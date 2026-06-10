@@ -9,6 +9,7 @@ To skip these in fast iterations: ``uv run pytest --ignore=tests/integration``.
 from __future__ import annotations
 
 import math
+import os
 from pathlib import Path
 
 import pytest
@@ -19,7 +20,12 @@ from mnemo.store import Node, Store
 
 @pytest.fixture(scope="module")
 def embedder(tmp_path_factory: pytest.TempPathFactory) -> Embedder:
-    cache = tmp_path_factory.mktemp("model-cache")
+    # Prefer the shared model cache when configured (CI caches it per
+    # runner; a warm cache loads offline via the local_files_only-first
+    # attempt). A fresh tmp dir would re-download from the Hub every run,
+    # which stalls under throttling.
+    env = os.environ.get("MNEMO_MODEL_CACHE_DIR")
+    cache = Path(env) if env else tmp_path_factory.mktemp("model-cache")
     return Embedder(cache_dir=cache)
 
 

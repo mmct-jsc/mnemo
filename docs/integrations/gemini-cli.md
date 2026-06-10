@@ -43,7 +43,7 @@ Add an `mcpServers` entry (merge with any existing servers):
 ```
 
 Then restart Gemini CLI (`gemini` in a new shell). At startup it
-discovers the new MCP server and registers mnemo's 26 tools.
+discovers the new MCP server and registers mnemo's 30 tools.
 
 ### If Gemini CLI can't find the `mnemo` command
 
@@ -70,7 +70,7 @@ direct invocation if the editable install added a `mnemo.exe` shim:
 
 In a Gemini CLI session, run the built-in `/mcp` slash command —
 it lists registered MCP servers and their tools. `mnemo` should
-appear with 26 tools (`mnemo_query`, `mnemo_get_node`,
+appear with 30 tools (`mnemo_query`, `mnemo_get_node`,
 `mnemo_traverse`, etc.).
 
 If the list shows mnemo as disconnected, Gemini CLI's startup log
@@ -110,7 +110,7 @@ tool's description) still gates writes regardless of `trust`.
 
 ## What this gives you
 
-- The full 26-tool surface from any Gemini CLI conversation.
+- The full 30-tool surface from any Gemini CLI conversation.
 - `[mnemo:<id>]` citations the Gemini model treats as opaque
   provenance markers (clickable in the mnemo UI).
 - Hybrid Graph-RAG retrieval over memory + code + commits.

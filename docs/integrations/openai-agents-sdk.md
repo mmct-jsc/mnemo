@@ -48,7 +48,7 @@ from agents.mcp import MCPServerStdio
 
 async def main() -> None:
     # The 'command' + 'args' pair is the entire integration. mnemo
-    # publishes 26 tools through this single stdio binding; the
+    # publishes 30 tools through this single stdio binding; the
     # Agent's tools list picks them all up via the standard MCP
     # tools/list handshake.
     async with MCPServerStdio(

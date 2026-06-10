@@ -96,7 +96,7 @@ answer in your typed memory + code graph, and surface the
 
 ## What this gives you
 
-- The full 26-tool surface from any Continue chat.
+- The full 30-tool surface from any Continue chat.
 - `[mnemo:<id>]` citations Continue's host LLM treats as
   opaque provenance markers (clickable in the mnemo UI).
 - Hybrid Graph-RAG retrieval over memory + code + commits.

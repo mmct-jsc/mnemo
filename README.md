@@ -97,13 +97,13 @@ The install script:
 
 1. Syncs the daemon dependencies via `uv sync` (incl. tree-sitter + 8 bundled grammars).
 2. Drops a `mnemo` shim onto your PATH (`~/.local/bin/mnemo`).
-3. Links the plugin into `~/.claude/plugins/mnemo/` so Claude Code picks up the hooks, slash commands, and skills.
+3. Registers the `mnemo mcp` server with Claude Code, wires a one-line status line (non-clobbering), and prints the two `/plugin` commands that install the plugin (commands + hooks + skills).
 
-Restart Claude Code after install; the next session sees mnemo's hooks fire automatically.
+Then, inside Claude Code, run `/plugin marketplace add mmct-jsc/mnemo` and `/plugin install mnemo@mnemo`, and restart. The `/mnemo-*` commands appear immediately; the SessionStart memory banner + per-prompt auto-injection begin next session. Run `mnemo doctor` to confirm every link is green.
 
 ## Use mnemo from any MCP-capable agent
 
-mnemo's MCP server (`mnemo mcp`, stdio) is provider-neutral — same 26-tool surface, any agent. Phase 1 of the substrate roadmap ships two flagship 5-minute mount guides:
+mnemo's MCP server (`mnemo mcp`, stdio) is provider-neutral — same 30-tool surface, any agent. Phase 1 of the substrate roadmap ships two flagship 5-minute mount guides:
 
 - **[Cursor](docs/integrations/cursor.md)** (IDE-embedded) — one block in `~/.cursor/mcp.json`, window reload, done.
 - **[OpenAI Agents SDK](docs/integrations/openai-agents-sdk.md)** (agent-loop) — Python + TypeScript snippets wiring `MCPServerStdio` directly to mnemo.

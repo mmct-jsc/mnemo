@@ -16,12 +16,14 @@
 # Flags:
 #   -NoInit          Skip step 5.
 #   -NoMcp           Skip the 'claude mcp add' registration in step 4.
+#   -NoStatusline    Skip wiring the Claude Code status line (step 4b).
 #   -BinDir <path>   Override the install dir for the 'mnemo.cmd' shim.
 
 [CmdletBinding()]
 param(
     [switch]$NoInit,
     [switch]$NoMcp,
+    [switch]$NoStatusline,
     [string]$BinDir = (Join-Path $HOME '.local\bin')
 )
 
@@ -139,6 +141,16 @@ if (-not $NoMcp) {
         Warn '  claude mcp add mnemo -- mnemo mcp'
         Warn '  (other hosts: see docs/integrations/)'
     }
+}
+
+# --- 4b. Wire the Claude Code status line (non-clobbering) ----------------
+#
+# A one-line presence cue in CC's status bar. mnemo can't OWN a status line
+# (it's a user-settings feature), so we add 'mnemo statusline' to the user's
+# settings.json only when none exists -- never clobbering a custom one.
+
+if (-not $NoStatusline) {
+    & $shim statusline-setup
 }
 
 # --- 5. Register default sources ------------------------------------------
