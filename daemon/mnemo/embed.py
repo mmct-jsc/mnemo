@@ -50,8 +50,16 @@ class Embedder:
         *,
         cache_dir: Path | None = None,
     ) -> None:
+        import os
+
         self.model_name = model_name
-        self._cache_dir = cache_dir or paths.cache_dir()
+        # Default-resolution order: explicit arg > MNEMO_MODEL_CACHE_DIR env
+        # > runtime cache dir. The env override lets CI cache the model once
+        # per runner and reuse it across jobs (the HuggingFace download path
+        # stalls under Hub throttling); combined with the local_files_only
+        # first attempt, a warm cache loads with zero network.
+        env_dir = os.environ.get("MNEMO_MODEL_CACHE_DIR")
+        self._cache_dir = cache_dir or (Path(env_dir) if env_dir else None) or paths.cache_dir()
         self._model: object | None = None
 
     def _load(self) -> object:

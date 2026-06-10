@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import textwrap
 from pathlib import Path
 
@@ -14,7 +15,10 @@ from mnemo.store import Store
 
 @pytest.fixture(scope="module")
 def embedder(tmp_path_factory: pytest.TempPathFactory) -> Embedder:
-    cache = tmp_path_factory.mktemp("model-cache")
+    # Shared model cache when configured (see test_embed_real.py) -- a warm
+    # cache loads offline; a fresh tmp dir re-downloads every run.
+    env = os.environ.get("MNEMO_MODEL_CACHE_DIR")
+    cache = Path(env) if env else tmp_path_factory.mktemp("model-cache")
     return Embedder(cache_dir=cache)
 
 
