@@ -45,24 +45,47 @@ def _store_with_project_node(tmp_path: Path, cwd: str) -> Store:
 def test_resolve_auto_scope_indexed_cwd(tmp_path: Path) -> None:
     cwd = "D:/Repos/myproj"
     store = _store_with_project_node(tmp_path, cwd)
-    key, indexed = retrieve.resolve_auto_scope(store, cwd)
+    keys, indexed = retrieve.resolve_auto_scope(store, cwd)
     assert indexed is True
-    assert key == paths.resolve_project_key(cwd)
+    assert keys == [paths.resolve_project_key(cwd)]
     store.close()
 
 
 def test_resolve_auto_scope_unindexed_cwd(tmp_path: Path) -> None:
     store = Store(tmp_path / "t.db")
-    key, indexed = retrieve.resolve_auto_scope(store, "D:/Repos/fresh-project")
-    assert key is None, "must NOT scope to a project with zero nodes"
+    keys, indexed = retrieve.resolve_auto_scope(store, "D:/Repos/fresh-project")
+    assert keys == [], "must NOT scope to a project with zero nodes"
     assert indexed is False
     store.close()
 
 
 def test_resolve_auto_scope_no_cwd(tmp_path: Path) -> None:
     store = Store(tmp_path / "t.db")
-    assert retrieve.resolve_auto_scope(store, None) == (None, False)
-    assert retrieve.resolve_auto_scope(store, "") == (None, False)
+    assert retrieve.resolve_auto_scope(store, None) == ([], False)
+    assert retrieve.resolve_auto_scope(store, "") == ([], False)
+    store.close()
+
+
+def test_resolve_auto_scope_includes_source_declared_keys(tmp_path: Path) -> None:
+    """A repo's knowledge can span MULTIPLE keys: memory under the
+    path-derived key + code under a source registered with a custom
+    project_key (mnemo itself: D--Repository-knowledge-base + mnemo-daemon).
+    The scope must be the union."""
+    cwd = "D:/Repos/myproj"
+    store = _store_with_project_node(tmp_path, cwd)  # path-derived key node
+    store.register_source(f"{cwd}/daemon", "code_repo", project_key="custom-code")
+    n = Node.new(
+        type="code_function",
+        name="cfn",
+        body="def cfn(): ...",
+        source_path=f"{cwd}/daemon/x.py",
+        source_kind="code_repo",
+    )
+    n.project_key = "custom-code"
+    store.upsert_node(n)
+    keys, indexed = retrieve.resolve_auto_scope(store, cwd)
+    assert indexed is True
+    assert set(keys) == {paths.resolve_project_key(cwd), "custom-code"}
     store.close()
 
 
@@ -81,7 +104,7 @@ def test_resolve_query_project_uses_cwd_when_indexed(tmp_path: Path) -> None:
 
     body = _Body()
     body.cwd = cwd
-    assert server._resolve_query_project(store, body) == paths.resolve_project_key(cwd)
+    assert server._resolve_query_project(store, body) == [paths.resolve_project_key(cwd)]
     store.close()
 
 
@@ -135,10 +158,10 @@ class _CountStore:
 def test_mcp_make_context_resolves_auto_scope(monkeypatch: pytest.MonkeyPatch) -> None:
     import mnemo.mcp_server as mcp
 
-    monkeypatch.setattr("mnemo.retrieve.resolve_auto_scope", lambda store, cwd: ("KEY1", True))
+    monkeypatch.setattr("mnemo.retrieve.resolve_auto_scope", lambda store, cwd: (["KEY1"], True))
     ctx = mcp.make_context()
     try:
-        assert ctx.auto_scope_key == "KEY1"
+        assert ctx.auto_scope_keys == ("KEY1",)
         assert ctx.auto_scope_indexed is True
     finally:
         ctx.store.close()
@@ -164,10 +187,10 @@ def test_mnemo_query_uses_ctx_auto_scope_when_no_explicit_key(
 
     monkeypatch.setattr(at.retrieve, "query", spy)
     monkeypatch.setattr(at, "_FIRST_QUERY_DONE", True)
-    ctx = at.ToolContext(store=_CountStore(), embedder=None, auto_scope_key="PAUTO")
+    ctx = at.ToolContext(store=_CountStore(), embedder=None, auto_scope_keys=("PAUTO", "P2"))
     out = at.TOOLS["mnemo_query"].fn(ctx, prompt="x")
-    assert seen.get("active_project") == "PAUTO"
-    assert out["scope"] == {"project_key": "PAUTO", "auto": True}
+    assert seen.get("active_projects") == ["PAUTO", "P2"]
+    assert out["scope"] == {"project_keys": ["PAUTO", "P2"], "auto": True}
 
 
 def test_mnemo_query_explicit_key_beats_ctx_auto_scope(
@@ -190,10 +213,10 @@ def test_mnemo_query_explicit_key_beats_ctx_auto_scope(
 
     monkeypatch.setattr(at.retrieve, "query", spy)
     monkeypatch.setattr(at, "_FIRST_QUERY_DONE", True)
-    ctx = at.ToolContext(store=_CountStore(), embedder=None, auto_scope_key="PAUTO")
+    ctx = at.ToolContext(store=_CountStore(), embedder=None, auto_scope_keys=("PAUTO",))
     out = at.TOOLS["mnemo_query"].fn(ctx, prompt="x", project_key="EXPL")
     assert seen.get("active_project") == "EXPL"
-    assert out["scope"] == {"project_key": "EXPL", "auto": False}
+    assert out["scope"] == {"project_keys": ["EXPL"], "auto": False}
 
 
 def test_mnemo_query_first_call_notice_mentions_unindexed(
@@ -211,7 +234,7 @@ def test_mnemo_query_first_call_notice_mentions_unindexed(
     monkeypatch.setattr(at.retrieve, "query", lambda *a, **k: _Res())
     monkeypatch.setattr(at, "_FIRST_QUERY_DONE", False)
     ctx = at.ToolContext(
-        store=_CountStore(), embedder=None, auto_scope_key=None, auto_scope_indexed=False
+        store=_CountStore(), embedder=None, auto_scope_keys=(), auto_scope_indexed=False
     )
     out = at.TOOLS["mnemo_query"].fn(ctx, prompt="x")
     assert "not indexed" in out.get("notice", ""), "unindexed cwd must surface the index-me offer"
@@ -223,7 +246,7 @@ def test_hook_fallback_scopes_in_process(monkeypatch: pytest.MonkeyPatch, tmp_pa
 
     monkeypatch.setattr("mnemo.cli._daemon_query", lambda *a, **k: None)
     monkeypatch.setattr("mnemo.cli.Embedder", lambda *a, **kw: FakeEmbedder())
-    monkeypatch.setattr("mnemo.retrieve.resolve_auto_scope", lambda store, cwd: ("PX", True))
+    monkeypatch.setattr("mnemo.retrieve.resolve_auto_scope", lambda store, cwd: (["PX"], True))
 
     seen: dict = {}
     real_query = retrieve.query
@@ -237,4 +260,4 @@ def test_hook_fallback_scopes_in_process(monkeypatch: pytest.MonkeyPatch, tmp_pa
     payload = json.dumps({"prompt": "where is x", "cwd": "D:/Repos/myproj"})
     result = runner.invoke(app, ["hook", "user-prompt-submit"], input=payload)
     assert result.exit_code == 0
-    assert seen.get("active_project") == "PX"
+    assert seen.get("active_projects") == ["PX"]

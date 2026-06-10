@@ -69,12 +69,14 @@ class ToolContext:
     # loop). Lets safe tools resolve the live, client-PATCHed
     # ``page_context``. None when invoked by MCP / outside a chat.
     conversation_id: str | None = None
-    # v5.26.0: MCP-only auto-scope, set by mcp_server._default_ctx from the
-    # server process cwd (hosts spawn stdio servers in the project dir).
-    # None on the chat agent-loop path -- workspace scoping owns that.
+    # v5.26.0: MCP-only auto-scope, set by mcp_server.make_context from the
+    # server process cwd (hosts spawn stdio servers in the project dir). A
+    # repo's knowledge can span multiple keys (memory under the path-derived
+    # key, code under a source-declared one) -- hence a key TUPLE. Empty on
+    # the chat agent-loop path (workspace scoping owns that).
     # auto_scope_indexed=False means the cwd's project has zero nodes; the
     # first-call notice then surfaces the index-me offer.
-    auto_scope_key: str | None = None
+    auto_scope_keys: tuple[str, ...] = ()
     auto_scope_indexed: bool = True
 
 
@@ -183,16 +185,28 @@ def _mnemo_query(
     exclude_local_only: bool = False,
 ) -> dict:
     # v5.26.0: an explicit project_key always wins; otherwise the MCP
-    # server's cwd-derived auto-scope applies (None on the chat path).
-    effective_project = project_key if project_key is not None else ctx.auto_scope_key
+    # server's cwd-derived auto-scope key SET applies (empty on the chat
+    # path -- workspace scoping owns that).
+    if project_key is not None:
+        scope_keys = [project_key]
+        scope_auto = False
+        scope_kwargs: dict = {"active_project": project_key}
+    elif ctx.auto_scope_keys:
+        scope_keys = list(ctx.auto_scope_keys)
+        scope_auto = True
+        scope_kwargs = {"active_projects": scope_keys}
+    else:
+        scope_keys = []
+        scope_auto = False
+        scope_kwargs = {"active_project": None}
     res = retrieve.query(
         ctx.store,
         ctx.embedder,
         prompt,
         budget_tokens=max_tokens,
         k=limit,
-        active_project=effective_project,
         exclude_local_only=exclude_local_only,
+        **scope_kwargs,
     )
     out = {
         "hits": [
@@ -215,11 +229,11 @@ def _mnemo_query(
         # ``localOnlyExcluded`` state so the pre-emit warning
         # banner can fire on real retrieval data.
         "local_only_excluded": res.local_only_excluded,
-        # v5.26.0: scoping transparency -- which project the query actually
-        # ran against and whether it was auto-derived from cwd.
+        # v5.26.0: scoping transparency -- which project keys the query
+        # actually ran against and whether they were auto-derived from cwd.
         "scope": {
-            "project_key": effective_project,
-            "auto": project_key is None and ctx.auto_scope_key is not None,
+            "project_keys": scope_keys,
+            "auto": scope_auto,
         },
     }
     # v5.25.0: one-time per-process discovery notice (MCP-only hosts).

@@ -72,9 +72,12 @@ def make_context() -> ToolContext:
 
     paths.ensure_runtime_dirs()
     store = Store(paths.db_path())
-    key, indexed = retrieve.resolve_auto_scope(store, os.getcwd())
+    keys, indexed = retrieve.resolve_auto_scope(store, os.getcwd())
     return ToolContext(
-        store=store, embedder=Embedder(), auto_scope_key=key, auto_scope_indexed=indexed
+        store=store,
+        embedder=Embedder(),
+        auto_scope_keys=tuple(keys),
+        auto_scope_indexed=indexed,
     )
 
 

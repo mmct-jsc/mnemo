@@ -78,6 +78,29 @@ def test_eval_fixture_is_valid_json_with_notes() -> None:
     assert all("prompt" in r and "expect_source_contains" in r for r in raw)
 
 
+# --- mnemo eval CLI ----------------------------------------------------------
+
+
+def test_eval_cli_prints_baseline_report(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`mnemo eval` runs the SELF set (daemon-first) and prints hit@k/MRR."""
+    from typer.testing import CliRunner
+
+    from mnemo.cli import app
+
+    def fake_daemon_query(prompt: str, **kw: object) -> dict:
+        return {"hits": [{"source_path": "daemon/mnemo/statusline.py:1-9"}], "intent_tags": []}
+
+    monkeypatch.setattr("mnemo.cli._daemon_query", fake_daemon_query)
+    result = CliRunner().invoke(app, ["eval"])
+    assert result.exit_code == 0, result.stdout
+    assert "n=14" in result.stdout, "must run every SELF entry"
+    assert "hit@5=" in result.stdout
+    assert "mrr=" in result.stdout
+    # the statusline entry is satisfied by the canned hit; misses are listed
+    assert "[hit]" in result.stdout
+    assert "[miss]" in result.stdout
+
+
 # --- seeded harness run (FakeEmbedder; structural, no model) ----------------
 
 

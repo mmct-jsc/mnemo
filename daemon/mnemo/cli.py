@@ -319,12 +319,13 @@ def query(
 
     store = _open_store()
     try:
-        # v5.26.0: auto-scope to the cwd's project unless an explicit
+        # v5.26.0: auto-scope to the cwd's project keys unless an explicit
         # --project was given or --no-auto-scope opts out. The has-nodes
         # guard inside resolve_auto_scope keeps unindexed dirs unscoped.
-        active = project
-        if active is None and auto_scope:
-            active, _indexed = retrieve.resolve_auto_scope(store, os.getcwd())
+        scope_kwargs: dict = {"active_project": project}
+        if project is None and auto_scope:
+            keys, _indexed = retrieve.resolve_auto_scope(store, os.getcwd())
+            scope_kwargs = {"active_projects": keys or None}
         embedder = Embedder()
         result = retrieve.query(
             store,
@@ -332,8 +333,8 @@ def query(
             prompt,
             k=k,
             budget_tokens=budget,
-            active_project=active,
             exclude_local_only=exclude_local_only,
+            **scope_kwargs,
         )
         if json_out:
             typer.echo(
@@ -899,7 +900,7 @@ def hook_session_start() -> None:
             if (Path(cwd) / ".git").exists():
                 from mnemo import retrieve
 
-                _key, indexed = retrieve.resolve_auto_scope(store, cwd)
+                _keys, indexed = retrieve.resolve_auto_scope(store, cwd)
                 unindexed_project = not indexed
         except Exception:
             unindexed_project = False
@@ -991,9 +992,14 @@ def hook_user_prompt_submit() -> None:
         try:
             from mnemo import retrieve
 
-            scope_key, _indexed = retrieve.resolve_auto_scope(store, cwd)
+            scope_keys, _indexed = retrieve.resolve_auto_scope(store, cwd)
             result = retrieve.query(
-                store, Embedder(), prompt, k=5, budget_tokens=800, active_project=scope_key
+                store,
+                Embedder(),
+                prompt,
+                k=5,
+                budget_tokens=800,
+                active_projects=scope_keys or None,
             )
         except Exception:
             return
@@ -1098,6 +1104,59 @@ def statusline_setup(
             f"[warn] a different statusLine is set in {path}; leaving it. To use "
             f'mnemo, set statusLine.command to "{statusline_mod.STATUSLINE_COMMAND}".'
         )
+
+
+# --- mnemo eval (v5.26.0): the retrieval precision instrument --------------
+
+
+@app.command("eval")
+def eval_cmd(
+    set_path: str = typer.Option(
+        "", "--set", help="Path to a labelled eval-set JSON (defaults to the shipped SELF set)."
+    ),
+    k: int = typer.Option(5, "--k", help="Rank cutoff for hit@k."),
+) -> None:
+    """Run the retrieval precision eval (hit@k / MRR) against the live store.
+
+    A report instrument, not a gate: prints per-query hits/misses + the
+    aggregate baseline that v5.27.0's exactness work must beat. Queries go
+    daemon-first (warm model) with the in-process fallback, auto-scoped to
+    the current directory exactly like the production hook path."""
+    import os
+    from pathlib import Path
+
+    from mnemo import eval_retrieval as ev
+
+    fixture = (
+        Path(set_path)
+        if set_path
+        else Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "retrieval_eval.json"
+    )
+    entries = ev.load_eval_set(fixture)
+    cwd = os.getcwd()
+
+    def _query(e: ev.EvalEntry) -> list[str]:
+        payload = _daemon_query(e.prompt, k=k, cwd=(e.project_key or cwd))
+        if payload is not None:
+            return [str(h.get("source_path") or "") for h in payload.get("hits", [])]
+        # Daemon down: in-process fallback (slow path; loads the embedder).
+        from mnemo import retrieve
+
+        store = _open_store()
+        try:
+            if e.project_key is not None:
+                kwargs: dict = {"active_project": e.project_key}
+            else:
+                keys, _idx = retrieve.resolve_auto_scope(store, cwd)
+                kwargs = {"active_projects": keys or None}
+            res = retrieve.query(store, Embedder(), e.prompt, k=k, **kwargs)
+            return [h.source_path or "" for h in res.hits]
+        finally:
+            store.close()
+
+    rows = ev.run_entries(entries, query_fn=_query, k=k)
+    agg = ev.aggregate(rows)
+    typer.echo(ev.format_report(rows, agg))
 
 
 # --- mnemo key {create,list,revoke} (Phase 3 / Task 2.2) ------------------
