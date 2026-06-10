@@ -46,7 +46,7 @@ Paste this entry (merge with any existing servers):
 
 Then refresh Cascade: **Cmd/Ctrl+Shift+P → "Windsurf: Refresh MCP
 Servers"** (or restart the IDE). Cascade's tool panel should now
-show `mnemo` as a connected server with all 26 tools listed.
+show `mnemo` as a connected server with all 30 tools listed.
 
 ### If Windsurf can't find the `mnemo` command
 
@@ -72,7 +72,7 @@ On Windows: `%USERPROFILE%\.local\bin\mnemo.exe`.
 Open Cascade's chat panel and check the tool list (hammer icon).
 You should see entries grouped under `mnemo`, including
 `mnemo_query`, `mnemo_get_node`, `mnemo_traverse`, and the
-rest of the 26-tool surface.
+rest of the 30-tool surface.
 
 If the list is missing or shows mnemo as disconnected, open
 **Windsurf → Help → Open Logs** — Cascade prints the stderr from
@@ -90,7 +90,7 @@ citations that link back to specific nodes in the local mnemo UI.
 
 ## What this gives you
 
-- The full 26-tool surface from any Cascade chat.
+- The full 30-tool surface from any Cascade chat.
 - `[mnemo:<node_id>]` citations Cascade's host LLM treats as
   opaque provenance markers (clickable in the mnemo UI).
 - Hybrid Graph-RAG retrieval over memory + code + commits.

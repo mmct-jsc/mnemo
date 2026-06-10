@@ -115,6 +115,26 @@ def check_plugin_registered(claude_home: Path) -> CheckResult:
     )
 
 
+def check_statusline(settings_path: Path) -> CheckResult:
+    """Advisory (v5.25.0): is mnemo's statusline wired into Claude Code
+    settings.json? An optional presence cue, so 'not configured' renders as
+    [?] (not [FAIL]) and never affects the exit code."""
+    from mnemo.statusline import statusline_is_mnemo
+
+    try:
+        data = json.loads(settings_path.read_text(encoding="utf-8"))
+    except Exception:
+        data = {}
+    ok = statusline_is_mnemo(data) if isinstance(data, dict) else False
+    return CheckResult(
+        name="statusline (Claude Code)",
+        ok=True if ok else None,
+        detail="mnemo statusline configured" if ok else "not configured (optional presence cue)",
+        hint="mnemo statusline-setup",
+        required=False,
+    )
+
+
 def _has_mnemo_enabled(settings_path: Path) -> bool:
     try:
         data = json.loads(settings_path.read_text(encoding="utf-8"))
@@ -188,6 +208,7 @@ def gather() -> list[CheckResult]:
         check_mnemo_on_path(),
         check_index(_node_count()),
         check_plugin_registered(paths.claude_home()),
+        check_statusline(paths.claude_home() / "settings.json"),
         check_daemon(probe=_default_daemon_probe),
         check_mcp_registered(_default_mcp_list()),
     ]

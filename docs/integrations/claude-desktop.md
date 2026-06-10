@@ -75,7 +75,7 @@ On Windows the same trick works with the path
 
 After relaunch, open any conversation and look for the
 hammer / tool icon in the message composer. Click it; you
-should see mnemo's 26 tools listed (`mnemo_query`,
+should see mnemo's 30 tools listed (`mnemo_query`,
 `mnemo_get_node`, `mnemo_traverse`, etc.). The presence of
 that list is the proof point.
 
@@ -102,7 +102,7 @@ sub-100ms.
 
 ## What this gives you
 
-- The full 26-tool surface from any Claude Desktop session.
+- The full 30-tool surface from any Claude Desktop session.
 - Inline `[mnemo:<id>]` citations Claude follows back to
   specific memory / code nodes.
 - The same hybrid Graph-RAG retrieval (memory + code +

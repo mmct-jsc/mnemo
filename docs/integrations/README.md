@@ -42,7 +42,7 @@ documented end to end:
 
 All seven (Cursor + OpenAI Agents SDK + Claude Desktop + Continue +
 Windsurf + Zed + Gemini CLI) run the exact same `mnemo mcp` stdio
-MCP server with the same 26-tool surface. Switching hosts is a
+MCP server with the same 30-tool surface. Switching hosts is a
 config change, not a code change.
 
 ## Why we picked the Phase 1 flagships — and what's still deferred
@@ -65,24 +65,27 @@ flagship integration.
 
 ## What's the same across every host
 
-Every mount runs `mnemo mcp` (stdio) and consumes mnemo's 26-tool
+Every mount runs `mnemo mcp` (stdio) and consumes mnemo's 30-tool
 surface, locked by
 [`test_mcp_tool_surface_contract.py`](../../daemon/tests/unit/test_mcp_tool_surface_contract.py):
 
-- **9 `safe`** read tools (`mnemo_query`, `mnemo_get_node`,
+- **12 `safe`** read tools (`mnemo_query`, `mnemo_get_node`,
   `mnemo_get_edges`, `mnemo_traverse`, `mnemo_search_by_type`,
   `mnemo_get_code_lines`, `mnemo_page_context`,
-  `mnemo_session_nodes`, `mnemo_list_skills`).
-- **13 `confirm`** tools — recoverable mutations + UI directives
-  + skill load.
+  `mnemo_session_nodes`, `mnemo_list_skills`, `mnemo_analyze`,
+  `mnemo_audit_queue`, `mnemo_help`).
+- **14 `confirm`** tools — recoverable mutations + UI directives
+  + skill load + the confirm-then-apply auditor fix.
 - **4 `danger`** tools — destructive: `mnemo_delete_node`,
   `mnemo_remove_source`, `mnemo_purge_conversation`,
   `mnemo_change_settings`.
 
-The `risk` value is currently surfaced inside each tool's description
-string so any host's permission UI can parse and gate it. Phase 1.5 of
-the substrate-hardening roadmap promotes `risk` to a first-class field
-on the wire schema so hosts don't have to parse the description.
+The `risk` value is exposed both inside each tool's description string
+(legacy fallback) and as a first-class structured `risk` field on the
+wire schema, so any host's permission UI can gate on it without parsing
+the description. MCP-only hosts (which get no commands or hooks) can call
+**`mnemo_help`** to discover the surface + the "prefer `mnemo_query` over
+grep" guidance.
 
 ## Adding a new host
 

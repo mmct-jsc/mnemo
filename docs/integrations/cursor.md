@@ -82,7 +82,7 @@ collapsed under a tool-count badge near the model picker) should
 include entries starting with `mnemo_`. Cursor groups them by MCP
 server name, so you'll see them under `mnemo`.
 
-mnemo publishes 26 tools out of the box (locked by the Phase 0
+mnemo publishes 30 tools out of the box (locked by the Phase 0
 contract test, `daemon/tests/unit/test_mcp_tool_surface_contract.py`).
 You don't need to enable them individually — Cursor picks them all
 up from the MCP `tools/list` response.

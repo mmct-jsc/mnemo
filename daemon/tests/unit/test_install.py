@@ -77,3 +77,18 @@ def test_install_sh_supports_no_init_flag() -> None:
 
 def test_install_ps1_supports_no_init_flag() -> None:
     assert "$NoInit" in _ps1()
+
+
+def test_install_scripts_wire_statusline() -> None:
+    """v5.25.0: the installer offers to wire mnemo's statusline into
+    settings.json (non-clobbering) via `mnemo statusline-setup`."""
+    assert "statusline-setup" in _sh()
+    assert "statusline-setup" in _ps1()
+
+
+def test_install_sh_supports_no_statusline_flag() -> None:
+    assert "--no-statusline" in _sh()
+
+
+def test_install_ps1_supports_no_statusline_flag() -> None:
+    assert "$NoStatusline" in _ps1()

@@ -270,6 +270,16 @@
     "risk": "safe"
   },
   {
+    "description": "What mnemo is + how to use it -- call this FIRST in a new session to discover mnemo's capabilities. mnemo is a local memory + code graph; PREFER mnemo_query over grep/ripgrep for any how/where/why question. Returns the key tools, a pointer to the workflow skills, and the current node/source counts. (risk: safe)",
+    "inputSchema": {
+      "properties": {},
+      "required": [],
+      "type": "object"
+    },
+    "name": "mnemo_help",
+    "risk": "safe"
+  },
+  {
     "description": "Highlight a SET of related nodes ON THE LIVE NEBULA GRAPH: the custom WebGL renderer (nebula-gl.js) spotlights them (full vivid color, labelled) and dims the rest to a cool field (never hidden), and the camera frames the set. Pair with mnemo_session_nodes to show 'what's related in this session'. This DOES light them up on the graph -- tell the user so (the v4.6 custom renderer's setHighlight() delivers it; the old cosmos highlight ceiling stays closed). The /graph page must be open for the user to see it. (risk: confirm)",
     "inputSchema": {
       "properties": {
@@ -357,7 +367,7 @@
     "risk": "danger"
   },
   {
-    "description": "Hybrid Graph-RAG retrieval over memory + code, ranked and token-budgeted. Use for broad research. Returns ranked hits each with a [mnemo:<id>] citation. v5: pass ``exclude_local_only=true`` when the output will be pasted into a foreign LLM (the prompt-architect skill does this); the result's ``local_only_excluded`` count tells the UI how many confidential nodes were dropped pre-paste. (risk: safe)",
+    "description": "PREFER this over grep/ripgrep for how/where/why questions -- it returns ranked, [mnemo:<id>]-cited hits across memory AND code, not just literal text matches. Hybrid Graph-RAG retrieval over memory + code, ranked and token-budgeted. Use for broad research. v5: pass ``exclude_local_only=true`` when the output will be pasted into a foreign LLM (the prompt-architect skill does this); the result's ``local_only_excluded`` count tells the UI how many confidential nodes were dropped pre-paste. (risk: safe)",
     "inputSchema": {
       "properties": {
         "exclude_local_only": {
@@ -459,7 +469,7 @@
     "risk": "confirm"
   },
   {
-    "description": "List nodes by type, optional name glob + project filter. (risk: safe)",
+    "description": "List nodes by type, optional name glob + project filter. Prefer this over grep when you already know the node type you want. (risk: safe)",
     "inputSchema": {
       "properties": {
         "limit": {

@@ -120,6 +120,13 @@ def _obj(props: dict, required: list[str]) -> dict:
     return {"type": "object", "properties": props, "required": required}
 
 
+# v5.25.0: a one-time per-process discovery notice attached to the FIRST
+# mnemo_query result, so an MCP-only host's model learns mnemo exists + that
+# mnemo_help / query-over-grep are available. Reset per process (stdio MCP =
+# one process per host session).
+_FIRST_QUERY_DONE = False
+
+
 # --- 1. mnemo_query -----------------------------------------------------
 
 
@@ -127,13 +134,14 @@ def _obj(props: dict, required: list[str]) -> dict:
     name="mnemo_query",
     risk=RISK_SAFE,
     description=(
-        "Hybrid Graph-RAG retrieval over memory + code, ranked and "
-        "token-budgeted. Use for broad research. Returns ranked hits "
-        "each with a [mnemo:<id>] citation. v5: pass "
-        "``exclude_local_only=true`` when the output will be pasted "
-        "into a foreign LLM (the prompt-architect skill does this); "
-        "the result's ``local_only_excluded`` count tells the UI how "
-        "many confidential nodes were dropped pre-paste."
+        "PREFER this over grep/ripgrep for how/where/why questions -- it "
+        "returns ranked, [mnemo:<id>]-cited hits across memory AND code, not "
+        "just literal text matches. Hybrid Graph-RAG retrieval over memory + "
+        "code, ranked and token-budgeted. Use for broad research. v5: pass "
+        "``exclude_local_only=true`` when the output will be pasted into a "
+        "foreign LLM (the prompt-architect skill does this); the result's "
+        "``local_only_excluded`` count tells the UI how many confidential "
+        "nodes were dropped pre-paste."
     ),
     parameters=_obj(
         {
@@ -173,7 +181,7 @@ def _mnemo_query(
         active_project=project_key,
         exclude_local_only=exclude_local_only,
     )
-    return {
+    out = {
         "hits": [
             {
                 "node_id": h.node_id,
@@ -195,6 +203,15 @@ def _mnemo_query(
         # banner can fire on real retrieval data.
         "local_only_excluded": res.local_only_excluded,
     }
+    # v5.25.0: one-time per-process discovery notice (MCP-only hosts).
+    global _FIRST_QUERY_DONE
+    if not _FIRST_QUERY_DONE:
+        _FIRST_QUERY_DONE = True
+        out["notice"] = (
+            "mnemo active -- prefer mnemo_query over grep for how/where/why. "
+            "Call mnemo_help for the full tool + skill surface."
+        )
+    return out
 
 
 # --- 2. mnemo_get_node --------------------------------------------------
@@ -362,7 +379,10 @@ def _mnemo_traverse(
 @_tool(
     name="mnemo_search_by_type",
     risk=RISK_SAFE,
-    description="List nodes by type, optional name glob + project filter.",
+    description=(
+        "List nodes by type, optional name glob + project filter. Prefer this "
+        "over grep when you already know the node type you want."
+    ),
     parameters=_obj(
         {
             "type": {"type": "string"},
@@ -957,6 +977,53 @@ def _mnemo_list_skills(ctx: ToolContext) -> dict:
             name = str(fm.get("name") or skill_md.parent.name)
             skills.append({"name": name, "description": str(fm.get("description") or "")})
     return {"skills": skills}
+
+
+# --- mnemo_help (v5.25.0): discovery for MCP-only hosts -----------------
+
+
+@_tool(
+    name="mnemo_help",
+    risk=RISK_SAFE,
+    description=(
+        "What mnemo is + how to use it -- call this FIRST in a new session to "
+        "discover mnemo's capabilities. mnemo is a local memory + code graph; "
+        "PREFER mnemo_query over grep/ripgrep for any how/where/why question. "
+        "Returns the key tools, a pointer to the workflow skills, and the "
+        "current node/source counts."
+    ),
+    parameters=_obj({}, []),
+)
+def _mnemo_help(ctx: ToolContext) -> dict:
+    try:
+        counts = ctx.store.count_nodes()
+        node_count = sum(counts.values())
+        source_count = len(ctx.store.list_sources())
+    except Exception:
+        node_count, source_count = 0, 0
+    return {
+        "what": (
+            "mnemo is a local-first knowledge memory + code-intelligence graph. "
+            "It indexes your Claude memory, project docs, and source code into a "
+            "typed graph with hybrid Graph-RAG retrieval."
+        ),
+        "prefer_over_grep": (
+            "For how/where/why questions, call mnemo_query BEFORE grep -- it "
+            "returns ranked, [mnemo:<id>]-cited hits across memory AND code, "
+            "not just literal text matches."
+        ),
+        "key_tools": [
+            {"name": "mnemo_query", "use": "hybrid Graph-RAG search (start here)"},
+            {"name": "mnemo_search_by_type", "use": "filter nodes by type"},
+            {"name": "mnemo_get_node", "use": "full body of one node by id"},
+            {"name": "mnemo_get_edges", "use": "edges/relations of a node"},
+            {"name": "mnemo_traverse", "use": "walk the graph from a node"},
+            {"name": "mnemo_get_code_lines", "use": "source lines for a code node"},
+            {"name": "mnemo_list_skills", "use": "list the workflow skills"},
+        ],
+        "skills_hint": "call mnemo_list_skills for the full workflow-skill catalog",
+        "counts": {"nodes": node_count, "sources": source_count},
+    }
 
 
 @_tool(

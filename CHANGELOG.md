@@ -2,6 +2,55 @@
 
 All notable changes to mnemo are documented here.
 
+## [5.25.0] - 2026-06-09
+
+**Discover & presence -- make mnemo visibly there, in Claude Code and beyond.**
+
+v5.24.0 made mnemo a registered Claude Code plugin (commands appear, hooks
+fire), but the other half of the complaint stood: "no notify, nothing related
+to mnemo -- it lives alongside other tools invisibly." This release makes
+mnemo *present* to the human in Claude Code and *discoverable* to the model in
+the six MCP-only hosts.
+
+- **User-visible session-start banner.** The SessionStart hook now emits a
+  JSON object: a one-line `systemMessage` the HUMAN sees ("mnemo: N memories
+  across M source(s) -- /mnemo-query to recall") alongside the model-only
+  memory map (`additionalContext`, unchanged). Opt out with
+  `MNEMO_NO_SESSION_BANNER=1`.
+- **Status line.** New `mnemo statusline` prints a one-line presence cue for
+  Claude Code's status bar (`mnemo <count>` / `mnemo offline`, plus `up{N}`
+  from a per-session inject count). A short health probe that never opens the
+  store and returns as soon as the daemon answers, so it never blocks the bar. The installers wire it into
+  `settings.json` non-clobbering (only when no statusLine exists; skip with
+  `--no-statusline` / `-NoStatusline`), and `mnemo doctor` gains an advisory
+  statusline check.
+- **`mnemo_help` + grep-nudges (MCP-only hosts).** New `mnemo_help` (safe,
+  no-arg) tells a model what mnemo is + to prefer `mnemo_query` over grep for
+  how/where/why questions; the `mnemo_query` / `mnemo_search_by_type`
+  descriptions lead with that nudge, and the first `mnemo_query` result per
+  process carries a one-time discovery notice. MCP surface 29 -> 30.
+- **Docs.** Integration mount guides + the integrations README + wire-schema
+  now say 30 tools (12 safe / 14 confirm / 4 danger); README's install section
+  describes the v5.24.0 marketplace model instead of the obsolete symlink.
+- **Cheap hooks (live-profiling driven).** Presence must not cost a CPU: live
+  diagnosis showed every prompt spawning a python that loaded the embedder
+  WITH a HuggingFace Hub round-trip (~50s when rate-limited), every memory
+  edit spawning an unguarded full-corpus reindex subprocess (4 concurrent
+  observed), and every spawn paying ~0.7s of module-top imports. Now the
+  per-prompt hook asks the RUNNING daemon (`POST /v1/query`, warm model) and
+  falls back in-process only when it is down; the post-tool-use hook nudges
+  `POST /v1/reindex?embed=false` (server-side single-flight; 409 = already
+  running) instead of spawning, with the subprocess fallback debounced (60s);
+  `import mnemo.cli` is on a diet (heavy modules function-local; hook spawn
+  0.74s -> 0.38s, locked by a test); the Embedder tries `local_files_only`
+  first (zero Hub contact once cached); and hook stdin parsing tolerates the
+  UTF-8 BOM Windows shells prepend (as U+FEFF or cp1252 mojibake) instead of
+  silently failing open.
+
+No new runtime dependencies. Per-prompt auto-injection stays token-budgeted
+(<=800); presence is one banner line (opt-out) + one statusline line, never
+per-prompt spam.
+
 ## [5.24.0] - 2026-06-09
 
 **Install & register -- make mnemo a real, discoverable Claude Code plugin.**

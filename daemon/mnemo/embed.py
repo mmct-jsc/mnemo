@@ -50,8 +50,16 @@ class Embedder:
         *,
         cache_dir: Path | None = None,
     ) -> None:
+        import os
+
         self.model_name = model_name
-        self._cache_dir = cache_dir or paths.cache_dir()
+        # Default-resolution order: explicit arg > MNEMO_MODEL_CACHE_DIR env
+        # > runtime cache dir. The env override lets CI cache the model once
+        # per runner and reuse it across jobs (the HuggingFace download path
+        # stalls under Hub throttling); combined with the local_files_only
+        # first attempt, a warm cache loads with zero network.
+        env_dir = os.environ.get("MNEMO_MODEL_CACHE_DIR")
+        self._cache_dir = cache_dir or (Path(env_dir) if env_dir else None) or paths.cache_dir()
         self._model: object | None = None
 
     def _load(self) -> object:
@@ -61,10 +69,22 @@ class Embedder:
 
             self._cache_dir.mkdir(parents=True, exist_ok=True)
             log.info("loading embedding model %s", self.model_name)
-            self._model = sentence_transformers.SentenceTransformer(
-                self.model_name,
-                cache_folder=str(self._cache_dir),
-            )
+            try:
+                # v5.25.0: local-first. A cached model loads with ZERO
+                # HuggingFace Hub round-trips -- live profiling caught a
+                # fresh-process load contacting the Hub (rate-limited)
+                # and taking ~50s inside the per-prompt hook.
+                self._model = sentence_transformers.SentenceTransformer(
+                    self.model_name,
+                    cache_folder=str(self._cache_dir),
+                    local_files_only=True,
+                )
+            except Exception:
+                # First run (model not downloaded yet): allow the network.
+                self._model = sentence_transformers.SentenceTransformer(
+                    self.model_name,
+                    cache_folder=str(self._cache_dir),
+                )
         return self._model
 
     @property
