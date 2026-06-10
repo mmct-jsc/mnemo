@@ -2,6 +2,42 @@
 
 All notable changes to mnemo are documented here.
 
+## [5.26.0] - 2026-06-10
+
+**Precision baseline + auto-scoped retrieval (workstream C, part 1).**
+
+"No tuning without a baseline" + the cross-project leak fix. Strict
+isolation has existed since v1.2 -- the leak was that no production caller
+passed an active project. Now every entry point auto-detects it.
+
+- **`mnemo eval` + the precision harness.** A labelled 14-query SELF set
+  (real "where/how is X in mnemo" questions with known answering files), a
+  pure hit@k/MRR scorer, and a CLI report instrument. Official baseline on
+  the live 17,940-node corpus: **hit@1=0.14, hit@5=0.21, MRR=0.16** -- the
+  numbers v5.27.0's exactness work (BM25/RRF/chunking) must beat.
+- **Multi-key cwd auto-scoping.** `retrieve.resolve_auto_scope(store, cwd)`
+  derives the active project key SET from the caller's working directory:
+  the path-derived key plus every source-declared key rooted at/under/above
+  cwd, each applied only when it owns nodes. (Measure-first caught
+  single-key scoping BLINDING a repo to its own code -- mnemo's code is
+  keyed `mnemo-daemon` while its path derives `D--Repository-knowledge-base`;
+  the union tripled hit@5 with zero ranking changes.) `retrieve.query`
+  gains `active_projects`; the UserPromptSubmit hook forwards `cwd` to
+  `/v1/query` (new optional `QueryIn.cwd`); the server resolver slots the
+  request-level cwd between the explicit key and the daemon-global
+  workspace; `mnemo query` auto-scopes by default (`--no-auto-scope` /
+  `--project` to override); MCP queries auto-scope from the server process
+  cwd and every `mnemo_query` response carries a `scope` field
+  (`{project_keys, auto}`).
+- **"Not indexed -- want to index it?" (user spec).** When the session
+  starts in a `.git` directory whose project has zero indexed nodes, the
+  visible banner appends the `mnemo source add <cwd>` offer and the model
+  context tells Claude it may offer the indexing commands -- asking first;
+  never auto-index. The first MCP `mnemo_query` notice says the same.
+
+No scoring-weight changes (that is v5.27.0, measured against this
+baseline); deterministic retrieval for unscoped calls is byte-stable.
+
 ## [5.25.0] - 2026-06-09
 
 **Discover & presence -- make mnemo visibly there, in Claude Code and beyond.**

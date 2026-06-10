@@ -68,6 +68,57 @@ class RetrievalResult:
     local_only_excluded: int = 0
 
 
+def resolve_auto_scope(store: Store, cwd: str | None) -> tuple[list[str], bool]:
+    """Derive the active project key SET from the caller's cwd (v5.26.0).
+
+    Returns ``(project_keys, is_indexed)``. A repo's knowledge can span
+    MULTIPLE keys -- e.g. its memory under the path-derived key and its code
+    under a source registered with a custom ``project_key`` (mnemo itself:
+    memory under ``D--Repository-knowledge-base``, code under
+    ``mnemo-daemon``). So the scope is the union of:
+
+    1. the path-derived key (``paths.resolve_project_key(cwd)``), and
+    2. the ``project_key`` of every registered source rooted at, under, or
+       above cwd,
+
+    each included ONLY when it actually owns nodes (the has-nodes guard --
+    scoping to an empty project would starve the query). An empty result
+    means "this directory is not indexed": callers keep the query unscoped
+    and may surface the index-me offer."""
+    from mnemo import paths
+
+    if not cwd:
+        return [], False
+
+    def _owned(key: str) -> int:
+        try:
+            return sum(store.count_nodes(project_key=key, include_base=False).values())
+        except Exception:
+            return 0
+
+    keys: list[str] = []
+    derived = paths.resolve_project_key(cwd)
+    if _owned(derived) > 0:
+        keys.append(derived)
+    norm_cwd = cwd.replace("\\", "/").rstrip("/").lower()
+    try:
+        for src in store.list_sources():
+            skey = src.project_key
+            if not skey or skey in keys:
+                continue
+            root = str(src.path).replace("\\", "/").rstrip("/").lower()
+            related = (
+                root == norm_cwd
+                or root.startswith(norm_cwd + "/")
+                or norm_cwd.startswith(root + "/")
+            )
+            if related and _owned(skey) > 0:
+                keys.append(skey)
+    except Exception:
+        pass
+    return keys, bool(keys)
+
+
 def query(
     store: Store,
     embedder: Embedder,
@@ -76,10 +127,19 @@ def query(
     budget_tokens: int | None = None,
     k: int | None = None,
     active_project: str | None = None,
+    active_projects: list[str] | None = None,
     update_graph: bool = True,
     exclude_local_only: bool = False,
 ) -> RetrievalResult:
     cfg = config.load()
+    # v5.26.0: a project's knowledge can span multiple keys (memory under
+    # the path-derived key, code under a source-declared one). Normalize
+    # both spellings into one scope SET; ``active_projects`` wins.
+    scope: frozenset[str] | None = None
+    if active_projects:
+        scope = frozenset(p for p in active_projects if p) or None
+    elif active_project:
+        scope = frozenset({active_project})
     if k is None:
         k = cfg.defaults.k
     if budget_tokens is None:
@@ -153,16 +213,16 @@ def query(
         # dominant cross-project match still surfaces.
         out_of_scope = (
             isolation_mode == "strict"
-            and active_project is not None
+            and scope is not None
             and not node.base
             and node.project_key is not None
-            and node.project_key != active_project
+            and node.project_key not in scope
         )
         c_vector = vec_scores.get(nid, 0.0)
         c_graph = graph_scores.get(nid, 0.0)
         c_recency = _recency_score(node.updated_at, now, cfg.recency_half_life_days)
         c_type = type_pri.get(node.type, 0.0)
-        c_project = _project_score(node.project_key, active_project)
+        c_project = _project_score(node.project_key, scope)
         c_lexical = _lexical_score(q_tokens, node)
         s = (
             sw.alpha * c_vector
@@ -305,10 +365,10 @@ def _recency_score(updated_at: int, now: float, half_life_days: float | None = N
     return math.exp(-age_days / half)
 
 
-def _project_score(node_project: str | None, active_project: str | None) -> float:
-    if active_project is None or node_project is None:
+def _project_score(node_project: str | None, scope: frozenset[str] | None) -> float:
+    if scope is None or node_project is None:
         return 0.0
-    return 1.0 if node_project == active_project else 0.0
+    return 1.0 if node_project in scope else 0.0
 
 
 def _tokenize(text: str) -> list[str]:
