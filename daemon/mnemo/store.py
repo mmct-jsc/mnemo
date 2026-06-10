@@ -84,6 +84,9 @@ def _edge_confidence(row: object) -> float:
 
 SCHEMA_VERSION = 1
 EMBEDDING_DIM = 384  # all-MiniLM-L6-v2 dim. Bump + reindex to switch models.
+# v5.27.0: only the first 32 KB of a body is FTS-indexed (mirrors the
+# retrieval-side lexical cap) so a giant plan_doc doesn't bloat the index.
+FTS_BODY_CAP = 32 * 1024
 
 
 # --- Allowed enum values (kept in code, not as SQL CHECK constraints, so we can
@@ -519,6 +522,9 @@ class ChatPermission:
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);
 
+-- v5.27.0: nodes_fts (FTS5) is created in _init_schema, not here --
+-- executescript can't parameterize and virtual tables need the
+-- backfill guard anyway.
 CREATE TABLE IF NOT EXISTS nodes (
   id               TEXT PRIMARY KEY,
   type             TEXT NOT NULL,
@@ -931,6 +937,22 @@ class Store:
                 "tokens_total": "INTEGER NOT NULL DEFAULT 0",
             },
         )
+        # v5.27.0: FTS5 lexical channel. Bodies capped at 32 KB (mirrors the
+        # retrieval-side lexical cap) so a giant plan_doc doesn't bloat the
+        # index. Backfilled once when the table is empty (pre-v5.27 stores
+        # upgrade in place on first reopen).
+        self.conn.execute(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS nodes_fts "
+            "USING fts5(id UNINDEXED, name, description, body)"
+        )
+        fts_rows = self.conn.execute("SELECT count(*) FROM nodes_fts").fetchone()[0]
+        if fts_rows == 0:
+            self.conn.execute(
+                "INSERT INTO nodes_fts (id, name, description, body) "
+                "SELECT id, name, coalesce(description, ''), "
+                "substr(coalesce(body, ''), 1, ?) FROM nodes",
+                (FTS_BODY_CAP,),
+            )
         row = self.conn.execute("SELECT version FROM schema_version").fetchone()
         if row is None:
             self.conn.execute("INSERT INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,))
@@ -998,6 +1020,17 @@ class Store:
                     node.updated_at,
                     1 if node.base else 0,
                     1 if node.local_only else 0,
+                ),
+            )
+            # v5.27.0: keep the FTS5 lexical index in lockstep.
+            self.conn.execute("DELETE FROM nodes_fts WHERE id = ?", (node.id,))
+            self.conn.execute(
+                "INSERT INTO nodes_fts (id, name, description, body) VALUES (?, ?, ?, ?)",
+                (
+                    node.id,
+                    node.name,
+                    node.description or "",
+                    (node.body or "")[:FTS_BODY_CAP],
                 ),
             )
             self.conn.commit()
@@ -1156,6 +1189,45 @@ class Store:
             self.delete_chunks(node_id)
         with self._lock:
             self.conn.execute("DELETE FROM nodes WHERE id = ?", (node_id,))
+            self.conn.execute("DELETE FROM nodes_fts WHERE id = ?", (node_id,))
+            self.conn.commit()
+
+    def bm25_search(self, query_text: str, k: int = 40) -> list[tuple[str, int]]:
+        """Top-k lexical candidates via FTS5 BM25 (v5.27.0 exactness).
+
+        Returns ``[(node_id, rank_position)]`` with 0-based positions in
+        BM25 order. Query tokens are individually quoted so arbitrary user
+        text can never break the MATCH grammar; empty/garbage -> []. This
+        gives retrieval lexical RECALL -- a name-exact node that misses
+        the vector top-40 can now still become a candidate."""
+        tokens = list(
+            dict.fromkeys(t.lower() for t in re.findall(r"[A-Za-z0-9_]{3,}", query_text or ""))
+        )
+        if not tokens:
+            return []
+        match = " OR ".join(f'"{t}"' for t in tokens)
+        with self._lock:
+            try:
+                rows = self.conn.execute(
+                    "SELECT id FROM nodes_fts WHERE nodes_fts MATCH ? "
+                    "ORDER BY bm25(nodes_fts) LIMIT ?",
+                    (match, k),
+                ).fetchall()
+            except sqlite3.OperationalError:
+                return []
+        return [(r["id"], i) for i, r in enumerate(rows)]
+
+    def rebuild_fts(self) -> None:
+        """Rebuild the FTS5 index from the nodes table (consistency backstop
+        after bulk operations like a reindex sweep or source cascade)."""
+        with self._lock:
+            self.conn.execute("DELETE FROM nodes_fts")
+            self.conn.execute(
+                "INSERT INTO nodes_fts (id, name, description, body) "
+                "SELECT id, name, coalesce(description, ''), "
+                "substr(coalesce(body, ''), 1, ?) FROM nodes",
+                (FTS_BODY_CAP,),
+            )
             self.conn.commit()
 
     def count_nodes(
