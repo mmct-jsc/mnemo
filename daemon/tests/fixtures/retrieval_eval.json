@@ -1,0 +1,72 @@
+[
+  {
+    "prompt": "where is the statusline presence line formatted",
+    "expect_source_contains": ["statusline.py"],
+    "note": "v5.25.0 statusline module"
+  },
+  {
+    "prompt": "how do the Claude Code hooks inject cited memory into a prompt",
+    "expect_source_contains": ["cli.py"],
+    "note": "hook_user_prompt_submit"
+  },
+  {
+    "prompt": "where are the MCP tools registered with their risk levels",
+    "expect_source_contains": ["agent_tools.py"],
+    "note": "TOOLS registry + _tool decorator"
+  },
+  {
+    "prompt": "how does mnemo detect god objects in the code lens",
+    "expect_source_contains": ["analyzer.py"],
+    "note": "detect_god_object"
+  },
+  {
+    "prompt": "where is the canonical project key derived from a filesystem path",
+    "expect_source_contains": ["paths.py"],
+    "note": "resolve_project_key / project_key_from_abs"
+  },
+  {
+    "prompt": "how does reindex decide whether an existing node changed",
+    "expect_source_contains": ["ingest.py"],
+    "note": "get_node_by_source + hash compare"
+  },
+  {
+    "prompt": "where is the MiniLM embedding model loaded lazily",
+    "expect_source_contains": ["embed.py"],
+    "note": "Embedder._load local-first"
+  },
+  {
+    "prompt": "how does the daemon find which process is listening on its port",
+    "expect_source_contains": ["daemon.py"],
+    "note": "_listener_pid_for_port"
+  },
+  {
+    "prompt": "where are audit queue findings reconciled by fingerprint",
+    "expect_source_contains": ["store.py", "analyzer.py"],
+    "note": "v5.22.0 audit_queue"
+  },
+  {
+    "prompt": "how are dead mnemo citations stripped from a node body",
+    "expect_source_contains": ["apply.py"],
+    "note": "strip_dead_citations"
+  },
+  {
+    "prompt": "where does the hybrid retrieval scoring combine vector and graph signals",
+    "expect_source_contains": ["retrieve.py"],
+    "note": "the scoring formula"
+  },
+  {
+    "prompt": "how does the post tool use hook decide a file is memory shaped",
+    "expect_source_contains": ["cli.py"],
+    "note": "_is_memory_shaped"
+  },
+  {
+    "prompt": "where do the install scripts wire the status line into settings",
+    "expect_source_contains": ["install.sh", "install.ps1", "statusline.py"],
+    "note": "statusline-setup / ensure_statusline"
+  },
+  {
+    "prompt": "how does the doctor verify the plugin is registered in Claude Code",
+    "expect_source_contains": ["doctor.py"],
+    "note": "check_plugin_registered"
+  }
+]
