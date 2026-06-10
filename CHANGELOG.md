@@ -32,6 +32,20 @@ the six MCP-only hosts.
 - **Docs.** Integration mount guides + the integrations README + wire-schema
   now say 30 tools (12 safe / 14 confirm / 4 danger); README's install section
   describes the v5.24.0 marketplace model instead of the obsolete symlink.
+- **Cheap hooks (live-profiling driven).** Presence must not cost a CPU: live
+  diagnosis showed every prompt spawning a python that loaded the embedder
+  WITH a HuggingFace Hub round-trip (~50s when rate-limited), every memory
+  edit spawning an unguarded full-corpus reindex subprocess (4 concurrent
+  observed), and every spawn paying ~0.7s of module-top imports. Now the
+  per-prompt hook asks the RUNNING daemon (`POST /v1/query`, warm model) and
+  falls back in-process only when it is down; the post-tool-use hook nudges
+  `POST /v1/reindex?embed=false` (server-side single-flight; 409 = already
+  running) instead of spawning, with the subprocess fallback debounced (60s);
+  `import mnemo.cli` is on a diet (heavy modules function-local; hook spawn
+  0.74s -> 0.38s, locked by a test); the Embedder tries `local_files_only`
+  first (zero Hub contact once cached); and hook stdin parsing tolerates the
+  UTF-8 BOM Windows shells prepend (as U+FEFF or cp1252 mojibake) instead of
+  silently failing open.
 
 No new runtime dependencies. Per-prompt auto-injection stays token-budgeted
 (<=800); presence is one banner line (opt-out) + one statusline line, never

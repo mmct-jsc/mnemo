@@ -20,12 +20,22 @@ from __future__ import annotations
 
 import json
 import logging
+from typing import TYPE_CHECKING
 
 import typer
 
-from mnemo import __version__, auto_router, daemon, ingest, paths, retrieve
-from mnemo.embed import Embedder
-from mnemo.store import Store
+from mnemo import __version__, daemon, paths
+
+if TYPE_CHECKING:
+    from mnemo.embed import Embedder as _EmbedderT
+    from mnemo.store import Store
+
+# v5.25.0: the heavy modules (ingest -> store -> sqlite_vec -> numpy, the
+# embedder stack, auto_router) are imported FUNCTION-LOCALLY in the commands
+# that need them. Every Claude Code hook fire and statusline refresh spawns a
+# fresh python that imports this module; live profiling showed the old
+# module-top imports costing ~1.1s of a 1.6s cold start that most spawns
+# never used. Guarded by tests/unit/test_cli_light_import.py.
 
 log = logging.getLogger(__name__)
 
@@ -66,8 +76,22 @@ app.add_typer(hook_app, name="hook")
 
 
 def _open_store() -> Store:
+    from mnemo.store import Store
+
     paths.ensure_runtime_dirs()
     return Store(paths.db_path())
+
+
+def Embedder(*args: object, **kwargs: object) -> _EmbedderT:  # noqa: N802
+    """Lazy class-shaped factory for :class:`mnemo.embed.Embedder`.
+
+    A function, not a module-top import, so ``import mnemo.cli`` -- paid by
+    every hook fire and statusline refresh in a fresh python -- does not pull
+    the embedder stack. Tests monkeypatch THIS name (``mnemo.cli.Embedder``),
+    which keeps working unchanged."""
+    from mnemo.embed import Embedder as _Embedder
+
+    return _Embedder(*args, **kwargs)
 
 
 def _is_memory_shaped(file_path: str) -> bool:
@@ -96,6 +120,20 @@ def _spawn_background_reindex() -> None:
     """
     import subprocess
     import sys
+    import time
+
+    # v5.25.0: debounce. Bursts of memory edits while the daemon is down
+    # (daemon-up edits nudge /v1/reindex instead, which has server-side
+    # single-flight) must not pile up concurrent full-corpus subprocesses --
+    # 4 overlapping reindex pythons were observed live.
+    try:
+        stamp = paths.mnemo_home() / "reindex-nudge.stamp"
+        if stamp.exists() and (time.time() - stamp.stat().st_mtime) < 60:
+            return
+        stamp.parent.mkdir(parents=True, exist_ok=True)
+        stamp.write_text(str(int(time.time())), encoding="utf-8")
+    except Exception:
+        pass
 
     try:
         kwargs: dict = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
@@ -112,12 +150,91 @@ def _spawn_background_reindex() -> None:
         pass
 
 
+def _read_stdin_json() -> dict | None:
+    """Parse a hook payload from stdin; None on any failure (hooks fail open).
+
+    Parses from the first ``{``: Windows shells prepend a UTF-8 BOM to every
+    pipe (PowerShell 5.1 always does), and depending on the console codepage
+    it reaches python as U+FEFF or as the cp1252 mojibake ``\\xef\\xbb\\xbf``
+    -- either way ``json.loads`` rejects it, which made the hook silently
+    fail open instead of doing its job. Hook payloads are always JSON
+    objects, so brace-seeking is safe."""
+    import sys
+
+    raw = sys.stdin.read()
+    start = raw.find("{")
+    if start == -1:
+        return None
+    try:
+        data = json.loads(raw[start:])
+    except Exception:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _daemon_query(prompt: str, *, k: int = 5, budget_tokens: int = 800) -> dict | None:
+    """POST /v1/query to the local daemon (warm model, loopback-exempt auth).
+
+    Returns the parsed QueryOut dict, or None on ANY failure so the caller
+    falls back to the in-process path. The daemon answers in ~100ms; the
+    in-process fallback loads the embedder per spawn, which live profiling
+    showed costing up to ~50s under HuggingFace rate limits."""
+    import urllib.request
+
+    try:
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{daemon.DEFAULT_PORT}/v1/query",
+            data=json.dumps({"prompt": prompt, "k": k, "budget_tokens": budget_tokens}).encode(
+                "utf-8"
+            ),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=15.0) as resp:  # noqa: S310
+            data = json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return None
+    return data if isinstance(data, dict) and isinstance(data.get("hits"), list) else None
+
+
+def _nudge_daemon_reindex() -> bool:
+    """Ask the daemon to reindex (data-only). True = nudge satisfied.
+
+    POST /v1/reindex has SERVER-side single-flight (HTTP 409 + reindex_lock
+    when one is already running -- that 409 counts as satisfied). The
+    endpoint is a sync handler in the daemon's threadpool, so a client
+    read-timeout abandons the RESPONSE, not the reindex: timeout also
+    counts as satisfied. Only a connection failure (daemon down) returns
+    False, sending the caller to the subprocess fallback."""
+    import urllib.error
+    import urllib.request
+
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{daemon.DEFAULT_PORT}/v1/reindex?embed=false",
+        data=b"",
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=1.5):  # noqa: S310
+            return True
+    except urllib.error.HTTPError as exc:
+        return exc.code == 409
+    except urllib.error.URLError as exc:
+        return isinstance(exc.reason, TimeoutError)
+    except TimeoutError:
+        return True
+    except Exception:
+        return False
+
+
 # --- Top-level commands ----------------------------------------------------
 
 
 @app.command()
 def init() -> None:
     """Create runtime dirs and register the default Scope B sources."""
+    from mnemo import ingest
+
     store = _open_store()
     try:
         n = ingest.register_default_sources(store, paths.claude_home())
@@ -135,6 +252,8 @@ def reindex(
     no_embed: bool = typer.Option(False, "--no-embed", help="Skip embedding (data-only reindex)"),
 ) -> None:
     """Scan registered sources and update the store. Embeds new/changed nodes."""
+    from mnemo import ingest
+
     store = _open_store()
     try:
         sources = None
@@ -182,6 +301,8 @@ def query(
     ),
 ) -> None:
     """One-shot retrieval. Hooks call this to fetch context."""
+    from mnemo import retrieve
+
     store = _open_store()
     try:
         embedder = Embedder()
@@ -423,6 +544,8 @@ def source_add(
     """
     if kind is None:
         # Auto-router path.
+        from mnemo import auto_router
+
         try:
             result = auto_router.preview(path, force=force)
         except FileNotFoundError as exc:
@@ -780,59 +903,89 @@ def hook_session_start() -> None:
 
 @hook_app.command("user-prompt-submit")
 def hook_user_prompt_submit() -> None:
-    """UserPromptSubmit: inject cited memory for the prompt (read from stdin)."""
-    import sys
+    """UserPromptSubmit: inject cited memory for the prompt (read from stdin).
 
-    try:
-        data = json.loads(sys.stdin.read())
-    except Exception:
+    v5.25.0: DAEMON-FIRST. The running daemon answers /v1/query with its
+    warm model in ~100ms. The in-process fallback (daemon down) loads the
+    embedder inside this throwaway spawn, which live profiling showed
+    costing up to ~50s under HuggingFace rate limits -- acceptable only as
+    a fallback, never as the steady state (this hook fires on EVERY prompt
+    in EVERY session)."""
+    data = _read_stdin_json()
+    if data is None:
         return
     prompt = (data.get("prompt") or data.get("user_prompt") or "").strip()
     if not prompt:
         return
 
-    try:
-        store = _open_store()
-    except Exception:
-        return
-    try:
-        result = retrieve.query(store, Embedder(), prompt, k=5, budget_tokens=800)
-    except Exception:
-        return
-    finally:
-        store.close()
+    payload = _daemon_query(prompt)
+    if payload is not None:
+        rows = [
+            {
+                "citation": str(h.get("citation", "")),
+                "type": str(h.get("type", "")),
+                "name": str(h.get("name", "")),
+                "description": str(h.get("description") or ""),
+            }
+            for h in payload.get("hits", [])
+        ]
+        intent_tags = [str(t) for t in payload.get("intent_tags") or []]
+    else:
+        # Fallback: daemon down -- query in-process (the slow path).
+        try:
+            store = _open_store()
+        except Exception:
+            return
+        try:
+            from mnemo import retrieve
 
-    # v5.25.0: record the injection size for `mnemo statusline` (best-effort;
-    # records 0 too, so the bar drops `up{N}` when nothing was injected).
+            result = retrieve.query(store, Embedder(), prompt, k=5, budget_tokens=800)
+        except Exception:
+            return
+        finally:
+            store.close()
+        rows = [
+            {
+                "citation": h.citation,
+                "type": h.type,
+                "name": h.name,
+                "description": h.description or "",
+            }
+            for h in result.hits
+        ]
+        intent_tags = list(result.intent_tags)
+
+    # record the injection size for `mnemo statusline` (best-effort; records
+    # 0 too, so the bar drops `up{N}` when nothing was injected).
     try:
         from mnemo import statusline as statusline_mod
 
-        statusline_mod.write_inject_count(data.get("session_id"), len(result.hits))
+        statusline_mod.write_inject_count(data.get("session_id"), len(rows))
     except Exception:
         pass
 
-    if not result.hits:
+    if not rows:
         return
     out = ["## Relevant memory (mnemo)", ""]
-    for h in result.hits:
-        desc = (h.description or "").replace("\n", " ")
-        out.append(f"- {h.citation} [{h.type}] {h.name}: {desc}")
+    for r in rows:
+        desc = r["description"].replace("\n", " ")
+        out.append(f"- {r['citation']} [{r['type']}] {r['name']}: {desc}")
     out.append("")
-    out.append(f"intent: {', '.join(result.intent_tags) or 'none'} | k: {len(result.hits)}")
+    out.append(f"intent: {', '.join(intent_tags) or 'none'} | k: {len(rows)}")
     typer.echo("\n".join(out))
 
 
 @hook_app.command("post-tool-use")
 def hook_post_tool_use() -> None:
     """PostToolUse: reindex (data-only, detached) when a memory file is edited."""
-    import sys
-
-    try:
-        data = json.loads(sys.stdin.read())
-    except Exception:
+    data = _read_stdin_json()
+    if data is None:
         return
     file_path = (data.get("tool_input") or {}).get("file_path") or ""
-    if _is_memory_shaped(file_path):
+    # v5.25.0: daemon-first -- /v1/reindex has server-side single-flight
+    # (409 while one runs). Spawn a subprocess only when the daemon is
+    # down; the spawn itself is debounced.
+    if _is_memory_shaped(file_path) and not _nudge_daemon_reindex():
         _spawn_background_reindex()
 
 

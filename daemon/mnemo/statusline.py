@@ -147,9 +147,13 @@ def render(stdin_text: str) -> str:
     raises."""
     session_id = None
     try:
-        text = (stdin_text or "").strip()
-        if text:
-            session_id = json.loads(text).get("session_id")
+        # Parse from the first "{": Windows shells prepend a UTF-8 BOM to
+        # pipes, arriving as U+FEFF or cp1252 mojibake depending on the
+        # console codepage; json.loads rejects both.
+        raw = stdin_text or ""
+        start = raw.find("{")
+        if start != -1:
+            session_id = json.loads(raw[start:]).get("session_id")
     except Exception:
         session_id = None
     return format_statusline(probe_health(), read_inject_count(session_id))

@@ -89,6 +89,16 @@ def test_render_never_raises_on_garbage_stdin(monkeypatch: pytest.MonkeyPatch) -
     assert statusline.render("") == "mnemo offline"
 
 
+def test_render_tolerates_utf8_bom(monkeypatch: pytest.MonkeyPatch) -> None:
+    """PowerShell 5.1 prepends a BOM to piped payloads; the session_id must
+    survive so the inject count still resolves."""
+    monkeypatch.setattr(statusline, "probe_health", lambda *a, **k: {"node_count": 100})
+    statusline.write_inject_count("bom-sess", 3)
+    assert statusline.render('﻿{"session_id": "bom-sess"}') == "mnemo 100 up3"
+    # cp1252 console codepage: the BOM bytes arrive as three mojibake chars.
+    assert statusline.render('\xef\xbb\xbf{"session_id": "bom-sess"}') == "mnemo 100 up3"
+
+
 # --- CLI wrapper ----------------------------------------------------------
 
 

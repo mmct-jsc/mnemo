@@ -61,10 +61,22 @@ class Embedder:
 
             self._cache_dir.mkdir(parents=True, exist_ok=True)
             log.info("loading embedding model %s", self.model_name)
-            self._model = sentence_transformers.SentenceTransformer(
-                self.model_name,
-                cache_folder=str(self._cache_dir),
-            )
+            try:
+                # v5.25.0: local-first. A cached model loads with ZERO
+                # HuggingFace Hub round-trips -- live profiling caught a
+                # fresh-process load contacting the Hub (rate-limited)
+                # and taking ~50s inside the per-prompt hook.
+                self._model = sentence_transformers.SentenceTransformer(
+                    self.model_name,
+                    cache_folder=str(self._cache_dir),
+                    local_files_only=True,
+                )
+            except Exception:
+                # First run (model not downloaded yet): allow the network.
+                self._model = sentence_transformers.SentenceTransformer(
+                    self.model_name,
+                    cache_folder=str(self._cache_dir),
+                )
         return self._model
 
     @property
