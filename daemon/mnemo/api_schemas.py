@@ -192,6 +192,12 @@ class QueryIn(BaseModel):
     # If both are sent, ``project_key`` wins.
     project_key: str | None = None
     active_project: str | None = None
+    # v5.26.0: the caller's working directory. When no explicit key is
+    # given, the server derives the project from it and scopes the query
+    # IF that project is indexed (see retrieve.resolve_auto_scope). Sent
+    # by the UserPromptSubmit hook so IDE queries stop leaking
+    # cross-project nodes.
+    cwd: str | None = None
 
 
 class HitOut(BaseModel):

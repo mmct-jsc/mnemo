@@ -367,7 +367,7 @@
     "risk": "danger"
   },
   {
-    "description": "PREFER this over grep/ripgrep for how/where/why questions -- it returns ranked, [mnemo:<id>]-cited hits across memory AND code, not just literal text matches. Hybrid Graph-RAG retrieval over memory + code, ranked and token-budgeted. Use for broad research. v5: pass ``exclude_local_only=true`` when the output will be pasted into a foreign LLM (the prompt-architect skill does this); the result's ``local_only_excluded`` count tells the UI how many confidential nodes were dropped pre-paste. (risk: safe)",
+    "description": "PREFER this over grep/ripgrep for how/where/why questions -- it returns ranked, [mnemo:<id>]-cited hits across memory AND code, not just literal text matches. Hybrid Graph-RAG retrieval over memory + code, ranked and token-budgeted. Use for broad research. v5.26: when ``project_key`` is omitted, MCP queries auto-scope to the working directory's project (if indexed); the response's ``scope`` field shows the effective scoping. v5: pass ``exclude_local_only=true`` when the output will be pasted into a foreign LLM (the prompt-architect skill does this); the result's ``local_only_excluded`` count tells the UI how many confidential nodes were dropped pre-paste. (risk: safe)",
     "inputSchema": {
       "properties": {
         "exclude_local_only": {

@@ -172,21 +172,25 @@ def _read_stdin_json() -> dict | None:
     return data if isinstance(data, dict) else None
 
 
-def _daemon_query(prompt: str, *, k: int = 5, budget_tokens: int = 800) -> dict | None:
+def _daemon_query(
+    prompt: str, *, k: int = 5, budget_tokens: int = 800, cwd: str | None = None
+) -> dict | None:
     """POST /v1/query to the local daemon (warm model, loopback-exempt auth).
 
     Returns the parsed QueryOut dict, or None on ANY failure so the caller
     falls back to the in-process path. The daemon answers in ~100ms; the
     in-process fallback loads the embedder per spawn, which live profiling
-    showed costing up to ~50s under HuggingFace rate limits."""
+    showed costing up to ~50s under HuggingFace rate limits. ``cwd`` lets
+    the server auto-scope the query to the caller's project (v5.26.0)."""
     import urllib.request
 
+    payload: dict[str, object] = {"prompt": prompt, "k": k, "budget_tokens": budget_tokens}
+    if cwd:
+        payload["cwd"] = cwd
     try:
         req = urllib.request.Request(
             f"http://127.0.0.1:{daemon.DEFAULT_PORT}/v1/query",
-            data=json.dumps({"prompt": prompt, "k": k, "budget_tokens": budget_tokens}).encode(
-                "utf-8"
-            ),
+            data=json.dumps(payload).encode("utf-8"),
             headers={"Content-Type": "application/json"},
             method="POST",
         )
@@ -288,6 +292,14 @@ def query(
     budget: int = typer.Option(800, "--budget", help="Token budget"),
     json_out: bool = typer.Option(False, "--json", help="Emit JSON instead of human text"),
     project: str | None = typer.Option(None, "--project", help="Active project key"),
+    auto_scope: bool = typer.Option(
+        True,
+        "--auto-scope/--no-auto-scope",
+        help=(
+            "Scope the query to the current directory's project when it is "
+            "indexed (v5.26.0 default). --project always wins."
+        ),
+    ),
     exclude_local_only: bool = typer.Option(
         False,
         "--exclude-local-only",
@@ -301,10 +313,19 @@ def query(
     ),
 ) -> None:
     """One-shot retrieval. Hooks call this to fetch context."""
+    import os
+
     from mnemo import retrieve
 
     store = _open_store()
     try:
+        # v5.26.0: auto-scope to the cwd's project keys unless an explicit
+        # --project was given or --no-auto-scope opts out. The has-nodes
+        # guard inside resolve_auto_scope keeps unindexed dirs unscoped.
+        scope_kwargs: dict = {"active_project": project}
+        if project is None and auto_scope:
+            keys, _indexed = retrieve.resolve_auto_scope(store, os.getcwd())
+            scope_kwargs = {"active_projects": keys or None}
         embedder = Embedder()
         result = retrieve.query(
             store,
@@ -312,8 +333,8 @@ def query(
             prompt,
             k=k,
             budget_tokens=budget,
-            active_project=project,
             exclude_local_only=exclude_local_only,
+            **scope_kwargs,
         )
         if json_out:
             typer.echo(
@@ -858,15 +879,31 @@ def hook_session_start() -> None:
     JSON has no documented CC fallback, so a half-built object is worse
     than silence."""
     import os
+    from pathlib import Path
+
+    data = _read_stdin_json() or {}
+    cwd = str(data.get("cwd") or os.getcwd())
 
     try:
         store = _open_store()
     except Exception:
         return
+    unindexed_project = False
     try:
         total = sum(store.count_nodes().values())
         sources = len(store.list_sources())
         d = daemon.status()
+        # v5.26.0 (user spec): detect the IDE's project; when it looks like
+        # a real project (.git) but has zero indexed nodes, surface the
+        # offer to index it. NEVER auto-index -- it is a user decision.
+        try:
+            if (Path(cwd) / ".git").exists():
+                from mnemo import retrieve
+
+                _keys, indexed = retrieve.resolve_auto_scope(store, cwd)
+                unindexed_project = not indexed
+        except Exception:
+            unindexed_project = False
     except Exception:
         return
     finally:
@@ -886,6 +923,13 @@ def hook_session_start() -> None:
             "prompt -- prefer it over grep for 'how/where/why' questions.",
         ]
     )
+    if unindexed_project:
+        context += (
+            "\n\nNOTE: the current project is NOT indexed in mnemo. If the "
+            "user wants project-scoped recall here, you may offer to run "
+            f"`mnemo source add {cwd}` followed by `mnemo reindex` -- ask "
+            "first; indexing is the user's decision."
+        )
     payload: dict[str, object] = {
         "hookSpecificOutput": {
             "hookEventName": "SessionStart",
@@ -895,9 +939,10 @@ def hook_session_start() -> None:
     # The user-visible one-line banner. Opt-out via MNEMO_NO_SESSION_BANNER=1
     # (the model context stays either way; presence is never spammy).
     if not os.environ.get("MNEMO_NO_SESSION_BANNER"):
-        payload["systemMessage"] = (
-            f"mnemo: {total:,} memories across {sources} source(s) -- /mnemo-query to recall"
-        )
+        banner = f"mnemo: {total:,} memories across {sources} source(s) -- /mnemo-query to recall"
+        if unindexed_project:
+            banner += f" | this project is not indexed -- run: mnemo source add {cwd}"
+        payload["systemMessage"] = banner
     typer.echo(json.dumps(payload))
 
 
@@ -918,7 +963,15 @@ def hook_user_prompt_submit() -> None:
     if not prompt:
         return
 
-    payload = _daemon_query(prompt)
+    # v5.26.0: auto-scope to the caller's project. CC sends cwd in the hook
+    # payload (and spawns hooks in the project dir, so os.getcwd() is the
+    # faithful fallback). The daemon (or the in-process fallback below)
+    # applies the has-nodes guard.
+    import os
+
+    cwd = str(data.get("cwd") or os.getcwd())
+
+    payload = _daemon_query(prompt, cwd=cwd)
     if payload is not None:
         rows = [
             {
@@ -939,7 +992,15 @@ def hook_user_prompt_submit() -> None:
         try:
             from mnemo import retrieve
 
-            result = retrieve.query(store, Embedder(), prompt, k=5, budget_tokens=800)
+            scope_keys, _indexed = retrieve.resolve_auto_scope(store, cwd)
+            result = retrieve.query(
+                store,
+                Embedder(),
+                prompt,
+                k=5,
+                budget_tokens=800,
+                active_projects=scope_keys or None,
+            )
         except Exception:
             return
         finally:
@@ -1043,6 +1104,59 @@ def statusline_setup(
             f"[warn] a different statusLine is set in {path}; leaving it. To use "
             f'mnemo, set statusLine.command to "{statusline_mod.STATUSLINE_COMMAND}".'
         )
+
+
+# --- mnemo eval (v5.26.0): the retrieval precision instrument --------------
+
+
+@app.command("eval")
+def eval_cmd(
+    set_path: str = typer.Option(
+        "", "--set", help="Path to a labelled eval-set JSON (defaults to the shipped SELF set)."
+    ),
+    k: int = typer.Option(5, "--k", help="Rank cutoff for hit@k."),
+) -> None:
+    """Run the retrieval precision eval (hit@k / MRR) against the live store.
+
+    A report instrument, not a gate: prints per-query hits/misses + the
+    aggregate baseline that v5.27.0's exactness work must beat. Queries go
+    daemon-first (warm model) with the in-process fallback, auto-scoped to
+    the current directory exactly like the production hook path."""
+    import os
+    from pathlib import Path
+
+    from mnemo import eval_retrieval as ev
+
+    fixture = (
+        Path(set_path)
+        if set_path
+        else Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "retrieval_eval.json"
+    )
+    entries = ev.load_eval_set(fixture)
+    cwd = os.getcwd()
+
+    def _query(e: ev.EvalEntry) -> list[str]:
+        payload = _daemon_query(e.prompt, k=k, cwd=(e.project_key or cwd))
+        if payload is not None:
+            return [str(h.get("source_path") or "") for h in payload.get("hits", [])]
+        # Daemon down: in-process fallback (slow path; loads the embedder).
+        from mnemo import retrieve
+
+        store = _open_store()
+        try:
+            if e.project_key is not None:
+                kwargs: dict = {"active_project": e.project_key}
+            else:
+                keys, _idx = retrieve.resolve_auto_scope(store, cwd)
+                kwargs = {"active_projects": keys or None}
+            res = retrieve.query(store, Embedder(), e.prompt, k=k, **kwargs)
+            return [h.source_path or "" for h in res.hits]
+        finally:
+            store.close()
+
+    rows = ev.run_entries(entries, query_fn=_query, k=k)
+    agg = ev.aggregate(rows)
+    typer.echo(ev.format_report(rows, agg))
 
 
 # --- mnemo key {create,list,revoke} (Phase 3 / Task 2.2) ------------------

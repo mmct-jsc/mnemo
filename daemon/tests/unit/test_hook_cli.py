@@ -114,6 +114,53 @@ def test_hook_session_start_banner_opt_out(
     assert payload["hookSpecificOutput"]["additionalContext"], "context stays"
 
 
+def test_hook_session_start_offers_indexing_for_unindexed_project(
+    runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """v5.26.0 (user spec): when the IDE's project is not indexed, the
+    session banner offers indexing (human-visible) and the model context
+    tells Claude it MAY offer `mnemo source add` -- never auto-index."""
+    src = _seed_memory(tmp_path)
+    runner.invoke(app, ["source", "add", str(src), "--kind", "memory_dir"])
+    runner.invoke(app, ["reindex", "--no-embed"])
+    proj = tmp_path / "fresh-proj"
+    (proj / ".git").mkdir(parents=True)
+    result = runner.invoke(app, ["hook", "session-start"], input=json.dumps({"cwd": str(proj)}))
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert "not indexed" in payload["systemMessage"]
+    assert "mnemo source add" in payload["systemMessage"]
+    ctx_text = payload["hookSpecificOutput"]["additionalContext"]
+    assert "mnemo source add" in ctx_text
+    assert "user" in ctx_text.lower(), "indexing must stay a user decision"
+
+
+def test_hook_session_start_no_offer_when_indexed(
+    runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("mnemo.retrieve.resolve_auto_scope", lambda store, cwd: ("K", True))
+    src = _seed_memory(tmp_path)
+    runner.invoke(app, ["source", "add", str(src), "--kind", "memory_dir"])
+    runner.invoke(app, ["reindex", "--no-embed"])
+    proj = tmp_path / "indexed-proj"
+    (proj / ".git").mkdir(parents=True)
+    result = runner.invoke(app, ["hook", "session-start"], input=json.dumps({"cwd": str(proj)}))
+    payload = json.loads(result.stdout)
+    assert "not indexed" not in payload["systemMessage"]
+
+
+def test_hook_session_start_no_offer_for_non_project_dir(runner: CliRunner, tmp_path: Path) -> None:
+    """A cwd without .git is not a project -- no nagging in the banner."""
+    src = _seed_memory(tmp_path)
+    runner.invoke(app, ["source", "add", str(src), "--kind", "memory_dir"])
+    runner.invoke(app, ["reindex", "--no-embed"])
+    plain = tmp_path / "just-a-dir"
+    plain.mkdir()
+    result = runner.invoke(app, ["hook", "session-start"], input=json.dumps({"cwd": str(plain)}))
+    payload = json.loads(result.stdout)
+    assert "not indexed" not in payload["systemMessage"]
+
+
 # --- user-prompt-submit ---------------------------------------------------
 
 
