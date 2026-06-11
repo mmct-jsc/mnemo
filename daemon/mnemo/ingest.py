@@ -281,6 +281,11 @@ def parse_code_file(path: Path, *, project_key: str | None = None) -> list[Parse
             "route_method": u.route_method,
             "route_path": u.route_path,
             "handler_source_path": u.handler_source_path,
+            # v5.28.0: the declaration's line range, demoted from the
+            # identity key to metadata. Consumers (git-log overlap,
+            # IDE jump) read it from here now.
+            "line_start": u.line_start,
+            "line_end": u.line_end,
         }
         fm = {"code_unit": edge_intent}
         out.append(
@@ -1035,13 +1040,14 @@ def _ingest_git_log_for_source(
     code_nodes_in_file: dict[str, list[tuple[str, int, int]]] = {}
     for code_type in ("code_function", "code_method", "code_module"):
         for node in store.list_nodes(type=code_type, limit=1_000_000):
-            sp = node.source_path or ""
-            # Code node source_paths carry a ``:start-end`` suffix
-            # appended by the code parser. Pull the line range out.
-            range_match = re.search(r":(\d+)-(\d+)(?:#.*)?$", sp)
-            if not range_match:
+            # v5.28.0: the line range lives in frontmatter (stable keys);
+            # code_file_and_range falls back to the legacy ``:start-end``
+            # suffix for any not-yet-migrated node.
+            file_part, rng = code_parser.code_file_and_range(
+                node.source_path or "", node.frontmatter_json
+            )
+            if rng is None:
                 continue
-            file_part = sp[: range_match.start()]
             # The path stored is repo-relative + posix. We compare
             # against the diff's per-file paths which are also
             # repo-relative posix (git show --no-prefix gives us that).
@@ -1051,8 +1057,7 @@ def _ingest_git_log_for_source(
             except ValueError:
                 # Not under this repo; skip.
                 continue
-            start = int(range_match.group(1))
-            end = int(range_match.group(2))
+            start, end = rng
             code_nodes_in_file.setdefault(file_rel, []).append((node.id, start, end))
 
     memory_nodes_by_name: dict[str, str] = {}

@@ -1330,19 +1330,13 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
                 detail="full_source only available for code_* nodes",
             )
 
-        # Parse the ``<file>:<start>-<end>(#METHOD)?`` source_path. For
-        # modules the suffix is missing -- treat as the whole file.
-        sp = n.source_path
-        file_part = sp
-        line_range: tuple[int, int] | None = None
-        if ":" in sp:
-            head, _, tail = sp.rpartition(":")
-            if "-" in tail:
-                a, _, b_with_meta = tail.partition("-")
-                b = b_with_meta.split("#", 1)[0]
-                if a.isdigit() and b.isdigit():
-                    file_part = head
-                    line_range = (int(a), int(b))
+        # v5.28.0: the stable key is ``<file>::<qualified_name>`` with the
+        # line range in frontmatter; ``code_file_and_range`` reads that
+        # (falling back to the legacy ``<file>:<start>-<end>`` suffix).
+        # For modules there is no range -- treat as the whole file.
+        from mnemo.parsers import code as _code
+
+        file_part, line_range = _code.code_file_and_range(n.source_path, n.frontmatter_json)
 
         path = _Path(file_part)
         if not path.is_file():
