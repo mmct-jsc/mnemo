@@ -68,5 +68,145 @@
     "prompt": "how does the doctor verify the plugin is registered in Claude Code",
     "expect_source_contains": ["doctor.py"],
     "note": "check_plugin_registered"
+  },
+  {
+    "prompt": "where does the FastAPI app get created and the v1 routes registered",
+    "expect_source_contains": ["server.py"],
+    "note": "create_app"
+  },
+  {
+    "prompt": "how does the MCP server expose mnemo tools over stdio",
+    "expect_source_contains": ["mcp_server.py"],
+    "note": "make_context / stdio server"
+  },
+  {
+    "prompt": "where is the server side spectral galaxy graph layout computed",
+    "expect_source_contains": ["graph_layout.py", "graph.py"],
+    "note": "v4.6 custom layout"
+  },
+  {
+    "prompt": "how does the chat agent stream tool calls back to the browser",
+    "expect_source_contains": ["chat.py"],
+    "note": "v3 SSE chat companion"
+  },
+  {
+    "prompt": "where are retrieval candidates compressed to fit the token budget",
+    "expect_source_contains": ["compress.py"],
+    "note": "<=800 token budgeting"
+  },
+  {
+    "prompt": "how does the active workspace drive the retrieval project scope",
+    "expect_source_contains": ["workspaces.py"],
+    "note": "active workspace -> project_key"
+  },
+  {
+    "prompt": "where does the file classifier decide a source file is suspicious",
+    "expect_source_contains": ["safeguards.py"],
+    "note": "classify_file heuristics"
+  },
+  {
+    "prompt": "how are git commits walked and turned into commit nodes",
+    "expect_source_contains": ["git_log.py"],
+    "note": "walk_commits / commit_to_node"
+  },
+  {
+    "prompt": "where does the markdown parser split frontmatter from the body",
+    "expect_source_contains": ["md.py"],
+    "note": "parsers/md frontmatter"
+  },
+  {
+    "prompt": "how does the Tier 2 resolver emit calls edges between functions",
+    "expect_source_contains": ["scope.py"],
+    "note": "resolve_calls"
+  },
+  {
+    "prompt": "where is the BM25 lexical search implemented over the FTS5 table",
+    "expect_source_contains": ["store.py"],
+    "note": "v5.27.0 bm25_search"
+  },
+  {
+    "prompt": "how does auto scope resolve which project keys a working directory belongs to",
+    "expect_source_contains": ["retrieve.py"],
+    "note": "v5.26.0 resolve_auto_scope"
+  },
+  {
+    "prompt": "where is the exact name finisher boost applied to a retrieval candidate",
+    "expect_source_contains": ["retrieve.py"],
+    "note": "v5.27.0 _exact_name_match"
+  },
+  {
+    "prompt": "how does a code declaration get its line stable identity key",
+    "expect_source_contains": ["code.py"],
+    "note": "v5.28.0 _stabilize_keys / code_file_and_range"
+  },
+  {
+    "prompt": "where does reindex re-key a legacy code node in place during migration",
+    "expect_source_contains": ["ingest.py"],
+    "note": "v5.28.0 _migrate_legacy_code_node"
+  },
+  {
+    "prompt": "how does the code identity migration dry run copy the database",
+    "expect_source_contains": ["migrate_identity.py"],
+    "note": "v5.28.0 dry_run_from_db"
+  },
+  {
+    "prompt": "where is the per file mtime recorded so an unchanged reindex is skipped",
+    "expect_source_contains": ["store.py", "ingest.py"],
+    "note": "v5.28.0 file_index / set_file_mtime"
+  },
+  {
+    "prompt": "how does the embedder fall back when the model is not cached locally",
+    "expect_source_contains": ["embed.py"],
+    "note": "local_files_only then network"
+  },
+  {
+    "prompt": "where are query feedback events recorded for the auto tuner",
+    "expect_source_contains": ["store.py"],
+    "note": "feedback_event table"
+  },
+  {
+    "prompt": "how does the prompt architect exclude local only nodes before paste",
+    "expect_source_contains": ["retrieve.py", "agent_tools.py"],
+    "note": "exclude_local_only"
+  },
+  {
+    "prompt": "where is the coordinate descent auto tuner that rescos weights",
+    "expect_source_contains": ["autotune.py", "retrieve.py"],
+    "note": "v1.2 auto-tuner"
+  },
+  {
+    "prompt": "how does a full source request re-read the exact lines from disk",
+    "expect_source_contains": ["server.py"],
+    "note": "get_node_full_source"
+  },
+  {
+    "prompt": "what is the dual remote ship workflow for a mnemo release",
+    "expect_source_contains": ["feedback_mnemo_release_workflow"],
+    "note": "branch -> tag -> PR -> merge sequence"
+  },
+  {
+    "prompt": "what are the canonical working pipelines for mnemo development",
+    "expect_source_contains": ["reference_mnemo_pipelines"],
+    "note": "BASE pipelines reference"
+  },
+  {
+    "prompt": "what is the BASE flag and project isolation contract in mnemo",
+    "expect_source_contains": ["project_mnemo_base_isolation"],
+    "note": "BASE bypasses isolation"
+  },
+  {
+    "prompt": "how must starlette middleware order be set so header stampers run last",
+    "expect_source_contains": ["feedback_starlette_middleware_order"],
+    "note": "last add_middleware is outermost"
+  },
+  {
+    "prompt": "what are the Alpine.js gotchas for the mnemo UI",
+    "expect_source_contains": ["feedback_mnemo_alpine_gotchas"],
+    "note": "named factories, scoped querySelector"
+  },
+  {
+    "prompt": "why does Path.resolve behave differently across platforms for project keys",
+    "expect_source_contains": ["feedback_cross_platform_path_resolve"],
+    "note": "pass through absolute paths"
   }
 ]

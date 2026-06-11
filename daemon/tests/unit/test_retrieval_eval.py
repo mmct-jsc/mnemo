@@ -93,7 +93,8 @@ def test_eval_cli_prints_baseline_report(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setattr("mnemo.cli._daemon_query", fake_daemon_query)
     result = CliRunner().invoke(app, ["eval"])
     assert result.exit_code == 0, result.stdout
-    assert "n=14" in result.stdout, "must run every SELF entry"
+    n_expected = len(ev.load_eval_set(FIXTURE))
+    assert f"n={n_expected}" in result.stdout, "must run every SELF entry"
     assert "hit@5=" in result.stdout
     assert "mrr=" in result.stdout
     # the statusline entry is satisfied by the canned hit; misses are listed

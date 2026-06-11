@@ -249,8 +249,18 @@ def _build_index(store: Store) -> _ResolutionIndex:
 
 
 def _module_path_of(source_path: str) -> str:
-    """Strip the v2.0 ``:<line>-<line>`` declaration suffix to get the
-    file path. For module nodes this is a no-op."""
+    """Return the file path that owns a declaration's key.
+
+    v5.28.0: the stable key is ``<file>::<qualified_name>`` -- the file
+    path is everything before the first ``::`` (the file may itself
+    contain single ``:`` from a Windows drive letter, so we split on the
+    double-colon separator, not the last colon). Pre-migration nodes
+    still carry the legacy ``<file>:<start>-<end>`` form, so we keep the
+    line-range strip as a fallback. For module nodes (no suffix at all)
+    this is a no-op."""
+    idx = source_path.find("::")
+    if idx != -1:
+        return source_path[:idx]
     if ":" not in source_path:
         return source_path
     head, _, tail = source_path.rpartition(":")

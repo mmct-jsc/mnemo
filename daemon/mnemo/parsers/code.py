@@ -45,6 +45,8 @@ yields a ``code_module`` node and we move on.
 from __future__ import annotations
 
 import hashlib
+import json
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -60,6 +62,12 @@ if TYPE_CHECKING:  # pragma: no cover -- import-time only
 # without compressing the head past usefulness.
 MODULE_HEAD_LINES = 60
 FUNCTION_BODY_HEAD_LINES = 60
+
+# v5.28.0: the legacy line-range suffix the builders still emit
+# internally (``<file>:<start>-<end>`` with an optional ``#method``
+# route tiebreaker). :func:`_stabilize_keys` parses it to recover the
+# line range, then rewrites the key to the line-stable form.
+_LINE_RANGE_SUFFIX = re.compile(r":(\d+)-(\d+)(?:#.*)?$")
 
 
 @dataclass
@@ -122,6 +130,11 @@ class CodeUnit:
     route_method: str | None = None
     route_path: str | None = None
     handler_source_path: str | None = None
+    # v5.28.0: the declaration's line range, preserved as metadata after
+    # the identity key stopped encoding it (see SS_stabilize_keys). 0/0
+    # for the module unit and any unit whose key never carried a range.
+    line_start: int = 0
+    line_end: int = 0
 
 
 # Per-language declaration extractor. Receives the parsed tree + the
@@ -176,7 +189,107 @@ def extract(path: Path, source: bytes, *, language: str) -> list[CodeUnit]:
             framework_units.extend(fx(tree, source, module.source_path, declarations))
         except Exception:  # noqa: BLE001 -- defensive: a broken extractor mustn't crash ingest
             continue
-    return [module, *declarations, *framework_units]
+    all_units = [module, *declarations, *framework_units]
+    # v5.28.0: rewrite line-range keys to the line-stable identity form
+    # in one place, AFTER every builder + framework extractor has run
+    # (so the framework extractors' line-range handler matching still
+    # works on the keys they expect). See :func:`_stabilize_keys`.
+    _stabilize_keys(module.source_path, all_units)
+    return all_units
+
+
+def _qualified_name(unit: CodeUnit, by_old_key: dict[str, CodeUnit]) -> str:
+    """The within-file qualifier for a declaration's stable key.
+
+    - method -> ``<ClassName>.<method>`` (the parent class is looked up
+      by its still-legacy ``parent_source_path``; falls back to the bare
+      method name if the parent isn't a unit in this file).
+    - function / class -> the declaration name.
+    - route / anything else -> the unit's display name (routes name
+      themselves ``"<METHOD> <path>"``, which is line-stable; the legacy
+      line+method tiebreaker is dropped).
+    """
+    if unit.type == "code_method" and unit.parent_source_path:
+        parent = by_old_key.get(unit.parent_source_path)
+        if parent is not None:
+            return f"{parent.name}.{unit.name}"
+    return unit.name
+
+
+def _stabilize_keys(file_key: str, units: list[CodeUnit]) -> None:
+    """Rewrite legacy ``<file>:<start>-<end>`` keys to the line-stable
+    ``<file>::<qualified_name>`` form, in place, and remap the
+    cross-reference fields (``parent_source_path`` /
+    ``children_source_paths`` / ``handler_source_path``) through the
+    same old->new mapping.
+
+    Only units whose current ``source_path`` carries the legacy
+    line-range suffix are re-keyed; already-stable forms (the module's
+    bare file path, ``endpoint:METHOD:path``) are left untouched. The
+    parsed line range is preserved on each re-keyed unit as
+    ``line_start`` / ``line_end``. Collisions on the same qualified name
+    within one file (overloads, redefinitions, repeated ``<anonymous>``)
+    get a document-order ordinal suffix ``#2``, ``#3``, ... -- the first
+    occurrence stays unsuffixed for stability.
+    """
+    by_old_key = {u.source_path: u for u in units}
+    remap: dict[str, str] = {}
+    used: dict[str, int] = {}
+    for u in units:
+        m = _LINE_RANGE_SUFFIX.search(u.source_path)
+        if m is None:
+            continue  # module / endpoint / already-stable key
+        u.line_start = int(m.group(1))
+        u.line_end = int(m.group(2))
+        base = f"{file_key}::{_qualified_name(u, by_old_key)}"
+        n = used.get(base, 0) + 1
+        used[base] = n
+        remap[u.source_path] = base if n == 1 else f"{base}#{n}"
+    if not remap:
+        return
+    for u in units:
+        u.source_path = remap.get(u.source_path, u.source_path)
+        if u.parent_source_path is not None:
+            u.parent_source_path = remap.get(u.parent_source_path, u.parent_source_path)
+        if u.handler_source_path is not None:
+            u.handler_source_path = remap.get(u.handler_source_path, u.handler_source_path)
+        if u.children_source_paths:
+            u.children_source_paths = [remap.get(c, c) for c in u.children_source_paths]
+
+
+def code_file_and_range(
+    source_path: str, frontmatter_json: str | None = None
+) -> tuple[str, tuple[int, int] | None]:
+    """Split a stored code node's identity into ``(file_path, line_range)``.
+
+    v5.28.0: the stable key is ``<file>::<qualified_name>`` and the line
+    range lives in ``frontmatter_json['code_unit']['line_start'/'line_end']``.
+    Pre-migration nodes still carry the legacy ``<file>:<start>-<end>``
+    form, so the line-range suffix is parsed as a fallback. Returns
+    ``(file_path, (start, end))`` or ``(file_path, None)`` when no range
+    is recoverable (e.g. a module node). This is the one helper every
+    stored-node consumer (git-log overlap, the full_source endpoint)
+    should use so the key format lives in exactly one place.
+    """
+    sep = source_path.find("::")
+    if sep != -1:
+        file_path = source_path[:sep]
+    else:
+        m = _LINE_RANGE_SUFFIX.search(source_path)
+        file_path = source_path[: m.start()] if m else source_path
+    if frontmatter_json:
+        try:
+            cu = json.loads(frontmatter_json).get("code_unit")
+        except (ValueError, AttributeError):
+            cu = None
+        if isinstance(cu, dict):
+            ls, le = cu.get("line_start"), cu.get("line_end")
+            if isinstance(ls, int) and isinstance(le, int) and ls > 0 and le > 0:
+                return file_path, (ls, le)
+    m = _LINE_RANGE_SUFFIX.search(source_path)
+    if m is not None:
+        return file_path, (int(m.group(1)), int(m.group(2)))
+    return file_path, None
 
 
 def _framework_extractors_for(language: str) -> list[object]:

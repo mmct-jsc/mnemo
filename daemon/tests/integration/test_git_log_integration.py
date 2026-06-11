@@ -112,12 +112,18 @@ def _seed_code_and_memory(store: Store, repo_path: Path) -> tuple[str, str]:
     memory_feedback node named ``feedback_token_flake`` so the edges
     have endpoints to attach to. Returns (login_id, memory_id).
     """
+    import json
+
+    # v5.28.0: code nodes carry a line-stable ``<file>::<qualified_name>``
+    # key; the line range lives in frontmatter ``code_unit``. The git-log
+    # overlap reads the range from there (this seed exercises that path).
     login = Node.new(
         type="code_function",
         name="login",
         body="<auth login>",
-        source_path=f"{repo_path}/auth.py:1-7",
+        source_path=f"{repo_path}/auth.py::login",
         source_kind="code_repo",
+        frontmatter_json=json.dumps({"code_unit": {"line_start": 1, "line_end": 7}}),
     )
     store.upsert_node(login)
     feedback = Node.new(

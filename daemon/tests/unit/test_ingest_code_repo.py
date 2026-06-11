@@ -125,13 +125,21 @@ def test_scan_source_code_repo_module_node_has_source_path_equal_to_file(
     assert module.source_path.endswith("/x.py")
 
 
-def test_scan_source_code_repo_function_node_has_line_range(tmp_path: Path) -> None:
+def test_scan_source_code_repo_function_node_has_stable_key_and_line_range(
+    tmp_path: Path,
+) -> None:
+    import json
+
     _write(tmp_path / "x.py", "def f():\n    pass\n")
     parsed = list(ingest.scan_source(_src(tmp_path)))
     fn = next(p for p in parsed if p.type == "code_function")
-    assert ":" in fn.source_path
-    # Line numbers are 1-indexed.
-    assert fn.source_path.endswith(":1-2")
+    # v5.28.0: stable identity key (no line range in the key)...
+    assert fn.source_path.endswith("/x.py::f")
+    assert "::" in fn.source_path
+    # ...the line range moved to frontmatter code_unit metadata.
+    cu = json.loads(fn.frontmatter_json)["code_unit"]
+    assert cu["line_start"] == 1
+    assert cu["line_end"] == 2
 
 
 # --- Reindex post-pass: edge wiring --------------------------------------

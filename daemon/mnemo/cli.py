@@ -285,6 +285,35 @@ def reindex(
         store.close()
 
 
+@app.command("migrate-code-identity")
+def migrate_code_identity(
+    apply: bool = typer.Option(
+        False,
+        "--apply",
+        help="Run against the LIVE store and commit (default: dry-run on a throwaway copy)",
+    ),
+) -> None:
+    """v5.28.0: migrate code nodes to line-stable <file>::<qualified_name>
+    keys and report the impact.
+
+    Default is a DRY RUN against a COPY of the live DB -- it touches
+    nothing live and prints how many legacy nodes would be re-keyed in
+    place (id preserved) vs orphaned. Review those numbers before
+    --apply (the same migration also happens lazily on any reindex).
+    """
+    from mnemo import migrate_identity
+
+    if apply:
+        store = _open_store()
+        try:
+            report = migrate_identity.run_code_identity_migration(store, embedder=Embedder())
+        finally:
+            store.close()
+    else:
+        report = migrate_identity.dry_run_from_db(paths.db_path())
+    typer.echo(json.dumps(report, indent=2))
+
+
 @app.command()
 def query(
     prompt: str = typer.Argument(..., help="Query text"),
@@ -1156,7 +1185,14 @@ def eval_cmd(
 
     rows = ev.run_entries(entries, query_fn=_query, k=k)
     agg = ev.aggregate(rows)
-    typer.echo(ev.format_report(rows, agg))
+    # v5.28.0: pin a corpus snapshot in the header so two reports are
+    # comparable (the set is noisy when the corpus drifts between runs).
+    snap_store = _open_store()
+    try:
+        corpus = ev.corpus_snapshot(snap_store)
+    finally:
+        snap_store.close()
+    typer.echo(ev.format_report(rows, agg, corpus=corpus))
 
 
 # --- mnemo key {create,list,revoke} (Phase 3 / Task 2.2) ------------------
