@@ -253,9 +253,10 @@
     // leaves that as plain text rather than erroring.
     window.mnemoLanguageOf = (sourcePath) => {
       if (!sourcePath) return 'none';
-      // Strip the ":start-end" line-range suffix the code parser stamps
-      // onto code_function / code_class source_paths.
-      const clean = String(sourcePath).replace(/:\d+-\d+(#.+)?$/, '').toLowerCase();
+      // Strip the identity suffix the code parser stamps onto
+      // code_function / code_class source_paths: the v5.28.0 stable form
+      // "::qualified_name" OR the legacy ":start-end" line-range suffix.
+      const clean = String(sourcePath).replace(/::.*$|:\d+-\d+(#.+)?$/, '').toLowerCase();
       const m = clean.match(/\.([a-z0-9]+)$/);
       if (!m) return 'none';
       return ({

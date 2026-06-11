@@ -44,8 +44,10 @@ def test_extract_python_yields_top_level_function() -> None:
     assert len(fns) == 1
     fn = fns[0]
     assert fn.name == "login"
-    # Lines are 1-indexed in source_path so the IDE can jump directly.
-    assert ":1-" in fn.source_path or fn.source_path.endswith(":1-2")
+    # v5.28.0: the identity key is line-stable (``<file>::<name>``); the
+    # line range is preserved as metadata, not in the key.
+    assert fn.source_path == "/repo/auth.py::login"
+    assert fn.line_start == 1
 
 
 def test_extract_python_yields_top_level_class() -> None:
@@ -157,16 +159,17 @@ def test_extract_python_short_function_body_is_verbatim() -> None:
     assert "return 1" in fn.body
 
 
-def test_extract_python_source_path_uses_line_range_suffix() -> None:
+def test_extract_python_distinct_functions_get_distinct_keys() -> None:
+    """v5.28.0: distinct declaration names -> distinct line-stable keys.
+    (Same-name collisions are disambiguated by ordinal -- see
+    test_parsers_code_identity.py.)"""
     from mnemo.parsers import code
 
     src = b"def f():\n    pass\n\ndef g():\n    pass\n"
     units = code.extract(Path("/repo/x.py"), src, language="python")
     fns = [u for u in units if u.type == "code_function"]
-    # Each function has a unique line range so they get distinct keys.
     assert len(fns) == 2
-    assert fns[0].source_path != fns[1].source_path
-    assert ":" in fns[0].source_path
+    assert {u.source_path for u in fns} == {"/repo/x.py::f", "/repo/x.py::g"}
 
 
 def test_extract_python_skips_decorated_helpers_only_for_method_of() -> None:

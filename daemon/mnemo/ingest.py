@@ -281,6 +281,11 @@ def parse_code_file(path: Path, *, project_key: str | None = None) -> list[Parse
             "route_method": u.route_method,
             "route_path": u.route_path,
             "handler_source_path": u.handler_source_path,
+            # v5.28.0: the declaration's line range, demoted from the
+            # identity key to metadata. Consumers (git-log overlap,
+            # IDE jump) read it from here now.
+            "line_start": u.line_start,
+            "line_end": u.line_end,
         }
         fm = {"code_unit": edge_intent}
         out.append(
@@ -299,6 +304,53 @@ def parse_code_file(path: Path, *, project_key: str | None = None) -> list[Parse
             )
         )
     return out
+
+
+# v5.28.0: code declaration types whose identity key carried a line
+# range pre-stable-keys. code_module (bare file path) and code_endpoint
+# (endpoint:METHOD:path) keys were already stable, so they never churn
+# and never need migration.
+_CODE_DECL_TYPES = ("code_function", "code_class", "code_method", "code_route")
+
+
+def _parsed_line_range(parsed: ParsedFile) -> tuple[int, int]:
+    """``(line_start, line_end)`` from a parsed code unit's ``code_unit``
+    frontmatter, or ``(0, 0)`` when absent."""
+    if not parsed.frontmatter_json:
+        return 0, 0
+    try:
+        cu = json.loads(parsed.frontmatter_json).get("code_unit") or {}
+    except (ValueError, AttributeError):
+        return 0, 0
+    return int(cu.get("line_start") or 0), int(cu.get("line_end") or 0)
+
+
+def _migrate_legacy_code_node(store: Store, parsed: ParsedFile, stable_key: str) -> Node | None:
+    """v5.28.0 reconcile fallback: when a code declaration's stable key
+    misses, find its legacy line-range node and re-key it IN PLACE
+    (id-preserving, no re-embed) rather than churning a new node.
+
+    Returns the re-keyed node, or None when there is no legacy candidate
+    (a genuinely new declaration). For same-name overloads in one file,
+    picks the legacy node whose stored start line is nearest the parsed
+    unit's -- deterministic.
+    """
+    file_path, _ = code_parser.code_file_and_range(stable_key, parsed.frontmatter_json)
+    candidates = store.find_legacy_code_node(file_path, parsed.type, parsed.name)
+    if not candidates:
+        return None
+    ls, le = _parsed_line_range(parsed)
+    if len(candidates) == 1:
+        chosen = candidates[0]
+    else:
+
+        def _start_distance(n: Node) -> int:
+            _f, rng = code_parser.code_file_and_range(n.source_path, n.frontmatter_json)
+            return abs((rng[0] if rng else 0) - ls)
+
+        chosen = min(candidates, key=_start_distance)
+    store.rekey_node(chosen.id, stable_key, line_start=ls, line_end=le)
+    return store.get_node(chosen.id)
 
 
 def _resolve_base_flag(fm: dict[str, object]) -> bool:
@@ -648,6 +700,49 @@ def reindex_events(
                     },
                 )
 
+                # v5.28.0: mtime-skip for code_repo files already indexed
+                # by this version. The file_index table is new in v5.28.0,
+                # so the FIRST post-upgrade reindex records no mtime and
+                # parses everything (running the identity migration); only
+                # subsequent unchanged reindexes skip the re-parse.
+                posix_path = path_str.replace("\\", "/")
+                code_mtime: float | None = None
+                if src.kind == "code_repo":
+                    try:
+                        code_mtime = file_path.stat().st_mtime
+                    except OSError:
+                        code_mtime = None
+                    if code_mtime is not None and store.get_file_mtime(posix_path) == code_mtime:
+                        file_sps = store.source_paths_for_file(posix_path)
+                        # Defense-in-depth: never skip a file that still
+                        # has a legacy-keyed code node -- the identity
+                        # migration must run for it first (the design's
+                        # "skip only after no legacy node remains" gate).
+                        has_legacy = any(
+                            "::" not in sp
+                            and code_parser.code_file_and_range(sp, None)[1] is not None
+                            for sp in file_sps
+                        )
+                        if not has_legacy:
+                            # Keep the cached file's nodes out of the
+                            # deletion sweep, then skip the re-parse.
+                            for sp in file_sps:
+                                seen_source_paths.add(sp)
+                            file_idx += 1
+                            yield (
+                                "file",
+                                {
+                                    "idx": file_idx,
+                                    "path": posix_path,
+                                    "status": "skipped",
+                                    "added": 0,
+                                    "updated": 0,
+                                    "unchanged": 0,
+                                    "errors": [],
+                                },
+                            )
+                            continue
+
                 try:
                     if src.kind == "code_repo":
                         parsed_files = list(parse_code_file(file_path, project_key=src.project_key))
@@ -671,6 +766,12 @@ def reindex_events(
                     node_source_path = parsed.source_path or str(parsed.path)
                     seen_source_paths.add(node_source_path)
                     existing = store.get_node_by_source(node_source_path)
+                    if existing is None and parsed.type in _CODE_DECL_TYPES:
+                        # v5.28.0: a stable-key miss on a code declaration
+                        # may be a pre-v5.28 / moved node still under its
+                        # legacy line-range key -- re-key it in place
+                        # instead of churning a new id + a re-embed.
+                        existing = _migrate_legacy_code_node(store, parsed, node_source_path)
                     file_idx += 1
                     delta = {"added": 0, "updated": 0, "unchanged": 0}
                     status: str
@@ -717,6 +818,22 @@ def reindex_events(
                         if parsed.type.startswith("code_"):
                             touched_code_node_ids.append(existing.id)
                     else:
+                        # v5.28.0: refresh the line-range metadata even
+                        # when the body hash is unchanged -- a declaration
+                        # can move without its bytes changing. Cheap
+                        # id-preserving UPDATE, never a re-embed.
+                        if parsed.type in _CODE_DECL_TYPES:
+                            ls, le = _parsed_line_range(parsed)
+                            _f, cur = code_parser.code_file_and_range(
+                                existing.source_path, existing.frontmatter_json
+                            )
+                            if (ls or le) and cur != (ls, le):
+                                store.rekey_node(
+                                    existing.id,
+                                    existing.source_path,
+                                    line_start=ls,
+                                    line_end=le,
+                                )
                         report.unchanged += 1
                         delta["unchanged"] = 1
                         status = "unchanged"
@@ -732,6 +849,12 @@ def reindex_events(
                             "errors": [],
                         },
                     )
+                # v5.28.0: record the file mtime so an unchanged re-parse
+                # is skipped next reindex (code_repo only). Reached only
+                # after a successful parse + reconcile -- a malformed file
+                # ``continue``s above without recording, so it is retried.
+                if src.kind == "code_repo" and code_mtime is not None:
+                    store.set_file_mtime(posix_path, code_mtime)
             store.mark_source_indexed(src.path)
         except Exception as exc:  # noqa: BLE001 - we want to keep going on bad sources
             report.errors.append((src.path, str(exc)))
@@ -1035,13 +1158,14 @@ def _ingest_git_log_for_source(
     code_nodes_in_file: dict[str, list[tuple[str, int, int]]] = {}
     for code_type in ("code_function", "code_method", "code_module"):
         for node in store.list_nodes(type=code_type, limit=1_000_000):
-            sp = node.source_path or ""
-            # Code node source_paths carry a ``:start-end`` suffix
-            # appended by the code parser. Pull the line range out.
-            range_match = re.search(r":(\d+)-(\d+)(?:#.*)?$", sp)
-            if not range_match:
+            # v5.28.0: the line range lives in frontmatter (stable keys);
+            # code_file_and_range falls back to the legacy ``:start-end``
+            # suffix for any not-yet-migrated node.
+            file_part, rng = code_parser.code_file_and_range(
+                node.source_path or "", node.frontmatter_json
+            )
+            if rng is None:
                 continue
-            file_part = sp[: range_match.start()]
             # The path stored is repo-relative + posix. We compare
             # against the diff's per-file paths which are also
             # repo-relative posix (git show --no-prefix gives us that).
@@ -1051,8 +1175,7 @@ def _ingest_git_log_for_source(
             except ValueError:
                 # Not under this repo; skip.
                 continue
-            start = int(range_match.group(1))
-            end = int(range_match.group(2))
+            start, end = rng
             code_nodes_in_file.setdefault(file_rel, []).append((node.id, start, end))
 
     memory_nodes_by_name: dict[str, str] = {}

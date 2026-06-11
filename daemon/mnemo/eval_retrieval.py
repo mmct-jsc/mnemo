@@ -22,12 +22,17 @@ reciprocal rank; aggregates are hit@1 / hit@5 / MRR over the set.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from mnemo.paths import _strip_line_range
+
+if TYPE_CHECKING:  # pragma: no cover -- typing only
+    from mnemo.store import Store
 
 
 @dataclass
@@ -95,6 +100,26 @@ def aggregate(rows: Iterable[dict]) -> dict:
     }
 
 
+def corpus_snapshot(store: Store) -> dict:
+    """A comparable fingerprint of the corpus so two eval runs are
+    apples-to-apples (v5.28.0).
+
+    The n=14 set was noisy because the live corpus drifts between runs
+    (every memory/doc edit triggers the reindex hook). Recording the
+    node count + a sha1 over sorted ``(id, hash)`` pairs lets a reader
+    tell whether two reports were measured against the same corpus -- the
+    fingerprint changes whenever any node is added, removed, or edited.
+    """
+    nodes = store.list_nodes(limit=10**9)
+    h = hashlib.sha1()
+    for nid, nhash in sorted((n.id, n.hash or "") for n in nodes):
+        h.update(nid.encode("utf-8"))
+        h.update(b"\x00")
+        h.update(nhash.encode("utf-8"))
+        h.update(b"\n")
+    return {"node_count": len(nodes), "fingerprint": h.hexdigest()[:12]}
+
+
 def run_entries(
     entries: list[EvalEntry],
     *,
@@ -117,8 +142,13 @@ def run_entries(
     return rows
 
 
-def format_report(rows: list[dict], agg: dict) -> str:
-    lines = ["mnemo retrieval eval", ""]
+def format_report(rows: list[dict], agg: dict, corpus: dict | None = None) -> str:
+    header = ["mnemo retrieval eval"]
+    if corpus:
+        header.append(
+            f"corpus: {corpus.get('node_count', '?')} nodes  fp={corpus.get('fingerprint', '?')}"
+        )
+    lines = [*header, ""]
     for r in rows:
         mark = "[hit]" if r.get("hit_at_5") else "[miss]"
         rank = r.get("rank")

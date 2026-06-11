@@ -2,6 +2,41 @@
 
 All notable changes to mnemo are documented here.
 
+## [5.28.0] - 2026-06-11
+
+**Stable code-node identity + reindex mtime-skip (workstream C, part 3 -- closes the make-it-real arc; lesson #129).**
+
+Code declaration nodes keyed by `<file>:<start>-<end>` re-keyed on every
+line shift, churning hundreds of nodes per reindex (delete + recreate +
+re-embed, losing each node's id and its edges / feedback / history).
+v5.28.0 moves them to a line-stable `<file>::<qualified_name>` key with the
+line range demoted to frontmatter metadata.
+
+- **Stable identity key.** The parser assigns `<file>::<qualified_name>`
+  (methods -> `<Class>.<method>`; same-name collisions get a document-order
+  ordinal) in one post-build pass; the line range moves to
+  `frontmatter.code_unit`. Every stored-node consumer of the old suffix
+  (the Tier-2 calls resolver, git-log overlap, the `full_source` endpoint,
+  the UI language hint) reads the range via a shared `code_file_and_range`
+  helper, with a legacy-suffix fallback.
+- **Lazy in-place migration.** On reindex, a stable-key miss on a code
+  declaration matches the legacy line-range node by `(file, type, name)`
+  and re-keys it IN PLACE (`rekey_node`) -- preserving the node id (hence
+  edges, feedback, audit refs) and the embedding -- instead of churning.
+  Dry-run on the live 17,958-node corpus: **12,978 of 12,983 legacy code
+  nodes re-keyed in place, 0 left legacy, 5 real orphans, 100% id
+  preserved.**
+- **Dry-run gate.** `mnemo migrate-code-identity` (default: dry-run on a
+  throwaway DB copy; `--apply` for the live store) reports
+  rekeyed / would-orphan / id-preserved before the migration is trusted.
+- **Reindex mtime-skip.** A new `file_index` table records each code
+  file's mtime; an unchanged `code_repo` file is skipped (not re-parsed) on
+  reindex -- gated so a file with any remaining legacy-keyed node is never
+  skipped (the migration always runs first).
+- **`mnemo eval` expanded** 14 -> 42 queries + a pinned corpus snapshot
+  (node count + fingerprint) in the report header so two runs are
+  comparable.
+
 ## [5.27.0] - 2026-06-10
 
 **Exactness: lexical recall + exact-name + NULL-key fix (workstream C, part 2).**

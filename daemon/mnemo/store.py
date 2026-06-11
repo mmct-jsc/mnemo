@@ -814,6 +814,16 @@ CREATE TABLE IF NOT EXISTS audit_queue (
 );
 
 CREATE INDEX IF NOT EXISTS idx_audit_queue_status ON audit_queue(status);
+
+-- v5.28.0: per-file mtime cache for the reindex mtime-skip (code_repo
+-- only). A recorded mtime means THIS version already parsed (and
+-- migrated) the file, so an unchanged re-parse can be skipped. Lives in
+-- the ALWAYS-run SCHEMA_SQL so the table exists on every store.
+CREATE TABLE IF NOT EXISTS file_index (
+  path        TEXT PRIMARY KEY,
+  mtime       REAL NOT NULL,
+  indexed_at  INTEGER NOT NULL
+);
 """
 
 
@@ -1052,6 +1062,106 @@ class Store:
                 "SELECT * FROM nodes WHERE source_path = ?", (source_path,)
             ).fetchone()
             return self._row_to_node(row) if row else None
+
+    def rekey_node(
+        self, node_id: str, new_source_path: str, *, line_start: int, line_end: int
+    ) -> None:
+        """v5.28.0: move a code node to a line-stable identity key in place.
+
+        Sets ``source_path`` to ``new_source_path`` and stamps the line
+        range into ``frontmatter_json['code_unit']`` (preserving any
+        existing code_unit fields). The node id, hash, embedding (vec
+        row), edges, feedback, and audit refs are all keyed by id and so
+        are preserved untouched -- this is a pure IDENTITY move, not a
+        content edit, so ``updated_at`` and ``hash`` are deliberately
+        left unchanged (no recency bump, no re-embed). No-op if the node
+        is gone.
+        """
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT frontmatter_json FROM nodes WHERE id = ?", (node_id,)
+            ).fetchone()
+            if row is None:
+                return
+            try:
+                fm = json.loads(row["frontmatter_json"]) if row["frontmatter_json"] else {}
+            except (ValueError, TypeError):
+                fm = {}
+            if not isinstance(fm, dict):
+                fm = {}
+            cu = fm.get("code_unit")
+            if not isinstance(cu, dict):
+                cu = {}
+            cu["line_start"] = line_start
+            cu["line_end"] = line_end
+            fm["code_unit"] = cu
+            self.conn.execute(
+                "UPDATE nodes SET source_path = ?, frontmatter_json = ? WHERE id = ?",
+                (new_source_path, json.dumps(fm, sort_keys=True), node_id),
+            )
+            self.conn.commit()
+
+    def find_legacy_code_node(self, file_path: str, node_type: str, name: str) -> list[Node]:
+        """v5.28.0 reconcile fallback: legacy (pre-stable-key) code nodes
+        for one declaration.
+
+        Returns nodes of ``node_type`` named ``name`` whose ``source_path``
+        is a legacy ``<file>:<start>-<end>`` key under ``file_path`` (NOT
+        already on the ``::`` stable form). May return more than one for
+        same-name declarations in the same file (overloads / redefinitions);
+        the reconcile picks by nearest line.
+        """
+        from mnemo.parsers import code as _code
+
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT * FROM nodes WHERE type = ? AND name = ?", (node_type, name)
+            ).fetchall()
+        out: list[Node] = []
+        for row in rows:
+            sp = row["source_path"] or ""
+            if "::" in sp:
+                continue  # already migrated to the stable key
+            fp, rng = _code.code_file_and_range(sp, row["frontmatter_json"])
+            if rng is not None and fp == file_path:
+                out.append(self._row_to_node(row))
+        return out
+
+    def get_file_mtime(self, path: str) -> float | None:
+        """v5.28.0: the mtime recorded for ``path`` at its last index, or
+        None if this version has never indexed it (the reindex mtime-skip
+        gate)."""
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT mtime FROM file_index WHERE path = ?", (path,)
+            ).fetchone()
+        return float(row["mtime"]) if row else None
+
+    def set_file_mtime(self, path: str, mtime: float) -> None:
+        """v5.28.0: record ``path``'s mtime after a successful parse so an
+        unchanged re-parse can be skipped next reindex."""
+        with self._lock:
+            self.conn.execute(
+                "INSERT INTO file_index (path, mtime, indexed_at) VALUES (?, ?, ?) "
+                "ON CONFLICT(path) DO UPDATE SET mtime = excluded.mtime, "
+                "indexed_at = excluded.indexed_at",
+                (path, mtime, int(time.time())),
+            )
+            self.conn.commit()
+
+    def source_paths_for_file(self, file_path: str) -> list[str]:
+        """v5.28.0: every node source_path owned by ``file_path`` (the
+        bare module key plus all ``<file>::<qual>`` / legacy
+        ``<file>:<range>`` declaration keys). When a file is mtime-skipped
+        these are re-added to ``seen_source_paths`` so the deletion sweep
+        doesn't reap them. ``file_path`` must be the posix form the parser
+        stores."""
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT source_path FROM nodes WHERE source_path = ? OR source_path GLOB ?",
+                (file_path, file_path + ":*"),
+            ).fetchall()
+        return [r["source_path"] for r in rows]
 
     def get_nodes_by_ids(self, ids: list[str]) -> dict[str, Node]:
         """Batched lookup. Returns ``{id: Node}`` for ids that exist.
