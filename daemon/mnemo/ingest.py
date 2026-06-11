@@ -545,6 +545,24 @@ def reindex_events(
     indexed_count = 0
 
     src_list = sources if sources is not None else store.list_sources(only_enabled=True)
+
+    # v5.27.0: NULL-keyed directory sources make every owned node
+    # cross-cutting (the v1.2.1 contract), leaking foreign docs into every
+    # scoped query. Derive the key from the source root, persist it, and
+    # backfill owned NULL-key nodes. claude_md stays None -- global memory
+    # is cross-cutting BY DESIGN.
+    from mnemo.paths import resolve_project_key
+
+    for src in src_list:
+        if src.project_key is None and src.kind != "claude_md":
+            derived = resolve_project_key(src.path)
+            try:
+                store.set_source_project_key(src.path, derived)
+                store.backfill_project_keys(src.path, derived, src.kind)
+            except Exception as exc:  # pragma: no cover - defensive
+                log.warning("project_key backfill failed for %s: %s", src.path, exc)
+            src.project_key = derived  # nodes parsed this run inherit it
+
     seen_source_paths: set[str] = set()
     # Track every just-touched code node so the edge post-pass can run
     # against a small, freshly-parsed set instead of re-scanning the

@@ -1217,6 +1217,44 @@ class Store:
                 return []
         return [(r["id"], i) for i, r in enumerate(rows)]
 
+    def set_source_project_key(self, source_path: str, project_key: str) -> None:
+        """Persist a (derived) project_key on a source row (v5.27.0)."""
+        with self._lock:
+            self.conn.execute(
+                "UPDATE sources SET project_key = ? WHERE path = ?",
+                (project_key, source_path),
+            )
+            self.conn.commit()
+
+    def backfill_project_keys(self, source_root: str, project_key: str, source_kind: str) -> int:
+        """Assign ``project_key`` to NULL-keyed nodes owned by a source root.
+
+        v5.27.0: NULL-keyed nodes are cross-cutting (v1.2.1 contract); a
+        directory source registered without a key leaks its docs into every
+        scoped query. Ownership is decided in python via
+        ``paths.path_under_source`` (separators vary across node kinds).
+        Returns the number of rows updated."""
+        from mnemo.paths import path_under_source
+
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT id, source_path FROM nodes WHERE project_key IS NULL"
+            ).fetchall()
+            ids = [
+                r["id"]
+                for r in rows
+                if path_under_source(r["source_path"], source_root, source_kind)
+            ]
+            for i in range(0, len(ids), 500):
+                chunk = ids[i : i + 500]
+                qmarks = ",".join("?" for _ in chunk)
+                self.conn.execute(
+                    f"UPDATE nodes SET project_key = ? WHERE id IN ({qmarks})",  # noqa: S608
+                    (project_key, *chunk),
+                )
+            self.conn.commit()
+        return len(ids)
+
     def rebuild_fts(self) -> None:
         """Rebuild the FTS5 index from the nodes table (consistency backstop
         after bulk operations like a reindex sweep or source cascade)."""
