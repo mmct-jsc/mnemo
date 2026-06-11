@@ -2,6 +2,38 @@
 
 All notable changes to mnemo are documented here.
 
+## [5.27.0] - 2026-06-10
+
+**Exactness: lexical recall + exact-name + NULL-key fix (workstream C, part 2).**
+
+Beat the v5.26.0 baseline. Measured on the live 18,073-node corpus via
+`mnemo eval`: **hit@1 0.14 -> 0.21, hit@5 0.21 -> 0.36 (+71%), MRR
+0.16 -> 0.25**.
+
+- **FTS5/BM25 lexical channel.** New `nodes_fts` virtual table (name +
+  description + 32 KB body cap), kept in lockstep on upsert/delete, with a
+  self-healing rebuild when its row count drifts from the node count.
+  `bm25_search` gives retrieval lexical RECALL -- a name-exact node that
+  misses the vector top-40 (long prose dominates embeddings) now becomes a
+  candidate.
+- **RRF-style fusion + exact-name finisher.** The BM25 rank fuses into the
+  existing zeta/lexical component (`max(substring_fraction, 1/(1+rank))`;
+  no new weight, the auto-tuner contract is untouched), and a candidate
+  whose name appears verbatim in the prompt (>= 4 chars) gets a final-score
+  boost (`cfg.exact_name_boost`, default 1.25) -- the same multiplicative
+  pattern as the project-isolation penalty.
+- **NULL-key derivation + backfill.** Directory sources (code_repo /
+  docs_dir / plan_dir / memory_dir) registered without a project_key made
+  every owned node cross-cutting (the v1.2.1 contract), leaking foreign
+  docs into every scoped query. Reindex now derives the key from the
+  source root, persists it, and backfills owned NULL-key nodes
+  (claude_md stays None -- global memory is cross-cutting by design).
+  Live: NULL-keyed nodes dropped 2289 -> 353.
+
+Remaining eval misses (deferred to v5.28.0): snake_case-vs-spaced
+tokenization, a code-node boost for how/where questions, and indexing the
+repo-root install scripts. No new deps; FTS5 ships in CPython's sqlite.
+
 ## [5.26.0] - 2026-06-10
 
 **Precision baseline + auto-scoped retrieval (workstream C, part 1).**
