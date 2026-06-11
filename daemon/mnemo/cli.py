@@ -1195,6 +1195,58 @@ def eval_cmd(
     typer.echo(ev.format_report(rows, agg, corpus=corpus))
 
 
+# --- mnemo eval-tasks (v6.0.0): the moat task-success instrument ----------
+
+
+@app.command("eval-tasks")
+def eval_tasks_cmd(
+    set_path: str = typer.Option(
+        "", "--set", help="Path to a task-set JSON (defaults to the shipped SELF set)."
+    ),
+) -> None:
+    """Run the agentic task-success eval -- the moat-reliability instrument.
+
+    Reliability here is NOT hit@k (snippet retrieval). It is: can mnemo's
+    tools answer a structural / provenance / memory-recall question in <= the
+    task's call budget? Graph classes walk the in-process store via the
+    deterministic ORACLE path (one get_edges / traverse); memory_recall goes
+    daemon-first (warm model) with an in-process fallback. A report
+    instrument, not a gate -- the report LEADS with per-class moat success;
+    hit@k is deliberately absent."""
+    import os
+    from pathlib import Path
+
+    from mnemo import eval_retrieval as ev
+    from mnemo import eval_tasks as et
+
+    fixture = (
+        Path(set_path)
+        if set_path
+        else Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "tasks_eval.json"
+    )
+    tasks = et.load_task_set(fixture)
+    cwd = os.getcwd()
+    store = _open_store()
+    try:
+
+        def _solve(task: et.Task) -> tuple[list[str], int]:
+            if task.cls == "memory_recall":
+                # Daemon-first (warm model), auto-scoped exactly like the hook.
+                payload = _daemon_query(task.prompt, k=5, cwd=cwd)
+                if payload is not None:
+                    return ([str(h.get("source_path") or "") for h in payload.get("hits", [])], 1)
+                return et.oracle_solve(store, task, k=5)  # in-process fallback (loads embedder)
+            # structural / provenance: pure graph walk, no model needed.
+            return et.oracle_solve(store, task)
+
+        results = et.run_tasks(tasks, solve_fn=_solve)
+        agg = et.aggregate_tasks(results)
+        corpus = ev.corpus_snapshot(store)
+    finally:
+        store.close()
+    typer.echo(et.format_task_report(results, agg, corpus=corpus))
+
+
 # --- mnemo key {create,list,revoke} (Phase 3 / Task 2.2) ------------------
 #
 # Issuance + lifecycle of hosted-tier API keys. The hosted tier itself

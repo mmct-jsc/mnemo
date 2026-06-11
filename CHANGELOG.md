@@ -2,6 +2,42 @@
 
 All notable changes to mnemo are documented here.
 
+## [6.0.0] - 2026-06-11
+
+**Agentic task-success harness -- opens the reliability arc by measuring the moat, not snippet hit@k.**
+
+Single-shot `hit@k` is the wrong reliability bar: it measures snippet
+retrieval -- the commodity axis where a coding agent's own grep+read loop
+already wins -- and never measured the two things grep cannot do, which are
+mnemo's actual moat: the typed graph (blast radius, provenance) and
+cross-session memory. v6.0.0 ships the instrument to measure THAT first
+(measure-before-tuning); the injection-as-pointer and navigable-refs changes
+follow once the baseline is in hand.
+
+- **`mnemo eval-tasks`** -- a new task-success eval over three moat classes:
+  `structural` (reverse-`calls` blast radius), `provenance` (code -> commit
+  -> memory walk), and `memory_recall` (retrieval over memory nodes). Scores
+  whether mnemo's tools can answer a question in <= the task's call budget;
+  the report LEADS with per-class moat success and a pinned corpus snapshot.
+  `hit@k` is deliberately absent from the headline (the existing
+  `mnemo eval` keeps it as a secondary diagnostic).
+- **`eval_tasks` module** -- a dependency-free core (`Task`/`TaskResult`,
+  `score_task`, `run_tasks(solve_fn)`, `aggregate_tasks`,
+  `format_task_report`) mirroring `eval_retrieval`'s caller-owns-execution
+  seam, plus a deterministic ORACLE solver (the canonical tool path per
+  class) and a graph-driven task generator. The `solve_fn` seam leaves a
+  clean drop-in for a future LLM-agent solver.
+- **Hybrid task fixture** (`tasks_eval.json`, 26 tasks) -- generated from the
+  graph, then hand-curated + independently verified.
+- **First baseline (17,964-node corpus):** structural 1.00 / provenance 1.00
+  recall / memory_recall 0.75; overall 0.92 success at avg 1.0 calls. The
+  graph moat is the reliable part; retrieval is the weak link -- empirically
+  confirming the reframe. (Built on v5.28's stable keys, which make the
+  returned `file::name` refs durable across reindexes.)
+
+This is the measurement foundation, not the full reliability payoff: the
+injection-as-pointer and navigable-refs cuts are the next releases.
+
 ## [5.28.0] - 2026-06-11
 
 **Stable code-node identity + reindex mtime-skip (workstream C, part 3 -- closes the make-it-real arc; lesson #129).**
