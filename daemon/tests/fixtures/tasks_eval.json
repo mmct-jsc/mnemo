@@ -1,0 +1,240 @@
+[
+  {
+    "id": "struct-top-level-call",
+    "cls": "structural",
+    "prompt": "What calls _top_level_call in the Express extractor?",
+    "subject_key": "daemon/mnemo/extractors/express.py::_top_level_call",
+    "answer_keys": ["daemon/mnemo/extractors/express.py::extract"],
+    "budget": 1,
+    "note": "reverse calls edge; single caller (extract)"
+  },
+  {
+    "id": "struct-express-call-spec",
+    "cls": "structural",
+    "prompt": "Which function calls _express_call_spec?",
+    "subject_key": "daemon/mnemo/extractors/express.py::_express_call_spec",
+    "answer_keys": ["daemon/mnemo/extractors/express.py::extract"],
+    "budget": 1,
+    "note": "reverse calls edge"
+  },
+  {
+    "id": "struct-first-string-arg",
+    "cls": "structural",
+    "prompt": "What calls _first_string_arg in the Express extractor?",
+    "subject_key": "daemon/mnemo/extractors/express.py::_first_string_arg",
+    "answer_keys": ["daemon/mnemo/extractors/express.py::_express_call_spec"],
+    "budget": 1,
+    "note": "reverse calls edge"
+  },
+  {
+    "id": "struct-unquote-js-string",
+    "cls": "structural",
+    "prompt": "Which function calls _unquote_js_string in the Express extractor?",
+    "subject_key": "daemon/mnemo/extractors/express.py::_unquote_js_string",
+    "answer_keys": ["daemon/mnemo/extractors/express.py::_first_string_arg"],
+    "budget": 1,
+    "note": "reverse calls edge"
+  },
+  {
+    "id": "struct-react-text",
+    "cls": "structural",
+    "prompt": "What calls the _text helper in the React extractor?",
+    "subject_key": "daemon/mnemo/extractors/react.py::_text",
+    "answer_keys": [
+      "daemon/mnemo/extractors/react.py::_component_from_function_declaration",
+      "daemon/mnemo/extractors/react.py::_component_from_lexical_declaration",
+      "daemon/mnemo/extractors/react.py::_walk_fetch_paths"
+    ],
+    "budget": 1,
+    "note": "reverse calls edges; 3 callers (blast radius)"
+  },
+  {
+    "id": "struct-is-component-name",
+    "cls": "structural",
+    "prompt": "What calls _is_component_name in the React extractor?",
+    "subject_key": "daemon/mnemo/extractors/react.py::_is_component_name",
+    "answer_keys": [
+      "daemon/mnemo/extractors/react.py::_component_from_function_declaration",
+      "daemon/mnemo/extractors/react.py::_component_from_lexical_declaration"
+    ],
+    "budget": 1,
+    "note": "reverse calls edges; 2 callers"
+  },
+  {
+    "id": "struct-build-component-unit",
+    "cls": "structural",
+    "prompt": "Which functions call _build_component_unit?",
+    "subject_key": "daemon/mnemo/extractors/react.py::_build_component_unit",
+    "answer_keys": [
+      "daemon/mnemo/extractors/react.py::_component_from_function_declaration",
+      "daemon/mnemo/extractors/react.py::_component_from_lexical_declaration"
+    ],
+    "budget": 1,
+    "note": "reverse calls edges; 2 callers"
+  },
+  {
+    "id": "struct-walk-fetch-paths",
+    "cls": "structural",
+    "prompt": "What calls _walk_fetch_paths in the React extractor?",
+    "subject_key": "daemon/mnemo/extractors/react.py::_walk_fetch_paths",
+    "answer_keys": ["daemon/mnemo/extractors/react.py::_endpoints_from_function"],
+    "budget": 1,
+    "note": "reverse calls edge"
+  },
+  {
+    "id": "struct-component-from-fn-decl",
+    "cls": "structural",
+    "prompt": "Which function calls _component_from_function_declaration?",
+    "subject_key": "daemon/mnemo/extractors/react.py::_component_from_function_declaration",
+    "answer_keys": ["daemon/mnemo/extractors/react.py::_component_from_node"],
+    "budget": 1,
+    "note": "reverse calls edge"
+  },
+  {
+    "id": "struct-cosine-similarity",
+    "cls": "structural",
+    "prompt": "What calls cosine_similarity in the feedback module?",
+    "subject_key": "daemon/mnemo/feedback.py::cosine_similarity",
+    "answer_keys": ["daemon/mnemo/feedback.py::infer_requery_feedback"],
+    "budget": 1,
+    "note": "reverse calls edge; the requery detector"
+  },
+  {
+    "id": "struct-resolve-target",
+    "cls": "structural",
+    "prompt": "Which function calls _resolve_target in graph.py?",
+    "subject_key": "daemon/mnemo/graph.py::_resolve_target",
+    "answer_keys": ["daemon/mnemo/graph.py::infer_edges_from_frontmatter"],
+    "budget": 1,
+    "note": "reverse calls edge"
+  },
+  {
+    "id": "struct-module-unit",
+    "cls": "structural",
+    "prompt": "What calls _module_unit in the code parser?",
+    "subject_key": "daemon/mnemo/parsers/code.py::_module_unit",
+    "answer_keys": ["daemon/mnemo/parsers/code.py::extract"],
+    "budget": 1,
+    "note": "reverse calls edge"
+  },
+
+  {
+    "id": "prov-register-subcommands",
+    "cls": "provenance",
+    "prompt": "Which commit introduced _register_subcommands in vsai.py?",
+    "subject_key": "vsai.py::_register_subcommands",
+    "answer_keys": ["7bee064f19790"],
+    "budget": 1,
+    "note": "reverse references_function -> introducing commit (git-derived ground truth)"
+  },
+  {
+    "id": "prov-api-get",
+    "cls": "provenance",
+    "prompt": "Which commit introduced or last touched apiGet in base.ts?",
+    "subject_key": "base.ts::apiGet",
+    "answer_keys": ["d70d9626554ab"],
+    "budget": 1,
+    "note": "reverse references_function -> commit"
+  },
+  {
+    "id": "prov-add-volume-features",
+    "cls": "provenance",
+    "prompt": "Which commit introduced add_volume_features in the dataset module?",
+    "subject_key": "dataset.py::add_volume_features",
+    "answer_keys": ["7bee064f19790"],
+    "budget": 1,
+    "note": "reverse references_function -> commit"
+  },
+  {
+    "id": "prov-theme-toggle",
+    "cls": "provenance",
+    "prompt": "Which commit introduced the ThemeToggle component in app-shell.tsx?",
+    "subject_key": "app-shell.tsx::ThemeToggle#2",
+    "answer_keys": ["d70d9626554ab"],
+    "budget": 1,
+    "note": "reverse references_function -> commit; #2 = v5.28 collision ordinal"
+  },
+  {
+    "id": "prov-band-forward-ret",
+    "cls": "provenance",
+    "prompt": "Which commit introduced _band_forward_ret in labels.py?",
+    "subject_key": "labels.py::_band_forward_ret",
+    "answer_keys": ["7bee064f19790"],
+    "budget": 1,
+    "note": "reverse references_function -> commit"
+  },
+  {
+    "id": "prov-overview-page",
+    "cls": "provenance",
+    "prompt": "Which commit introduced the OverviewPage component?",
+    "subject_key": "page.tsx::OverviewPage#2",
+    "answer_keys": ["d70d9626554ab"],
+    "budget": 1,
+    "note": "reverse references_function -> commit"
+  },
+
+  {
+    "id": "mem-index-scoring",
+    "cls": "memory_recall",
+    "prompt": "What are the components of mnemo's hybrid retrieval scoring formula?",
+    "answer_keys": ["reference_mnemo_index_scoring"],
+    "budget": 1,
+    "note": "alpha*vector + beta*graph + gamma*recency + delta*type + epsilon*project + zeta*lexical"
+  },
+  {
+    "id": "mem-pipelines",
+    "cls": "memory_recall",
+    "prompt": "What are mnemo's canonical development pipelines and release workflow?",
+    "answer_keys": ["reference_mnemo_pipelines"],
+    "budget": 1,
+    "note": "BASE working-pipelines reference"
+  },
+  {
+    "id": "mem-release-workflow",
+    "cls": "memory_recall",
+    "prompt": "What is mnemo's branch-protected release sequence (bump, tag, PR, merge)?",
+    "answer_keys": ["feedback_mnemo_release_workflow"],
+    "budget": 1,
+    "note": "release workflow feedback node"
+  },
+  {
+    "id": "mem-middleware-order",
+    "cls": "memory_recall",
+    "prompt": "In Starlette, which add_middleware call ends up outermost in the stack?",
+    "answer_keys": ["feedback_starlette_middleware_order"],
+    "budget": 1,
+    "note": "last add_middleware is outermost"
+  },
+  {
+    "id": "mem-path-resolve",
+    "cls": "memory_recall",
+    "prompt": "Why must mnemo pass through absolute paths for cross-platform node keys?",
+    "answer_keys": ["feedback_cross_platform_path_resolve"],
+    "budget": 1,
+    "note": "Path.resolve() is platform-dependent"
+  },
+  {
+    "id": "mem-gitnexus",
+    "cls": "memory_recall",
+    "prompt": "How does mnemo compare to GitNexus and other code-only tools?",
+    "answer_keys": ["reference_competitor_gitnexus_comparison"],
+    "budget": 1,
+    "note": "competitor analysis reference"
+  },
+  {
+    "id": "mem-base-isolation",
+    "cls": "memory_recall",
+    "prompt": "What is mnemo's BASE-flag plus project-isolation principle for retrieval?",
+    "answer_keys": ["project_mnemo_base_isolation"],
+    "budget": 1,
+    "note": "BASE + project isolation contract"
+  },
+  {
+    "id": "mem-handover-v528",
+    "cls": "memory_recall",
+    "prompt": "What did the v5.28.0 stable code-node identity migration change and how was it verified live?",
+    "answer_keys": ["session_handover_v5_28_0"],
+    "budget": 1,
+    "note": "the current canonical handover; tests cross-session recall of recent work"
+  }
+]
