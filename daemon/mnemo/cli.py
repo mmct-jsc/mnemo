@@ -1185,7 +1185,14 @@ def eval_cmd(
 
     rows = ev.run_entries(entries, query_fn=_query, k=k)
     agg = ev.aggregate(rows)
-    typer.echo(ev.format_report(rows, agg))
+    # v5.28.0: pin a corpus snapshot in the header so two reports are
+    # comparable (the set is noisy when the corpus drifts between runs).
+    snap_store = _open_store()
+    try:
+        corpus = ev.corpus_snapshot(snap_store)
+    finally:
+        snap_store.close()
+    typer.echo(ev.format_report(rows, agg, corpus=corpus))
 
 
 # --- mnemo key {create,list,revoke} (Phase 3 / Task 2.2) ------------------
