@@ -700,6 +700,49 @@ def reindex_events(
                     },
                 )
 
+                # v5.28.0: mtime-skip for code_repo files already indexed
+                # by this version. The file_index table is new in v5.28.0,
+                # so the FIRST post-upgrade reindex records no mtime and
+                # parses everything (running the identity migration); only
+                # subsequent unchanged reindexes skip the re-parse.
+                posix_path = path_str.replace("\\", "/")
+                code_mtime: float | None = None
+                if src.kind == "code_repo":
+                    try:
+                        code_mtime = file_path.stat().st_mtime
+                    except OSError:
+                        code_mtime = None
+                    if code_mtime is not None and store.get_file_mtime(posix_path) == code_mtime:
+                        file_sps = store.source_paths_for_file(posix_path)
+                        # Defense-in-depth: never skip a file that still
+                        # has a legacy-keyed code node -- the identity
+                        # migration must run for it first (the design's
+                        # "skip only after no legacy node remains" gate).
+                        has_legacy = any(
+                            "::" not in sp
+                            and code_parser.code_file_and_range(sp, None)[1] is not None
+                            for sp in file_sps
+                        )
+                        if not has_legacy:
+                            # Keep the cached file's nodes out of the
+                            # deletion sweep, then skip the re-parse.
+                            for sp in file_sps:
+                                seen_source_paths.add(sp)
+                            file_idx += 1
+                            yield (
+                                "file",
+                                {
+                                    "idx": file_idx,
+                                    "path": posix_path,
+                                    "status": "skipped",
+                                    "added": 0,
+                                    "updated": 0,
+                                    "unchanged": 0,
+                                    "errors": [],
+                                },
+                            )
+                            continue
+
                 try:
                     if src.kind == "code_repo":
                         parsed_files = list(parse_code_file(file_path, project_key=src.project_key))
@@ -806,6 +849,12 @@ def reindex_events(
                             "errors": [],
                         },
                     )
+                # v5.28.0: record the file mtime so an unchanged re-parse
+                # is skipped next reindex (code_repo only). Reached only
+                # after a successful parse + reconcile -- a malformed file
+                # ``continue``s above without recording, so it is retried.
+                if src.kind == "code_repo" and code_mtime is not None:
+                    store.set_file_mtime(posix_path, code_mtime)
             store.mark_source_indexed(src.path)
         except Exception as exc:  # noqa: BLE001 - we want to keep going on bad sources
             report.errors.append((src.path, str(exc)))
