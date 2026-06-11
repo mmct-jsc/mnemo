@@ -306,6 +306,53 @@ def parse_code_file(path: Path, *, project_key: str | None = None) -> list[Parse
     return out
 
 
+# v5.28.0: code declaration types whose identity key carried a line
+# range pre-stable-keys. code_module (bare file path) and code_endpoint
+# (endpoint:METHOD:path) keys were already stable, so they never churn
+# and never need migration.
+_CODE_DECL_TYPES = ("code_function", "code_class", "code_method", "code_route")
+
+
+def _parsed_line_range(parsed: ParsedFile) -> tuple[int, int]:
+    """``(line_start, line_end)`` from a parsed code unit's ``code_unit``
+    frontmatter, or ``(0, 0)`` when absent."""
+    if not parsed.frontmatter_json:
+        return 0, 0
+    try:
+        cu = json.loads(parsed.frontmatter_json).get("code_unit") or {}
+    except (ValueError, AttributeError):
+        return 0, 0
+    return int(cu.get("line_start") or 0), int(cu.get("line_end") or 0)
+
+
+def _migrate_legacy_code_node(store: Store, parsed: ParsedFile, stable_key: str) -> Node | None:
+    """v5.28.0 reconcile fallback: when a code declaration's stable key
+    misses, find its legacy line-range node and re-key it IN PLACE
+    (id-preserving, no re-embed) rather than churning a new node.
+
+    Returns the re-keyed node, or None when there is no legacy candidate
+    (a genuinely new declaration). For same-name overloads in one file,
+    picks the legacy node whose stored start line is nearest the parsed
+    unit's -- deterministic.
+    """
+    file_path, _ = code_parser.code_file_and_range(stable_key, parsed.frontmatter_json)
+    candidates = store.find_legacy_code_node(file_path, parsed.type, parsed.name)
+    if not candidates:
+        return None
+    ls, le = _parsed_line_range(parsed)
+    if len(candidates) == 1:
+        chosen = candidates[0]
+    else:
+
+        def _start_distance(n: Node) -> int:
+            _f, rng = code_parser.code_file_and_range(n.source_path, n.frontmatter_json)
+            return abs((rng[0] if rng else 0) - ls)
+
+        chosen = min(candidates, key=_start_distance)
+    store.rekey_node(chosen.id, stable_key, line_start=ls, line_end=le)
+    return store.get_node(chosen.id)
+
+
 def _resolve_base_flag(fm: dict[str, object]) -> bool:
     """Read frontmatter ``base`` (truthy) -> True. Treat 'true', 'yes',
     '1' (case-insensitive) as True. Default False."""
@@ -676,6 +723,12 @@ def reindex_events(
                     node_source_path = parsed.source_path or str(parsed.path)
                     seen_source_paths.add(node_source_path)
                     existing = store.get_node_by_source(node_source_path)
+                    if existing is None and parsed.type in _CODE_DECL_TYPES:
+                        # v5.28.0: a stable-key miss on a code declaration
+                        # may be a pre-v5.28 / moved node still under its
+                        # legacy line-range key -- re-key it in place
+                        # instead of churning a new id + a re-embed.
+                        existing = _migrate_legacy_code_node(store, parsed, node_source_path)
                     file_idx += 1
                     delta = {"added": 0, "updated": 0, "unchanged": 0}
                     status: str
@@ -722,6 +775,22 @@ def reindex_events(
                         if parsed.type.startswith("code_"):
                             touched_code_node_ids.append(existing.id)
                     else:
+                        # v5.28.0: refresh the line-range metadata even
+                        # when the body hash is unchanged -- a declaration
+                        # can move without its bytes changing. Cheap
+                        # id-preserving UPDATE, never a re-embed.
+                        if parsed.type in _CODE_DECL_TYPES:
+                            ls, le = _parsed_line_range(parsed)
+                            _f, cur = code_parser.code_file_and_range(
+                                existing.source_path, existing.frontmatter_json
+                            )
+                            if (ls or le) and cur != (ls, le):
+                                store.rekey_node(
+                                    existing.id,
+                                    existing.source_path,
+                                    line_start=ls,
+                                    line_end=le,
+                                )
                         report.unchanged += 1
                         delta["unchanged"] = 1
                         status = "unchanged"
