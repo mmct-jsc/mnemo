@@ -945,8 +945,14 @@ class Store:
             "CREATE VIRTUAL TABLE IF NOT EXISTS nodes_fts "
             "USING fts5(id UNINDEXED, name, description, body)"
         )
+        # Self-heal: rebuild when the FTS row count != node count. Covers
+        # the first-open backfill (fts empty), a concurrent double-backfill
+        # race (daemon + a CLI reindex both opening a fresh index -> dupes),
+        # and any drift. A COUNT compare is a no-op in the steady state.
         fts_rows = self.conn.execute("SELECT count(*) FROM nodes_fts").fetchone()[0]
-        if fts_rows == 0:
+        node_rows = self.conn.execute("SELECT count(*) FROM nodes").fetchone()[0]
+        if fts_rows != node_rows:
+            self.conn.execute("DELETE FROM nodes_fts")
             self.conn.execute(
                 "INSERT INTO nodes_fts (id, name, description, body) "
                 "SELECT id, name, coalesce(description, ''), "
