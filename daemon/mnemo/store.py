@@ -1053,6 +1053,70 @@ class Store:
             ).fetchone()
             return self._row_to_node(row) if row else None
 
+    def rekey_node(
+        self, node_id: str, new_source_path: str, *, line_start: int, line_end: int
+    ) -> None:
+        """v5.28.0: move a code node to a line-stable identity key in place.
+
+        Sets ``source_path`` to ``new_source_path`` and stamps the line
+        range into ``frontmatter_json['code_unit']`` (preserving any
+        existing code_unit fields). The node id, hash, embedding (vec
+        row), edges, feedback, and audit refs are all keyed by id and so
+        are preserved untouched -- this is a pure IDENTITY move, not a
+        content edit, so ``updated_at`` and ``hash`` are deliberately
+        left unchanged (no recency bump, no re-embed). No-op if the node
+        is gone.
+        """
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT frontmatter_json FROM nodes WHERE id = ?", (node_id,)
+            ).fetchone()
+            if row is None:
+                return
+            try:
+                fm = json.loads(row["frontmatter_json"]) if row["frontmatter_json"] else {}
+            except (ValueError, TypeError):
+                fm = {}
+            if not isinstance(fm, dict):
+                fm = {}
+            cu = fm.get("code_unit")
+            if not isinstance(cu, dict):
+                cu = {}
+            cu["line_start"] = line_start
+            cu["line_end"] = line_end
+            fm["code_unit"] = cu
+            self.conn.execute(
+                "UPDATE nodes SET source_path = ?, frontmatter_json = ? WHERE id = ?",
+                (new_source_path, json.dumps(fm, sort_keys=True), node_id),
+            )
+            self.conn.commit()
+
+    def find_legacy_code_node(self, file_path: str, node_type: str, name: str) -> list[Node]:
+        """v5.28.0 reconcile fallback: legacy (pre-stable-key) code nodes
+        for one declaration.
+
+        Returns nodes of ``node_type`` named ``name`` whose ``source_path``
+        is a legacy ``<file>:<start>-<end>`` key under ``file_path`` (NOT
+        already on the ``::`` stable form). May return more than one for
+        same-name declarations in the same file (overloads / redefinitions);
+        the reconcile picks by nearest line.
+        """
+        from mnemo.parsers import code as _code
+
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT * FROM nodes WHERE type = ? AND name = ?", (node_type, name)
+            ).fetchall()
+        out: list[Node] = []
+        for row in rows:
+            sp = row["source_path"] or ""
+            if "::" in sp:
+                continue  # already migrated to the stable key
+            fp, rng = _code.code_file_and_range(sp, row["frontmatter_json"])
+            if rng is not None and fp == file_path:
+                out.append(self._row_to_node(row))
+        return out
+
     def get_nodes_by_ids(self, ids: list[str]) -> dict[str, Node]:
         """Batched lookup. Returns ``{id: Node}`` for ids that exist.
 
