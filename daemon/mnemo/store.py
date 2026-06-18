@@ -101,6 +101,11 @@ NODE_TYPES = frozenset(
         "project_doc",
         "plan_doc",
         "session_summary",
+        # v6.1.0 governance: a prescriptive, enforceable constraint /
+        # workflow gate / spec. Authored as a .md file with a ``rule:``
+        # frontmatter block (modality MUST/MUST_NOT/SHOULD + enforcement +
+        # applies_to + verify). Parsed read-side by ``governance.py``.
+        "rule",
         # v2.0 phase 1: decision provenance. One node per git commit
         # ingested from a code_repo source (phase 9 wires the parser).
         "commit",
@@ -153,6 +158,10 @@ EDGE_RELATIONS = frozenset(
         "supersedes",
         "mentions",
         "co_occurs_with",
+        # v6.1.0 governance: a rule ``refines`` another rule or a spec node
+        # (links.refines in the rule frontmatter). Carried for traversal;
+        # auto-wiring of nested rule links lands in a later governance phase.
+        "refines",
         # v2.0 phase 1: decision provenance family. Producers land in
         # phase 9 (commit auto-linker). Carrying them in the schema now
         # so the column / index plumbing is in place before parsers run.
