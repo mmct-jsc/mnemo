@@ -198,6 +198,40 @@ def test_hook_user_prompt_submit_accepts_user_prompt_field(
     assert "[mnemo:" in result.stdout
 
 
+def test_hook_user_prompt_submit_emits_active_rules(
+    runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """v6.1.0: a binding rule surfaces in its own ``## Active rules`` section,
+    above the ranked memory pointer (in-process fallback path)."""
+    monkeypatch.setattr("mnemo.cli._daemon_query", lambda *a, **k: None)
+    monkeypatch.setattr("mnemo.cli.Embedder", lambda *a, **kw: FakeEmbedder())
+    src = tmp_path / "mem"
+    src.mkdir()
+    (src / "rule_no_emoji.md").write_text(
+        "---\n"
+        "name: no-emoji\n"
+        "type: rule\n"
+        "base: true\n"
+        "description: No emojis in code, docs, or commit messages.\n"
+        "rule:\n"
+        "  id: rule.style.no-emoji\n"
+        "  modality: MUST_NOT\n"
+        "  enforcement: warn\n"
+        "---\n"
+        "body\n",
+        encoding="utf-8",
+    )
+    runner.invoke(app, ["source", "add", str(src), "--kind", "memory_dir"])
+    runner.invoke(app, ["reindex"])
+    result = runner.invoke(
+        app, ["hook", "user-prompt-submit"], input='{"prompt": "how should I write this function"}'
+    )
+    assert result.exit_code == 0, result.stdout
+    assert "## Active rules (mnemo)" in result.stdout, "binding rules get their own section"
+    assert "MUST_NOT" in result.stdout
+    assert "[mnemo:" in result.stdout
+
+
 def test_hook_user_prompt_submit_empty_is_noop(runner: CliRunner) -> None:
     result = runner.invoke(app, ["hook", "user-prompt-submit"], input="{}")
     assert result.exit_code == 0

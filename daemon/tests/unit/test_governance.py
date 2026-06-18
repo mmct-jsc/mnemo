@@ -212,3 +212,107 @@ def test_rule_md_file_ingests_as_a_rule_node(tmp_path) -> None:
     assert gov.rule_applies(parsed, glob_path="x/y.py") is True
     assert gov.rule_applies(parsed, glob_path="x/y.ts") is False
     store.close()
+
+
+# --- G2: active_rules (the prescriptive-surfacing fetch) -------------------
+
+
+def _rule_node(store, *, name, block, project_key=None, base=False):
+    import json as _json
+
+    from mnemo.store import Node
+
+    n = Node.new(
+        type="rule",
+        name=name,
+        description=f"{name} text",
+        body="b",
+        source_path=f"/m/{name}.md",
+        source_kind="memory_dir",
+        base=base,
+        frontmatter_json=_json.dumps({"rule": block}),
+    )
+    n.project_key = project_key
+    store.upsert_node(n)
+    return n
+
+
+def _gov_store(tmp_path):
+    from mnemo.store import Store
+
+    store = Store(tmp_path / "g.db")
+    _rule_node(store, name="base-no-emoji", base=True, block={"modality": "MUST_NOT"})
+    _rule_node(
+        store,
+        name="p-refactor",
+        project_key="P",
+        block={"modality": "MUST", "applies_to": {"intent": ["refactor"]}},
+    )
+    _rule_node(
+        store,
+        name="py-glob",
+        project_key="P",
+        block={"modality": "SHOULD", "applies_to": {"glob": ["**/*.py"]}},
+    )
+    # a non-rule node must be ignored entirely
+    from mnemo.store import Node
+
+    store.upsert_node(
+        Node.new(
+            type="memory_project",
+            name="noise",
+            body="b",
+            source_path="/m/noise.md",
+            source_kind="memory_dir",
+        )
+    )
+    return store
+
+
+def test_active_rules_surfaces_universal_and_intent_at_prompt_time(tmp_path) -> None:
+    store = _gov_store(tmp_path)
+    rules = gov.active_rules(store, scope={"P"}, intent_tags={"refactor"})
+    ids = {r.name for r in rules}
+    assert "base-no-emoji" in ids, "a base universal rule always surfaces"
+    assert "p-refactor" in ids, "an intent-matching in-scope rule surfaces"
+    assert "py-glob" not in ids, "a glob-only rule does not surface with no file context"
+    store.close()
+
+
+def test_active_rules_orders_mandatory_first(tmp_path) -> None:
+    store = _gov_store(tmp_path)
+    rules = gov.active_rules(store, scope={"P"}, intent_tags={"refactor"})
+    assert rules[0].modality == "MUST_NOT", "MUST_NOT binds hardest -> emitted first"
+    store.close()
+
+
+def test_active_rules_respects_project_scope(tmp_path) -> None:
+    store = _gov_store(tmp_path)
+    rules = gov.active_rules(store, scope={"OTHER"}, intent_tags={"refactor"})
+    names = {r.name for r in rules}
+    assert "base-no-emoji" in names, "base rule crosses project scope"
+    assert "p-refactor" not in names, "an out-of-scope project rule is excluded"
+    store.close()
+
+
+def test_active_rules_with_file_context_matches_glob(tmp_path) -> None:
+    store = _gov_store(tmp_path)
+    rules = gov.active_rules(store, scope={"P"}, file_paths=["src/app.py"])
+    assert "py-glob" in {r.name for r in rules}, "a glob rule surfaces once a file path is in context"
+    store.close()
+
+
+def test_active_rules_mandatory_only_filters_should(tmp_path) -> None:
+    store = _gov_store(tmp_path)
+    rules = gov.active_rules(store, scope={"P"}, file_paths=["src/app.py"], mandatory_only=True)
+    assert all(r.is_mandatory for r in rules)
+    assert "py-glob" not in {r.name for r in rules}, "SHOULD rule dropped under mandatory_only"
+    store.close()
+
+
+def test_active_rules_fails_open_on_store_error() -> None:
+    class _BadStore:
+        def list_nodes(self, **kw):
+            raise RuntimeError("db gone")
+
+    assert gov.active_rules(_BadStore(), scope=None) == []

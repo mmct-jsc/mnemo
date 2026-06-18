@@ -1000,6 +1000,9 @@ def hook_user_prompt_submit() -> None:
 
     cwd = str(data.get("cwd") or os.getcwd())
 
+    # v6.1.0 governance: binding rules surface in their own section, separate
+    # from (and above) the ranked memory pointer.
+    gov_rules: list[dict] = []
     payload = _daemon_query(prompt, cwd=cwd)
     if payload is not None:
         rows = [
@@ -1012,6 +1015,14 @@ def hook_user_prompt_submit() -> None:
             for h in payload.get("hits", [])
         ]
         intent_tags = [str(t) for t in payload.get("intent_tags") or []]
+        gov_rules = [
+            {
+                "citation": str(gr.get("citation", "")),
+                "modality": str(gr.get("modality", "")),
+                "text": str(gr.get("text") or ""),
+            }
+            for gr in payload.get("rules") or []
+        ]
     else:
         # Fallback: daemon down -- query in-process (the slow path).
         try:
@@ -1019,7 +1030,7 @@ def hook_user_prompt_submit() -> None:
         except Exception:
             return
         try:
-            from mnemo import retrieve
+            from mnemo import governance, retrieve
 
             scope_keys, _indexed = retrieve.resolve_auto_scope(store, cwd)
             result = retrieve.query(
@@ -1030,6 +1041,14 @@ def hook_user_prompt_submit() -> None:
                 budget_tokens=800,
                 active_projects=scope_keys or None,
             )
+            gov_rules = [
+                {"citation": f"[mnemo:{r.node_id}]", "modality": r.modality, "text": r.text}
+                for r in governance.active_rules(
+                    store,
+                    scope=set(scope_keys) if scope_keys else None,
+                    intent_tags=set(result.intent_tags),
+                )
+            ]
         except Exception:
             return
         finally:
@@ -1054,15 +1073,23 @@ def hook_user_prompt_submit() -> None:
     except Exception:
         pass
 
-    if not rows:
+    if not rows and not gov_rules:
         return
-    out = ["## Relevant memory (mnemo)", ""]
-    for r in rows:
-        desc = r["description"].replace("\n", " ")
-        out.append(f"- {r['citation']} [{r['type']}] {r['name']}: {desc}")
-    out.append("")
-    out.append(f"intent: {', '.join(intent_tags) or 'none'} | k: {len(rows)}")
-    typer.echo("\n".join(out))
+    out: list[str] = []
+    if gov_rules:
+        out.append("## Active rules (mnemo) -- binding")
+        out.append("")
+        out.extend(f"- {gr['citation']} {gr['modality']}: {gr['text']}" for gr in gov_rules)
+        out.append("")
+    if rows:
+        out.append("## Relevant memory (mnemo)")
+        out.append("")
+        for r in rows:
+            desc = r["description"].replace("\n", " ")
+            out.append(f"- {r['citation']} [{r['type']}] {r['name']}: {desc}")
+        out.append("")
+        out.append(f"intent: {', '.join(intent_tags) or 'none'} | k: {len(rows)}")
+    typer.echo("\n".join(out).rstrip())
 
 
 @hook_app.command("post-tool-use")

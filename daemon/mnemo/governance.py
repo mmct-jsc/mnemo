@@ -180,3 +180,67 @@ def rule_applies(
 def modality_rank(rule: Rule) -> int:
     """Sort key: MUST_NOT (3) > MUST (2) > SHOULD (1). Higher binds harder."""
     return _MODALITY_RANK.get(rule.modality, 0)
+
+
+def _in_scope(node: Node, scope: set[str] | frozenset[str] | None) -> bool:
+    """A rule surfaces across project boundaries when it is BASE or has no
+    project_key (cross-cutting); otherwise only when its project is in scope.
+    ``scope=None`` means no project filter (everything is in scope)."""
+    if scope is None or getattr(node, "base", False):
+        return True
+    pk = getattr(node, "project_key", None)
+    return pk is None or pk in scope
+
+
+def active_rules(
+    store,
+    *,
+    scope: set[str] | frozenset[str] | None = None,
+    intent_tags: set[str] | frozenset[str] | None = None,
+    file_paths: list[str] | None = None,
+    tool_name: str | None = None,
+    tool_arg: str | None = None,
+    limit: int = 5,
+    mandatory_only: bool = False,
+) -> list[Rule]:
+    """Fetch the rules that BIND for a context, sorted mandatory-first.
+
+    A deterministic, fail-open fetch over the (small) rule corpus -- separate
+    from embedding retrieval, so applicable MUST/MUST_NOT rules surface
+    regardless of any ranked-injection budget. Reused by the UserPromptSubmit
+    injection (intent + universal rules) and the PreToolUse gate (file/tool
+    context). Any store/parse error yields ``[]`` -- governance must never
+    brick the caller.
+    """
+    try:
+        nodes = store.list_nodes(type="rule", limit=10000)
+    except Exception:
+        return []
+    paths: list[str | None] = list(file_paths) if file_paths else [None]
+    tags = set(intent_tags or ())
+    out: list[Rule] = []
+    for node in nodes:
+        try:
+            if not _in_scope(node, scope):
+                continue
+            rule = rule_from_node(node)
+            if rule is None:
+                continue
+            if mandatory_only and not rule.is_mandatory:
+                continue
+            if any(
+                rule_applies(
+                    rule,
+                    glob_path=p,
+                    intent_tags=tags,
+                    tool_name=tool_name,
+                    tool_arg=tool_arg,
+                )
+                for p in paths
+            ):
+                out.append(rule)
+        except Exception:
+            # a single bad rule must not sink the whole fetch
+            continue
+    out.sort(key=modality_rank, reverse=True)
+    return out[:limit] if limit else out
