@@ -2,6 +2,39 @@
 
 All notable changes to mnemo are documented here.
 
+## [6.1.0] - 2026-06-18
+
+**Governance layer -- mnemo now tells an agent what to do and NOT do, and enforces it with teeth.**
+
+Beyond passive knowledge injection: coding constraints, workflow gates, specs,
+mandatory verification, and code review become first-class `rule` nodes that
+mnemo surfaces prescriptively at the right moment and (opt-in) enforces by
+blocking a tool call or session end until a mandatory step is *provably*
+satisfied.
+
+- **`rule` node type** -- author one `.md` per rule with a `rule:` frontmatter
+  block: `modality` (MUST/MUST_NOT/SHOULD), `enforcement`
+  (inform/warn/require-ack/block), `applies_to` (glob/intent/tool +
+  `tool_arg_match`), `verify` (command + expected exit), `requires_step`.
+  Parsed read-side by `governance.py`; malformed rules **fail open** (advisory,
+  never crash). New `/mnemo-rule-add` skill.
+- **Prescriptive injection** -- binding MUST/MUST_NOT rules surface in a new
+  `## Active rules (mnemo)` block above the ranked memory, via a separate
+  deterministic fetch that bypasses the injection token budget.
+- **Evidence ledger** -- a mandatory step is satisfied only by CAPTURED proof
+  (a verify command's real exit code, via the PostToolUse hook), and the
+  evidence must be fresher than the latest edit -- an edit after a verify
+  re-opens the gate. The agent cannot self-assert compliance.
+- **Hard enforcement** -- PreToolUse denies/asks and Stop blocks against
+  `block` rules. Default mode **`warn`** (surface, never block); set
+  `MNEMO_GOVERNANCE_MODE=block` to enforce, `MNEMO_GOVERNANCE_BYPASS=1` to
+  override. Every gate is **fail-open** -- a daemon/store error never blocks a
+  tool call or a session.
+
+Additive: no MCP surface change (rule-query tools deferred); built on the
+v5.28 stable keys + v6.0 reframe. The analyzer "governance lens" (code-review
+engine) and the `/rules` UI are follow-on releases (v6.2/v6.3).
+
 ## [6.0.0] - 2026-06-11
 
 **Agentic task-success harness -- opens the reliability arc by measuring the moat, not snippet hit@k.**

@@ -298,7 +298,9 @@ def test_active_rules_respects_project_scope(tmp_path) -> None:
 def test_active_rules_with_file_context_matches_glob(tmp_path) -> None:
     store = _gov_store(tmp_path)
     rules = gov.active_rules(store, scope={"P"}, file_paths=["src/app.py"])
-    assert "py-glob" in {r.name for r in rules}, "a glob rule surfaces once a file path is in context"
+    assert "py-glob" in {r.name for r in rules}, (
+        "a glob rule surfaces once a file path is in context"
+    )
     store.close()
 
 
