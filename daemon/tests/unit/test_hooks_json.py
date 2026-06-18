@@ -71,6 +71,14 @@ def test_post_tool_use_matches_edits(hooks: dict) -> None:
     assert {"Edit", "Write", "Bash"} <= tools, f"PostToolUse matchers: {matchers}"
 
 
+def test_governance_gates_are_wired(hooks: dict) -> None:
+    """v6.1.0: PreToolUse + Stop route to the governance gate hooks."""
+    for event, cmd in (("PreToolUse", "mnemo hook pre-tool-use"), ("Stop", "mnemo hook stop")):
+        assert event in hooks["hooks"], f"{event} must be wired"
+        cmds = [h["command"] for entry in hooks["hooks"][event] for h in entry["hooks"]]
+        assert any(cmd in c for c in cmds), f"{event}: expected `{cmd}`, got {cmds}"
+
+
 def test_no_fictional_platforms_key(hooks: dict) -> None:
     """The pre-v5.24.0 ``platforms`` selector is not a real CC hook field;
     its presence was the bug. It must be gone everywhere in hooks.json."""

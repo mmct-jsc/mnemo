@@ -1188,6 +1188,133 @@ def hook_post_tool_use() -> None:
         _governance_capture(data)
 
 
+def _governance_mode() -> str:
+    """Resolve the enforcement mode: env MNEMO_GOVERNANCE_MODE > config >
+    'warn'. 'warn' is the safe default (surface, never block)."""
+    import os as _os
+
+    env = (_os.environ.get("MNEMO_GOVERNANCE_MODE") or "").strip().lower()
+    if env in ("off", "warn", "block"):
+        return env
+    try:
+        from mnemo.config import load as _load_config
+
+        m = (_load_config().governance_enforce_mode or "warn").strip().lower()
+        return m if m in ("off", "warn", "block") else "warn"
+    except Exception:
+        return "warn"
+
+
+def _gov_tool_context(data: dict) -> tuple[str, str, list[str] | None]:
+    tool_name = str(data.get("tool_name") or "")
+    ti = data.get("tool_input") or {}
+    fp = str(ti.get("file_path") or "")
+    cmd = str(ti.get("command") or "")
+    tool_arg = cmd if tool_name == "Bash" else fp
+    return tool_name, tool_arg, ([fp] if fp else None)
+
+
+def _gov_decision(data: dict, *, stop: bool):
+    """Open the store, resolve scope, and return a governance GateDecision for
+    a PreToolUse (stop=False) or Stop (stop=True) event. Fail-open -> None."""
+    import os as _os
+
+    session_id = str(data.get("session_id") or "")
+    if stop and not session_id:
+        return None
+    cwd = str(data.get("cwd") or _os.getcwd())
+    try:
+        store = _open_store()
+    except Exception:
+        return None
+    try:
+        from mnemo import governance, retrieve
+
+        scope_keys, _idx = retrieve.resolve_auto_scope(store, cwd)
+        scope = set(scope_keys) if scope_keys else None
+        if stop:
+            return governance.evaluate_stop(store, session_id=session_id, scope=scope)
+        tool_name, tool_arg, file_paths = _gov_tool_context(data)
+        if not tool_name:
+            return None
+        return governance.evaluate_gate(
+            store,
+            session_id=session_id,
+            tool_name=tool_name,
+            tool_arg=tool_arg,
+            file_paths=file_paths,
+            scope=scope,
+        )
+    except Exception:
+        return None
+    finally:
+        store.close()
+
+
+@hook_app.command("pre-tool-use")
+def hook_pre_tool_use() -> None:
+    """PreToolUse: gate a tool call against governance ``block`` rules. Default
+    mode 'warn' (surface the reason, allow); 'block' denies/asks. Fail-open --
+    any error or daemon-down lets the tool through (a governance layer must
+    never brick a session)."""
+    import json as _json
+    import os as _os
+
+    data = _read_stdin_json()
+    if data is None:
+        return
+    decision = _gov_decision(data, stop=False)
+    if decision is None or not decision.blocked:
+        return
+    mode = "warn" if _os.environ.get("MNEMO_GOVERNANCE_BYPASS") == "1" else _governance_mode()
+    if mode == "off":
+        return
+    if mode == "warn":
+        typer.echo(
+            _json.dumps(
+                {
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "additionalContext": "[mnemo governance] WARNING (not blocking):\n"
+                        + decision.reason,
+                    }
+                }
+            )
+        )
+        return
+    typer.echo(
+        _json.dumps(
+            {
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": decision.permission,
+                    "permissionDecisionReason": decision.reason,
+                }
+            }
+        )
+    )
+
+
+@hook_app.command("stop")
+def hook_stop() -> None:
+    """Stop: block session end while a file edited this session is still
+    covered by an unsatisfied mandatory gate. Default 'warn' (allow); 'block'
+    blocks. Fail-open."""
+    import json as _json
+    import os as _os
+
+    data = _read_stdin_json()
+    if data is None:
+        return
+    decision = _gov_decision(data, stop=True)
+    if decision is None or not decision.blocked:
+        return
+    mode = "warn" if _os.environ.get("MNEMO_GOVERNANCE_BYPASS") == "1" else _governance_mode()
+    if mode in ("off", "warn"):
+        return  # Stop has no context channel; warn = allow
+    typer.echo(_json.dumps({"decision": "block", "reason": decision.reason}))
+
+
 # --- mnemo statusline -----------------------------------------------------
 #
 # v5.25.0 (workstream B): a one-line presence cue for the Claude Code status

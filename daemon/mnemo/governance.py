@@ -246,6 +246,106 @@ def active_rules(
     return out[:limit] if limit else out
 
 
+@dataclass
+class GateDecision:
+    blocked: bool
+    permission: str  # "deny" | "ask" | "allow"
+    reason: str
+    rule_ids: list[str] = field(default_factory=list)
+
+
+_GATE_ENFORCEMENTS = {"block", "require-ack"}
+
+
+def _gate_reason(rules: list[Rule], *, stop: bool = False) -> str:
+    lead = (
+        "[mnemo governance] session end blocked -- mandatory step not satisfied:"
+        if stop
+        else "[mnemo governance] action blocked by a rule:"
+    )
+    lines = [lead]
+    for r in rules:
+        how = ""
+        if r.requires_step == "verify" and r.verify_command:
+            how = f" -> run `{r.verify_command}`"
+        elif r.requires_step:
+            how = f" -> complete the `{r.requires_step}` step"
+        lines.append(f"  - {r.id} ({r.modality}): {r.text}{how}")
+    lines.append("Override with MNEMO_GOVERNANCE_BYPASS=1 if this is intentional.")
+    return "\n".join(lines)
+
+
+def evaluate_gate(
+    store,
+    *,
+    session_id: str,
+    tool_name: str | None,
+    tool_arg: str | None,
+    file_paths: list[str] | None = None,
+    scope: set[str] | frozenset[str] | None = None,
+) -> GateDecision:
+    """Decide whether a tool call is blocked. A *gate* rule (``requires_step``)
+    blocks until that step is satisfied (fresh evidence); a *prohibition* rule
+    (``enforcement: block`` with no step) blocks outright. ``require-ack`` asks
+    rather than denies. Fail-open: any error -> not blocked."""
+    try:
+        candidates = active_rules(
+            store,
+            scope=scope,
+            file_paths=file_paths,
+            tool_name=tool_name,
+            tool_arg=tool_arg,
+            limit=0,
+        )
+    except Exception:
+        return GateDecision(False, "allow", "", [])
+    blocking: list[Rule] = []
+    for rule in candidates:
+        if rule.enforcement not in _GATE_ENFORCEMENTS:
+            continue
+        try:
+            if rule.requires_step and store.gate_satisfied(session_id, rule.id, rule.requires_step):
+                continue  # gate already satisfied
+        except Exception:
+            return GateDecision(False, "allow", "", [])  # fail-open on ledger error
+        blocking.append(rule)
+    if not blocking:
+        return GateDecision(False, "allow", "", [])
+    permission = "deny" if any(r.enforcement == "block" for r in blocking) else "ask"
+    return GateDecision(True, permission, _gate_reason(blocking), [r.id for r in blocking])
+
+
+def evaluate_stop(
+    store,
+    *,
+    session_id: str,
+    scope: set[str] | frozenset[str] | None = None,
+) -> GateDecision:
+    """Block session end if a file edited this session is still covered by a
+    mandatory gate rule whose step has no fresh evidence. Fail-open."""
+    try:
+        touched = store.governance_touched_files(session_id)
+        if not touched:
+            return GateDecision(False, "allow", "", [])
+        candidates = active_rules(
+            store, scope=scope, file_paths=touched, mandatory_only=True, limit=0
+        )
+    except Exception:
+        return GateDecision(False, "allow", "", [])
+    blocking: list[Rule] = []
+    for rule in candidates:
+        if rule.enforcement not in _GATE_ENFORCEMENTS or not rule.requires_step:
+            continue
+        try:
+            if not store.gate_satisfied(session_id, rule.id, rule.requires_step):
+                blocking.append(rule)
+        except Exception:
+            return GateDecision(False, "allow", "", [])
+    if not blocking:
+        return GateDecision(False, "allow", "", [])
+    return GateDecision(True, "deny", _gate_reason(blocking, stop=True), [r.id for r in blocking])
+
+
 def rules_with_verify(store, *, scope: set[str] | frozenset[str] | None = None) -> list[Rule]:
     """All in-scope rules that declare a ``verify.command`` -- regardless of
     their gate trigger. Evidence capture matches a rule's verify command
