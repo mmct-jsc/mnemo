@@ -256,7 +256,16 @@ class GateDecision:
 
 _GATE_ENFORCEMENTS = {"block", "require-ack"}
 
-_RUN_WRAPPERS = ("uv run", "poetry run", "pdm run", "pipenv run", "npx", "pnpm exec", "python -m", "py -m")
+_RUN_WRAPPERS = (
+    "uv run",
+    "poetry run",
+    "pdm run",
+    "pipenv run",
+    "npx",
+    "pnpm exec",
+    "python -m",
+    "py -m",
+)
 
 
 def command_satisfies_verify(verify_command: str, run_command: str) -> bool:
