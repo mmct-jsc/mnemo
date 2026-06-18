@@ -244,3 +244,26 @@ def active_rules(
             continue
     out.sort(key=modality_rank, reverse=True)
     return out[:limit] if limit else out
+
+
+def rules_with_verify(store, *, scope: set[str] | frozenset[str] | None = None) -> list[Rule]:
+    """All in-scope rules that declare a ``verify.command`` -- regardless of
+    their gate trigger. Evidence capture matches a rule's verify command
+    against whatever the agent actually ran (the gate may fire on a different
+    tool, e.g. ``git commit``, while the proof comes from a ``ruff`` run).
+    Fail-open: returns ``[]`` on any error."""
+    try:
+        nodes = store.list_nodes(type="rule", limit=10000)
+    except Exception:
+        return []
+    out: list[Rule] = []
+    for node in nodes:
+        try:
+            if not _in_scope(node, scope):
+                continue
+            rule = rule_from_node(node)
+            if rule is not None and rule.verify_command:
+                out.append(rule)
+        except Exception:
+            continue
+    return out

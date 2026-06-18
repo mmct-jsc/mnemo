@@ -1092,9 +1092,86 @@ def hook_user_prompt_submit() -> None:
     typer.echo("\n".join(out).rstrip())
 
 
+_EXIT_CODE_KEYS = ("exit_code", "exitCode", "returnCode", "return_code", "code")
+_EDIT_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
+
+
+def _bash_exit_code(data: dict) -> int | None:
+    """Pull a Bash command's exit code out of the PostToolUse payload, across
+    the shape variants Claude Code builds use. None when not surfaced."""
+    tr = data.get("tool_response")
+    if isinstance(tr, dict):
+        for key in _EXIT_CODE_KEYS:
+            v = tr.get(key)
+            if isinstance(v, bool):  # guard: bools are ints in Python
+                continue
+            if isinstance(v, int):
+                return v
+    return None
+
+
+def _response_has_error(data: dict) -> bool:
+    """Best-effort failure signal when no explicit exit code is present."""
+    tr = data.get("tool_response")
+    if isinstance(tr, dict):
+        return bool(tr.get("is_error") or tr.get("interrupted") or tr.get("error"))
+    return False
+
+
+def _governance_capture(data: dict) -> None:
+    """v6.1.0 G3: capture EVIDENCE from the agent's real tool result -- record
+    edited files, and stamp a rule's verify step satisfied when a matching
+    command exits as expected. The agent cannot fake this; mnemo reads the
+    actual result. Fully fail-open (no session, daemon contention, etc. -> no-op)."""
+    session_id = str(data.get("session_id") or "")
+    if not session_id:
+        return
+    tool_name = str(data.get("tool_name") or "")
+    tool_input = data.get("tool_input") or {}
+    import os as _os
+
+    cwd = str(data.get("cwd") or _os.getcwd())
+    try:
+        store = _open_store()
+    except Exception:
+        return
+    try:
+        fp = str(tool_input.get("file_path") or "")
+        if fp and tool_name in _EDIT_TOOLS:
+            store.record_touched_file(session_id, fp)
+        if tool_name == "Bash":
+            command = str(tool_input.get("command") or "")
+            if command:
+                from mnemo import governance, retrieve
+
+                scope_keys, _idx = retrieve.resolve_auto_scope(store, cwd)
+                scope = set(scope_keys) if scope_keys else None
+                exit_code = _bash_exit_code(data)
+                for rule in governance.rules_with_verify(store, scope=scope):
+                    if rule.verify_command and rule.verify_command in command:
+                        if exit_code is not None:
+                            ok = exit_code == rule.verify_expect_exit
+                        else:
+                            # exit code not surfaced by this CC build: fall back
+                            # to the failure-flag heuristic (still the real result).
+                            ok = not _response_has_error(data)
+                        store.record_governance_evidence(
+                            session_id=session_id,
+                            rule_id=rule.id,
+                            step="verify",
+                            status="satisfied" if ok else "failed",
+                            evidence=f"{command} -> exit {exit_code}",
+                        )
+    except Exception:
+        pass
+    finally:
+        store.close()
+
+
 @hook_app.command("post-tool-use")
 def hook_post_tool_use() -> None:
-    """PostToolUse: reindex (data-only, detached) when a memory file is edited."""
+    """PostToolUse: reindex (data-only, detached) when a memory file is edited,
+    and capture governance evidence (touched files + verify-command results)."""
     data = _read_stdin_json()
     if data is None:
         return
@@ -1104,6 +1181,11 @@ def hook_post_tool_use() -> None:
     # down; the spawn itself is debounced.
     if _is_memory_shaped(file_path) and not _nudge_daemon_reindex():
         _spawn_background_reindex()
+    # v6.1.0: evidence capture is independent of (and after) the reindex nudge.
+    import contextlib
+
+    with contextlib.suppress(Exception):
+        _governance_capture(data)
 
 
 # --- mnemo statusline -----------------------------------------------------

@@ -232,6 +232,139 @@ def test_hook_user_prompt_submit_emits_active_rules(
     assert "[mnemo:" in result.stdout
 
 
+def test_bash_exit_code_extraction() -> None:
+    from mnemo.cli import _bash_exit_code
+
+    assert _bash_exit_code({"tool_response": {"exit_code": 0}}) == 0
+    assert _bash_exit_code({"tool_response": {"exitCode": 2}}) == 2
+    assert _bash_exit_code({"tool_response": {"returnCode": 1}}) == 1
+    assert _bash_exit_code({"tool_response": {}}) is None
+    assert _bash_exit_code({"tool_response": "a plain string output"}) is None
+    assert _bash_exit_code({}) is None
+
+
+def test_response_has_error_flag() -> None:
+    from mnemo.cli import _response_has_error
+
+    assert _response_has_error({"tool_response": {"is_error": True}}) is True
+    assert _response_has_error({"tool_response": {"interrupted": True}}) is True
+    assert _response_has_error({"tool_response": {"exit_code": 0}}) is False
+    assert _response_has_error({"tool_response": {}}) is False
+    assert _response_has_error({}) is False
+
+
+def test_post_tool_use_captures_verify_evidence(
+    runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """v6.1.0 G3: a Bash run matching a rule's verify command, exiting as
+    expected, stamps SATISFIED evidence -- captured from the real result."""
+    import json
+
+    from mnemo.cli import _open_store
+
+    monkeypatch.setattr("mnemo.cli.Embedder", lambda *a, **kw: FakeEmbedder())
+    src = tmp_path / "mem"
+    src.mkdir()
+    (src / "rule_ruff.md").write_text(
+        "---\n"
+        "name: ruff-before-commit\n"
+        "type: rule\n"
+        "base: true\n"
+        "description: ruff must pass before commit.\n"
+        "rule:\n"
+        "  id: rule.verify.ruff\n"
+        "  modality: MUST\n"
+        "  enforcement: block\n"
+        "  requires_step: verify\n"
+        "  applies_to:\n"
+        "    tool: ['Bash']\n"
+        "    tool_arg_match: 'git commit'\n"
+        "  verify:\n"
+        "    command: 'ruff check'\n"
+        "    expect_exit: 0\n"
+        "---\n"
+        "body\n",
+        encoding="utf-8",
+    )
+    runner.invoke(app, ["source", "add", str(src), "--kind", "memory_dir"])
+    runner.invoke(app, ["reindex"])
+
+    ok = json.dumps(
+        {
+            "session_id": "S",
+            "tool_name": "Bash",
+            "tool_input": {"command": "ruff check ."},
+            "tool_response": {"exit_code": 0},
+            "cwd": str(tmp_path),
+        }
+    )
+    res = runner.invoke(app, ["hook", "post-tool-use"], input=ok)
+    assert res.exit_code == 0
+    s = _open_store()
+    try:
+        assert s.gate_satisfied("S", "rule.verify.ruff", "verify") is True
+    finally:
+        s.close()
+
+
+def test_post_tool_use_failed_verify_does_not_satisfy(
+    runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import json
+
+    from mnemo.cli import _open_store
+
+    monkeypatch.setattr("mnemo.cli.Embedder", lambda *a, **kw: FakeEmbedder())
+    src = tmp_path / "mem"
+    src.mkdir()
+    (src / "rule_ruff.md").write_text(
+        "---\nname: r\ntype: rule\nbase: true\ndescription: d\n"
+        "rule:\n  id: rule.verify.ruff\n  verify:\n    command: 'ruff check'\n    expect_exit: 0\n---\nb\n",
+        encoding="utf-8",
+    )
+    runner.invoke(app, ["source", "add", str(src), "--kind", "memory_dir"])
+    runner.invoke(app, ["reindex"])
+    bad = json.dumps(
+        {
+            "session_id": "S",
+            "tool_name": "Bash",
+            "tool_input": {"command": "ruff check ."},
+            "tool_response": {"exit_code": 1},
+            "cwd": str(tmp_path),
+        }
+    )
+    runner.invoke(app, ["hook", "post-tool-use"], input=bad)
+    s = _open_store()
+    try:
+        assert s.gate_satisfied("S", "rule.verify.ruff", "verify") is False
+    finally:
+        s.close()
+
+
+def test_post_tool_use_records_touched_file(
+    runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import json
+
+    from mnemo.cli import _open_store
+
+    monkeypatch.setattr("mnemo.cli.Embedder", lambda *a, **kw: FakeEmbedder())
+    edit = json.dumps(
+        {
+            "session_id": "S",
+            "tool_name": "Edit",
+            "tool_input": {"file_path": "/repo/app.py"},
+            "cwd": str(tmp_path),
+        }
+    )
+    runner.invoke(app, ["hook", "post-tool-use"], input=edit)
+    s = _open_store()
+    try:
+        assert "/repo/app.py" in s.governance_touched_files("S")
+    finally:
+        s.close()
+
+
 def test_hook_user_prompt_submit_empty_is_noop(runner: CliRunner) -> None:
     result = runner.invoke(app, ["hook", "user-prompt-submit"], input="{}")
     assert result.exit_code == 0
