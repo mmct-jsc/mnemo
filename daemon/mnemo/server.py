@@ -1422,7 +1422,36 @@ def create_app(*, store: Store | None = None, embedder: Embedder | None = None) 
         if api_key_id is not None:
             period = time.strftime("%Y-%m", time.gmtime())
             s.record_usage(api_key_id, period, queries=1, tokens=result.tokens_used)
-        return QueryOut.from_result(result)
+        out = QueryOut.from_result(result)
+        # v6.1.0 governance: surface binding rules for this context, separate
+        # from the ranked hits (so MUST/MUST_NOT bypass the token budget).
+        # Fully fail-open -- governance never breaks a query.
+        try:
+            from mnemo import governance
+            from mnemo.api_schemas import RuleOut
+
+            scope_set = set(proj) if isinstance(proj, list) else ({proj} if proj else None)
+            for r in governance.active_rules(
+                s,
+                scope=scope_set,
+                intent_tags=set(result.intent_tags),
+                file_paths=body.file_paths,
+                tool_name=body.tool_name,
+                tool_arg=body.tool_arg,
+            ):
+                out.rules.append(
+                    RuleOut(
+                        node_id=r.node_id,
+                        rule_id=r.id,
+                        modality=r.modality,
+                        enforcement=r.enforcement,
+                        text=r.text,
+                        citation=f"[mnemo:{r.node_id}]",
+                    )
+                )
+        except Exception:
+            pass
+        return out
 
     # --- Projects (v1.1) --------------------------------------------------
 

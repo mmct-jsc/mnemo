@@ -91,6 +91,14 @@ class Config:
     # are too noisy. 30 is the design-doc default; users can lower it
     # for tighter feedback loops at the cost of overfit risk.
     retune_min_queries: int = 30
+    # v6.1.0 governance: how hard the PreToolUse/Stop gates enforce a
+    # `block` rule. 'off' = never gate; 'warn' (default) = surface the
+    # would-block reason but allow; 'block' = actually deny/ask. Default
+    # 'warn' so governance is non-aggressive until rules prove precise on
+    # real sessions; flip per-deployment to 'block' for hard enforcement.
+    # The env var MNEMO_GOVERNANCE_MODE overrides this; MNEMO_GOVERNANCE_BYPASS=1
+    # downgrades any block to a warn (the escape hatch).
+    governance_enforce_mode: str = "warn"
     # v3 phase 7: chat companion settings (design S7). Secrets are NOT
     # here -- API keys live in the OS keychain (mnemo.keys). Only
     # non-secret provider prefs (default + per-provider model) +
@@ -241,6 +249,10 @@ def _apply(cfg: Config, raw: dict) -> None:
         cfg.mmr_lambda = max(0.0, min(1.0, float(raw["mmr_lambda"])))
     if isinstance(raw.get("retune_min_queries"), int):
         cfg.retune_min_queries = max(1, int(raw["retune_min_queries"]))
+    if isinstance(raw.get("governance_enforce_mode"), str):
+        gm = raw["governance_enforce_mode"].strip().lower()
+        if gm in ("off", "warn", "block"):
+            cfg.governance_enforce_mode = gm
     # v3 phase 7 sections.
     if isinstance(raw.get("default_provider"), str):
         cfg.default_provider = raw["default_provider"].strip().lower()

@@ -1,5 +1,5 @@
 {
-  "description": "mnemo: inject a memory map at session start, inject cited memory per prompt, and reindex when memory files are edited. All three route through the cross-platform `mnemo hook <event>` CLI.",
+  "description": "mnemo: inject a memory map at session start; inject cited memory + binding governance rules per prompt; reindex + capture governance evidence on tool use; gate tool calls (PreToolUse) and session end (Stop) against governance rules. All route through the cross-platform `mnemo hook <event>` CLI. Gates default to 'warn' (surface, never block) -- set MNEMO_GOVERNANCE_MODE=block to enforce, MNEMO_GOVERNANCE_BYPASS=1 to override.",
   "hooks": {
     "SessionStart": [
       {
@@ -19,9 +19,25 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "Edit|Write",
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash",
         "hooks": [
           { "type": "command", "command": "mnemo hook post-tool-use" }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          { "type": "command", "command": "mnemo hook pre-tool-use" }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          { "type": "command", "command": "mnemo hook stop" }
         ]
       }
     ]
