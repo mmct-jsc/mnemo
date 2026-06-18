@@ -318,3 +318,21 @@ def test_active_rules_fails_open_on_store_error() -> None:
             raise RuntimeError("db gone")
 
     assert gov.active_rules(_BadStore(), scope=None) == []
+
+
+def test_command_satisfies_verify_rejects_substring_spoof() -> None:
+    # the headline review finding: substring containment must NOT satisfy
+    assert gov.command_satisfies_verify("ruff check", 'echo "ruff check"') is False
+    assert gov.command_satisfies_verify("ruff check", "git commit -m 'ran ruff check'") is False
+
+
+def test_command_satisfies_verify_accepts_real_runs() -> None:
+    assert gov.command_satisfies_verify("ruff check", "ruff check .") is True
+    assert gov.command_satisfies_verify("ruff check", "cd daemon && ruff check .") is True
+    assert gov.command_satisfies_verify("ruff check", "uv run ruff check .") is True
+    assert gov.command_satisfies_verify("pytest", "uv run pytest -q && echo done") is True
+
+
+def test_command_satisfies_verify_empty_is_false() -> None:
+    assert gov.command_satisfies_verify("", "anything") is False
+    assert gov.command_satisfies_verify("ruff check", "") is False

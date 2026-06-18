@@ -256,6 +256,30 @@ class GateDecision:
 
 _GATE_ENFORCEMENTS = {"block", "require-ack"}
 
+_RUN_WRAPPERS = ("uv run", "poetry run", "pdm run", "pipenv run", "npx", "pnpm exec", "python -m", "py -m")
+
+
+def command_satisfies_verify(verify_command: str, run_command: str) -> bool:
+    """True only if ``run_command`` actually RUNS ``verify_command`` -- some
+    ``&&`` / ``;`` / ``|``-separated segment (after stripping a leading
+    ``cd ... &&`` and a known run-wrapper) STARTS WITH the verify command at a
+    token boundary. Mere substring containment is rejected, so
+    ``echo "ruff check"`` does NOT satisfy a ``ruff check`` gate. Passive
+    capture trusts the agent ran the real command; this stops ACCIDENTAL and
+    casual matches, not a determined agent gaming its own governance."""
+    vc = " ".join((verify_command or "").split())
+    if not vc:
+        return False
+    for raw in re.split(r"&&|\|\||;|\|", run_command or ""):
+        seg = " ".join(raw.split())
+        for w in _RUN_WRAPPERS:
+            if seg == w or seg.startswith(w + " "):
+                seg = seg[len(w) :].strip()
+                break
+        if seg == vc or seg.startswith(vc + " "):
+            return True
+    return False
+
 
 def _gate_reason(rules: list[Rule], *, stop: bool = False) -> str:
     lead = (
@@ -311,7 +335,16 @@ def evaluate_gate(
         blocking.append(rule)
     if not blocking:
         return GateDecision(False, "allow", "", [])
-    permission = "deny" if any(r.enforcement == "block" for r in blocking) else "ask"
+    # Hard-deny only when there is a programmatic way to satisfy the gate: a
+    # prohibition (no step) or a `verify` step (evidenceable via captured exit
+    # code). A `block` rule requiring review/ack has NO satisfy path in v1
+    # (no stamp tool yet), so it ASKS (defers to the human) rather than DENYING
+    # forever -- avoiding a permanent deny-trap whose only escape is the bypass.
+    hard_deny = any(
+        r.enforcement == "block" and (not r.requires_step or r.requires_step == "verify")
+        for r in blocking
+    )
+    permission = "deny" if hard_deny else "ask"
     return GateDecision(True, permission, _gate_reason(blocking), [r.id for r in blocking])
 
 

@@ -367,20 +367,23 @@ def test_post_tool_use_records_touched_file(
 
 _GATE_RULE = (
     "---\n"
-    "name: review-gate\n"
+    "name: verify-gate\n"
     "type: rule\n"
     "base: true\n"
-    "description: Code review required before commit.\n"
+    "description: ruff must pass before commit.\n"
     "rule:\n"
-    "  id: rule.gate.review\n"
+    "  id: rule.gate.verify\n"
     "  modality: MUST\n"
     "  enforcement: block\n"
-    "  requires_step: review\n"
+    "  requires_step: verify\n"
+    "  verify:\n"
+    "    command: 'ruff check'\n"
+    "    expect_exit: 0\n"
     "  applies_to:\n"
     "    tool: ['Bash']\n"
     "    tool_arg_match: 'git commit'\n"
     "---\n"
-    "Run /mnemo-review first.\n"
+    "Run ruff check first.\n"
 )
 
 
@@ -415,7 +418,7 @@ def test_pre_tool_use_denies_in_block_mode(
     assert res.exit_code == 0, res.stdout
     assert "permissionDecision" in res.stdout
     assert "deny" in res.stdout
-    assert "rule.gate.review" in res.stdout
+    assert "rule.gate.verify" in res.stdout
 
 
 def test_pre_tool_use_warns_by_default(

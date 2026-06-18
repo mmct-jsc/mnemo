@@ -34,7 +34,33 @@ def _rule(store, *, name, block, base=True, project_key=None):
     return n
 
 
-def test_gate_blocks_when_required_step_unsatisfied(tmp_path: Path) -> None:
+def test_verify_gate_denies_when_unsatisfied(tmp_path: Path) -> None:
+    store = Store(tmp_path / "t.db")
+    _rule(
+        store,
+        name="verify-before-commit",
+        block={
+            "id": "rule.gate.verify",
+            "modality": "MUST",
+            "enforcement": "block",
+            "requires_step": "verify",
+            "verify": {"command": "uv run ruff check .", "expect_exit": 0},
+            "applies_to": {"tool": ["Bash"], "tool_arg_match": "git commit"},
+        },
+    )
+    d = gov.evaluate_gate(
+        store, session_id="S", tool_name="Bash", tool_arg="git commit -m x", scope=None
+    )
+    assert d.blocked is True
+    assert d.permission == "deny", "a verify gate (evidenceable) hard-denies"
+    assert "rule.gate.verify" in d.rule_ids
+    assert "ruff check" in d.reason
+    store.close()
+
+
+def test_review_gate_asks_not_denies(tmp_path: Path) -> None:
+    """A `block` rule requiring review/ack has no programmatic satisfy path in
+    v1, so it ASKS (defers to the human) rather than denying forever."""
     store = Store(tmp_path / "t.db")
     _rule(
         store,
@@ -51,9 +77,7 @@ def test_gate_blocks_when_required_step_unsatisfied(tmp_path: Path) -> None:
         store, session_id="S", tool_name="Bash", tool_arg="git commit -m x", scope=None
     )
     assert d.blocked is True
-    assert d.permission == "deny"
-    assert "rule.gate.review" in d.rule_ids
-    assert "review" in d.reason.lower()
+    assert d.permission == "ask", "review gate has no satisfy path -> ask, never a deny-trap"
     store.close()
 
 

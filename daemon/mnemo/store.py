@@ -846,7 +846,7 @@ CREATE TABLE IF NOT EXISTS governance_ledger (
   status        TEXT NOT NULL,
   evidence      TEXT,
   touched_files TEXT,
-  stamped_at    INTEGER NOT NULL,
+  stamped_at    REAL NOT NULL,
   PRIMARY KEY (session_id, rule_id, step)
 );
 
@@ -856,7 +856,7 @@ CREATE TABLE IF NOT EXISTS governance_ledger (
 CREATE TABLE IF NOT EXISTS governance_touched (
   session_id  TEXT NOT NULL,
   file_path   TEXT NOT NULL,
-  touched_at  INTEGER NOT NULL,
+  touched_at  REAL NOT NULL,
   PRIMARY KEY (session_id, file_path)
 );
 """
@@ -1191,7 +1191,7 @@ class Store:
     ) -> None:
         """Record that ``file_path`` was edited in ``session_id`` (updates the
         timestamp to the latest touch). Drives gate freshness."""
-        ts = int(time.time()) if at is None else int(at)
+        ts = time.time() if at is None else at
         with self._lock:
             self.conn.execute(
                 "INSERT INTO governance_touched (session_id, file_path, touched_at) "
@@ -1215,7 +1215,7 @@ class Store:
         """Stamp captured evidence that a mandatory ``step`` ran for a rule.
         ``status`` is ``satisfied`` only when the evidence proves compliance
         (e.g. the verify command exited as expected); ``failed`` otherwise."""
-        ts = int(time.time()) if at is None else int(at)
+        ts = time.time() if at is None else at
         files_json = json.dumps(list(touched_files)) if touched_files else None
         with self._lock:
             self.conn.execute(
@@ -1239,13 +1239,13 @@ class Store:
                 "SELECT MAX(touched_at) AS t FROM governance_touched WHERE session_id = ?",
                 (session_id,),
             ).fetchone()
-            latest_touch = int(touch["t"]) if touch and touch["t"] is not None else 0
+            latest_touch = float(touch["t"]) if touch and touch["t"] is not None else 0.0
             row = self.conn.execute(
                 "SELECT stamped_at FROM governance_ledger WHERE session_id = ? AND "
                 "rule_id = ? AND step = ? AND status = 'satisfied'",
                 (session_id, rule_id, step),
             ).fetchone()
-        return row is not None and int(row["stamped_at"]) >= latest_touch
+        return row is not None and float(row["stamped_at"]) >= latest_touch
 
     def governance_touched_files(self, session_id: str) -> list[str]:
         """Every file edited in ``session_id`` (for the Stop/PreToolUse gate

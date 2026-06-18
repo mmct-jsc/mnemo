@@ -1136,7 +1136,7 @@ def _governance_capture(data: dict) -> None:
     except Exception:
         return
     try:
-        fp = str(tool_input.get("file_path") or "")
+        fp = str(tool_input.get("file_path") or tool_input.get("notebook_path") or "")
         if fp and tool_name in _EDIT_TOOLS:
             store.record_touched_file(session_id, fp)
         if tool_name == "Bash":
@@ -1148,20 +1148,24 @@ def _governance_capture(data: dict) -> None:
                 scope = set(scope_keys) if scope_keys else None
                 exit_code = _bash_exit_code(data)
                 for rule in governance.rules_with_verify(store, scope=scope):
-                    if rule.verify_command and rule.verify_command in command:
-                        if exit_code is not None:
-                            ok = exit_code == rule.verify_expect_exit
-                        else:
-                            # exit code not surfaced by this CC build: fall back
-                            # to the failure-flag heuristic (still the real result).
-                            ok = not _response_has_error(data)
-                        store.record_governance_evidence(
-                            session_id=session_id,
-                            rule_id=rule.id,
-                            step="verify",
-                            status="satisfied" if ok else "failed",
-                            evidence=f"{command} -> exit {exit_code}",
-                        )
+                    if not (
+                        rule.verify_command
+                        and governance.command_satisfies_verify(rule.verify_command, command)
+                    ):
+                        continue
+                    if exit_code is None:
+                        # No exit code surfaced by this CC build: we cannot
+                        # PROVE the command passed, so we do NOT stamp the gate
+                        # satisfied (evidence-based -> never falsely open).
+                        continue
+                    ok = exit_code == rule.verify_expect_exit
+                    store.record_governance_evidence(
+                        session_id=session_id,
+                        rule_id=rule.id,
+                        step="verify",
+                        status="satisfied" if ok else "failed",
+                        evidence=f"{command} -> exit {exit_code}",
+                    )
     except Exception:
         pass
     finally:
