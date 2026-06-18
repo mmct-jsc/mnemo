@@ -101,6 +101,11 @@ NODE_TYPES = frozenset(
         "project_doc",
         "plan_doc",
         "session_summary",
+        # v6.1.0 governance: a prescriptive, enforceable constraint /
+        # workflow gate / spec. Authored as a .md file with a ``rule:``
+        # frontmatter block (modality MUST/MUST_NOT/SHOULD + enforcement +
+        # applies_to + verify). Parsed read-side by ``governance.py``.
+        "rule",
         # v2.0 phase 1: decision provenance. One node per git commit
         # ingested from a code_repo source (phase 9 wires the parser).
         "commit",
@@ -153,6 +158,10 @@ EDGE_RELATIONS = frozenset(
         "supersedes",
         "mentions",
         "co_occurs_with",
+        # v6.1.0 governance: a rule ``refines`` another rule or a spec node
+        # (links.refines in the rule frontmatter). Carried for traversal;
+        # auto-wiring of nested rule links lands in a later governance phase.
+        "refines",
         # v2.0 phase 1: decision provenance family. Producers land in
         # phase 9 (commit auto-linker). Carrying them in the schema now
         # so the column / index plumbing is in place before parsers run.
@@ -824,6 +833,32 @@ CREATE TABLE IF NOT EXISTS file_index (
   mtime       REAL NOT NULL,
   indexed_at  INTEGER NOT NULL
 );
+
+-- v6.1.0 governance: the EVIDENCE ledger. A mandatory step (verify/review)
+-- is satisfied only by a captured-evidence row whose ``stamped_at`` is at or
+-- after the most recent edit in the session (see ``gate_satisfied``), so a
+-- later edit re-opens the gate. Keyed per (session, rule, step). Lives in
+-- the ALWAYS-run SCHEMA_SQL so the tables exist on every store.
+CREATE TABLE IF NOT EXISTS governance_ledger (
+  session_id    TEXT NOT NULL,
+  rule_id       TEXT NOT NULL,
+  step          TEXT NOT NULL,
+  status        TEXT NOT NULL,
+  evidence      TEXT,
+  touched_files TEXT,
+  stamped_at    REAL NOT NULL,
+  PRIMARY KEY (session_id, rule_id, step)
+);
+
+-- v6.1.0 governance: files edited in a session, so a Stop/PreToolUse gate
+-- knows which rules to check and ``gate_satisfied`` can demand evidence
+-- fresher than the latest edit.
+CREATE TABLE IF NOT EXISTS governance_touched (
+  session_id  TEXT NOT NULL,
+  file_path   TEXT NOT NULL,
+  touched_at  REAL NOT NULL,
+  PRIMARY KEY (session_id, file_path)
+);
 """
 
 
@@ -1148,6 +1183,79 @@ class Store:
                 (path, mtime, int(time.time())),
             )
             self.conn.commit()
+
+    # --- v6.1.0 governance evidence ledger --------------------------------
+
+    def record_touched_file(
+        self, session_id: str, file_path: str, *, at: int | None = None
+    ) -> None:
+        """Record that ``file_path`` was edited in ``session_id`` (updates the
+        timestamp to the latest touch). Drives gate freshness."""
+        ts = time.time() if at is None else at
+        with self._lock:
+            self.conn.execute(
+                "INSERT INTO governance_touched (session_id, file_path, touched_at) "
+                "VALUES (?, ?, ?) ON CONFLICT(session_id, file_path) DO UPDATE SET "
+                "touched_at = excluded.touched_at",
+                (session_id, file_path, ts),
+            )
+            self.conn.commit()
+
+    def record_governance_evidence(
+        self,
+        *,
+        session_id: str,
+        rule_id: str,
+        step: str,
+        status: str = "satisfied",
+        evidence: str = "",
+        touched_files: list[str] | None = None,
+        at: int | None = None,
+    ) -> None:
+        """Stamp captured evidence that a mandatory ``step`` ran for a rule.
+        ``status`` is ``satisfied`` only when the evidence proves compliance
+        (e.g. the verify command exited as expected); ``failed`` otherwise."""
+        ts = time.time() if at is None else at
+        files_json = json.dumps(list(touched_files)) if touched_files else None
+        with self._lock:
+            self.conn.execute(
+                "INSERT INTO governance_ledger "
+                "(session_id, rule_id, step, status, evidence, touched_files, stamped_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(session_id, rule_id, step) DO UPDATE SET "
+                "status = excluded.status, evidence = excluded.evidence, "
+                "touched_files = excluded.touched_files, stamped_at = excluded.stamped_at",
+                (session_id, rule_id, step, status, evidence, files_json, ts),
+            )
+            self.conn.commit()
+
+    def gate_satisfied(self, session_id: str, rule_id: str, step: str) -> bool:
+        """True iff a ``satisfied`` evidence row exists for (session, rule,
+        step) AND it was stamped at/after the most recent edit in the session
+        -- so an edit after the verify re-opens the gate (evidence-based,
+        no stale passes)."""
+        with self._lock:
+            touch = self.conn.execute(
+                "SELECT MAX(touched_at) AS t FROM governance_touched WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+            latest_touch = float(touch["t"]) if touch and touch["t"] is not None else 0.0
+            row = self.conn.execute(
+                "SELECT stamped_at FROM governance_ledger WHERE session_id = ? AND "
+                "rule_id = ? AND step = ? AND status = 'satisfied'",
+                (session_id, rule_id, step),
+            ).fetchone()
+        return row is not None and float(row["stamped_at"]) >= latest_touch
+
+    def governance_touched_files(self, session_id: str) -> list[str]:
+        """Every file edited in ``session_id`` (for the Stop/PreToolUse gate
+        to know which rules to check)."""
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT file_path FROM governance_touched WHERE session_id = ?",
+                (session_id,),
+            ).fetchall()
+        return [r["file_path"] for r in rows]
 
     def source_paths_for_file(self, file_path: str) -> list[str]:
         """v5.28.0: every node source_path owned by ``file_path`` (the

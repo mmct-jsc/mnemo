@@ -1000,6 +1000,9 @@ def hook_user_prompt_submit() -> None:
 
     cwd = str(data.get("cwd") or os.getcwd())
 
+    # v6.1.0 governance: binding rules surface in their own section, separate
+    # from (and above) the ranked memory pointer.
+    gov_rules: list[dict] = []
     payload = _daemon_query(prompt, cwd=cwd)
     if payload is not None:
         rows = [
@@ -1012,6 +1015,14 @@ def hook_user_prompt_submit() -> None:
             for h in payload.get("hits", [])
         ]
         intent_tags = [str(t) for t in payload.get("intent_tags") or []]
+        gov_rules = [
+            {
+                "citation": str(gr.get("citation", "")),
+                "modality": str(gr.get("modality", "")),
+                "text": str(gr.get("text") or ""),
+            }
+            for gr in payload.get("rules") or []
+        ]
     else:
         # Fallback: daemon down -- query in-process (the slow path).
         try:
@@ -1019,7 +1030,7 @@ def hook_user_prompt_submit() -> None:
         except Exception:
             return
         try:
-            from mnemo import retrieve
+            from mnemo import governance, retrieve
 
             scope_keys, _indexed = retrieve.resolve_auto_scope(store, cwd)
             result = retrieve.query(
@@ -1030,6 +1041,14 @@ def hook_user_prompt_submit() -> None:
                 budget_tokens=800,
                 active_projects=scope_keys or None,
             )
+            gov_rules = [
+                {"citation": f"[mnemo:{r.node_id}]", "modality": r.modality, "text": r.text}
+                for r in governance.active_rules(
+                    store,
+                    scope=set(scope_keys) if scope_keys else None,
+                    intent_tags=set(result.intent_tags),
+                )
+            ]
         except Exception:
             return
         finally:
@@ -1054,20 +1073,109 @@ def hook_user_prompt_submit() -> None:
     except Exception:
         pass
 
-    if not rows:
+    if not rows and not gov_rules:
         return
-    out = ["## Relevant memory (mnemo)", ""]
-    for r in rows:
-        desc = r["description"].replace("\n", " ")
-        out.append(f"- {r['citation']} [{r['type']}] {r['name']}: {desc}")
-    out.append("")
-    out.append(f"intent: {', '.join(intent_tags) or 'none'} | k: {len(rows)}")
-    typer.echo("\n".join(out))
+    out: list[str] = []
+    if gov_rules:
+        out.append("## Active rules (mnemo) -- binding")
+        out.append("")
+        out.extend(f"- {gr['citation']} {gr['modality']}: {gr['text']}" for gr in gov_rules)
+        out.append("")
+    if rows:
+        out.append("## Relevant memory (mnemo)")
+        out.append("")
+        for r in rows:
+            desc = r["description"].replace("\n", " ")
+            out.append(f"- {r['citation']} [{r['type']}] {r['name']}: {desc}")
+        out.append("")
+        out.append(f"intent: {', '.join(intent_tags) or 'none'} | k: {len(rows)}")
+    typer.echo("\n".join(out).rstrip())
+
+
+_EXIT_CODE_KEYS = ("exit_code", "exitCode", "returnCode", "return_code", "code")
+_EDIT_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
+
+
+def _bash_exit_code(data: dict) -> int | None:
+    """Pull a Bash command's exit code out of the PostToolUse payload, across
+    the shape variants Claude Code builds use. None when not surfaced."""
+    tr = data.get("tool_response")
+    if isinstance(tr, dict):
+        for key in _EXIT_CODE_KEYS:
+            v = tr.get(key)
+            if isinstance(v, bool):  # guard: bools are ints in Python
+                continue
+            if isinstance(v, int):
+                return v
+    return None
+
+
+def _response_has_error(data: dict) -> bool:
+    """Best-effort failure signal when no explicit exit code is present."""
+    tr = data.get("tool_response")
+    if isinstance(tr, dict):
+        return bool(tr.get("is_error") or tr.get("interrupted") or tr.get("error"))
+    return False
+
+
+def _governance_capture(data: dict) -> None:
+    """v6.1.0 G3: capture EVIDENCE from the agent's real tool result -- record
+    edited files, and stamp a rule's verify step satisfied when a matching
+    command exits as expected. The agent cannot fake this; mnemo reads the
+    actual result. Fully fail-open (no session, daemon contention, etc. -> no-op)."""
+    session_id = str(data.get("session_id") or "")
+    if not session_id:
+        return
+    tool_name = str(data.get("tool_name") or "")
+    tool_input = data.get("tool_input") or {}
+    import os as _os
+
+    cwd = str(data.get("cwd") or _os.getcwd())
+    try:
+        store = _open_store()
+    except Exception:
+        return
+    try:
+        fp = str(tool_input.get("file_path") or tool_input.get("notebook_path") or "")
+        if fp and tool_name in _EDIT_TOOLS:
+            store.record_touched_file(session_id, fp)
+        if tool_name == "Bash":
+            command = str(tool_input.get("command") or "")
+            if command:
+                from mnemo import governance, retrieve
+
+                scope_keys, _idx = retrieve.resolve_auto_scope(store, cwd)
+                scope = set(scope_keys) if scope_keys else None
+                exit_code = _bash_exit_code(data)
+                for rule in governance.rules_with_verify(store, scope=scope):
+                    if not (
+                        rule.verify_command
+                        and governance.command_satisfies_verify(rule.verify_command, command)
+                    ):
+                        continue
+                    if exit_code is None:
+                        # No exit code surfaced by this CC build: we cannot
+                        # PROVE the command passed, so we do NOT stamp the gate
+                        # satisfied (evidence-based -> never falsely open).
+                        continue
+                    ok = exit_code == rule.verify_expect_exit
+                    store.record_governance_evidence(
+                        session_id=session_id,
+                        rule_id=rule.id,
+                        step="verify",
+                        status="satisfied" if ok else "failed",
+                        evidence=f"{command} -> exit {exit_code}",
+                    )
+    except Exception:
+        pass
+    finally:
+        store.close()
 
 
 @hook_app.command("post-tool-use")
 def hook_post_tool_use() -> None:
-    """PostToolUse: reindex (data-only, detached) when a memory file is edited."""
+    """PostToolUse: reindex (data-only, detached) when a memory file is edited,
+    and capture governance evidence (touched files + verify-command results)."""
     data = _read_stdin_json()
     if data is None:
         return
@@ -1077,6 +1185,138 @@ def hook_post_tool_use() -> None:
     # down; the spawn itself is debounced.
     if _is_memory_shaped(file_path) and not _nudge_daemon_reindex():
         _spawn_background_reindex()
+    # v6.1.0: evidence capture is independent of (and after) the reindex nudge.
+    import contextlib
+
+    with contextlib.suppress(Exception):
+        _governance_capture(data)
+
+
+def _governance_mode() -> str:
+    """Resolve the enforcement mode: env MNEMO_GOVERNANCE_MODE > config >
+    'warn'. 'warn' is the safe default (surface, never block)."""
+    import os as _os
+
+    env = (_os.environ.get("MNEMO_GOVERNANCE_MODE") or "").strip().lower()
+    if env in ("off", "warn", "block"):
+        return env
+    try:
+        from mnemo.config import load as _load_config
+
+        m = (_load_config().governance_enforce_mode or "warn").strip().lower()
+        return m if m in ("off", "warn", "block") else "warn"
+    except Exception:
+        return "warn"
+
+
+def _gov_tool_context(data: dict) -> tuple[str, str, list[str] | None]:
+    tool_name = str(data.get("tool_name") or "")
+    ti = data.get("tool_input") or {}
+    fp = str(ti.get("file_path") or "")
+    cmd = str(ti.get("command") or "")
+    tool_arg = cmd if tool_name == "Bash" else fp
+    return tool_name, tool_arg, ([fp] if fp else None)
+
+
+def _gov_decision(data: dict, *, stop: bool):
+    """Open the store, resolve scope, and return a governance GateDecision for
+    a PreToolUse (stop=False) or Stop (stop=True) event. Fail-open -> None."""
+    import os as _os
+
+    session_id = str(data.get("session_id") or "")
+    if stop and not session_id:
+        return None
+    cwd = str(data.get("cwd") or _os.getcwd())
+    try:
+        store = _open_store()
+    except Exception:
+        return None
+    try:
+        from mnemo import governance, retrieve
+
+        scope_keys, _idx = retrieve.resolve_auto_scope(store, cwd)
+        scope = set(scope_keys) if scope_keys else None
+        if stop:
+            return governance.evaluate_stop(store, session_id=session_id, scope=scope)
+        tool_name, tool_arg, file_paths = _gov_tool_context(data)
+        if not tool_name:
+            return None
+        return governance.evaluate_gate(
+            store,
+            session_id=session_id,
+            tool_name=tool_name,
+            tool_arg=tool_arg,
+            file_paths=file_paths,
+            scope=scope,
+        )
+    except Exception:
+        return None
+    finally:
+        store.close()
+
+
+@hook_app.command("pre-tool-use")
+def hook_pre_tool_use() -> None:
+    """PreToolUse: gate a tool call against governance ``block`` rules. Default
+    mode 'warn' (surface the reason, allow); 'block' denies/asks. Fail-open --
+    any error or daemon-down lets the tool through (a governance layer must
+    never brick a session)."""
+    import json as _json
+    import os as _os
+
+    data = _read_stdin_json()
+    if data is None:
+        return
+    decision = _gov_decision(data, stop=False)
+    if decision is None or not decision.blocked:
+        return
+    mode = "warn" if _os.environ.get("MNEMO_GOVERNANCE_BYPASS") == "1" else _governance_mode()
+    if mode == "off":
+        return
+    if mode == "warn":
+        typer.echo(
+            _json.dumps(
+                {
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "additionalContext": "[mnemo governance] WARNING (not blocking):\n"
+                        + decision.reason,
+                    }
+                }
+            )
+        )
+        return
+    typer.echo(
+        _json.dumps(
+            {
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": decision.permission,
+                    "permissionDecisionReason": decision.reason,
+                }
+            }
+        )
+    )
+
+
+@hook_app.command("stop")
+def hook_stop() -> None:
+    """Stop: block session end while a file edited this session is still
+    covered by an unsatisfied mandatory gate. Default 'warn' (allow); 'block'
+    blocks. Fail-open."""
+    import json as _json
+    import os as _os
+
+    data = _read_stdin_json()
+    if data is None:
+        return
+    decision = _gov_decision(data, stop=True)
+    if decision is None or not decision.blocked:
+        return
+    mode = "warn" if _os.environ.get("MNEMO_GOVERNANCE_BYPASS") == "1" else _governance_mode()
+    if mode in ("off", "warn"):
+        return  # Stop has no context channel; warn = allow
+    typer.echo(_json.dumps({"decision": "block", "reason": decision.reason}))
 
 
 # --- mnemo statusline -----------------------------------------------------

@@ -63,8 +63,20 @@ def test_hooks_invoke_mnemo_hook_cli(hooks: dict) -> None:
 
 
 def test_post_tool_use_matches_edits(hooks: dict) -> None:
+    # v6.1.0: PostToolUse also fires on Bash so governance can capture verify
+    # evidence (the real exit code), and on MultiEdit/NotebookEdit for touched
+    # files. Edit + Write (memory-reindex) must still be covered.
     matchers = [entry.get("matcher", "") for entry in hooks["hooks"]["PostToolUse"]]
-    assert any(m == "Edit|Write" for m in matchers), f"PostToolUse matchers: {matchers}"
+    tools = {t for m in matchers for t in m.split("|")}
+    assert {"Edit", "Write", "Bash"} <= tools, f"PostToolUse matchers: {matchers}"
+
+
+def test_governance_gates_are_wired(hooks: dict) -> None:
+    """v6.1.0: PreToolUse + Stop route to the governance gate hooks."""
+    for event, cmd in (("PreToolUse", "mnemo hook pre-tool-use"), ("Stop", "mnemo hook stop")):
+        assert event in hooks["hooks"], f"{event} must be wired"
+        cmds = [h["command"] for entry in hooks["hooks"][event] for h in entry["hooks"]]
+        assert any(cmd in c for c in cmds), f"{event}: expected `{cmd}`, got {cmds}"
 
 
 def test_no_fictional_platforms_key(hooks: dict) -> None:

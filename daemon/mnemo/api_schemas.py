@@ -198,6 +198,13 @@ class QueryIn(BaseModel):
     # by the UserPromptSubmit hook so IDE queries stop leaking
     # cross-project nodes.
     cwd: str | None = None
+    # v6.1.0 governance: optional context for surfacing applicable rules.
+    # ``file_paths`` (buffers being edited) drive glob triggers; ``tool_name``
+    # / ``tool_arg`` drive tool triggers (used by the PreToolUse gate). All
+    # default None -> byte-stable for existing callers.
+    file_paths: list[str] | None = None
+    tool_name: str | None = None
+    tool_arg: str | None = None
 
 
 class HitOut(BaseModel):
@@ -229,11 +236,26 @@ class HitOut(BaseModel):
         )
 
 
+class RuleOut(BaseModel):
+    """A governance rule that BINDS for the request context (v6.1.0)."""
+
+    node_id: str
+    rule_id: str
+    modality: str  # MUST | MUST_NOT | SHOULD
+    enforcement: str  # inform | warn | require-ack | block
+    text: str
+    citation: str
+
+
 class QueryOut(BaseModel):
     hits: list[HitOut]
     intent_tags: list[str]
     tokens_used: int
     query_id: str
+    # v6.1.0 governance: binding rules for this context, surfaced separately
+    # from the ranked hits (they bypass the injection budget). Default [] ->
+    # byte-stable for existing consumers.
+    rules: list[RuleOut] = []
 
     @classmethod
     def from_result(cls, r: RetrievalResult) -> QueryOut:

@@ -6,14 +6,14 @@
   },
   "metadata": {
     "description": "Local-first knowledge memory + code intelligence for Claude Code.",
-    "version": "6.0.0"
+    "version": "6.1.0"
   },
   "plugins": [
     {
       "name": "mnemo",
       "source": "./",
       "description": "Local-first knowledge memory + code intelligence for Claude Code: aggregate memory and source across projects into a typed graph, retrieve via hybrid Graph-RAG with budget-capped context injected every session, chat through an agentic companion (Mnem), and explore the whole graph as a custom WebGL galaxy.",
-      "version": "6.0.0",
+      "version": "6.1.0",
       "license": "MIT",
       "homepage": "https://github.com/mmct-jsc/mnemo",
       "keywords": ["memory", "graph-rag", "knowledge", "claude-code", "mcp", "code-intelligence"]
