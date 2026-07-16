@@ -119,6 +119,67 @@ def resolve_auto_scope(store: Store, cwd: str | None) -> tuple[list[str], bool]:
     return keys, bool(keys)
 
 
+def relevance_score(
+    cfg: config.Config,
+    *,
+    vector: float,
+    lexical: float,
+    bm25_rank: int | None,
+    vec_rank: int | None,
+) -> float:
+    """Fuse the two RELEVANCE rankers (dense vector + BM25) into one score.
+
+    This is the only part of scoring that ``cfg.fusion_mode`` moves. The
+    CONTEXT terms (graph / recency / type / project) and the multiplicative
+    finishers (exact-name boost, isolation penalty) are orthogonal and
+    proven, so they sit outside and are identical across modes.
+
+    Every mode returns a score in the SAME band, ``[0, alpha + zeta]``. That
+    matters: if one mode returned a wider band than another, flipping the
+    mode would silently re-weight the context terms relative to relevance
+    and we'd be measuring two changes at once.
+
+    Ranks are 0-based (``store.bm25_search`` order); ``None`` means the node
+    was not a candidate for that ranker.
+    """
+    sw = cfg.scoring
+    band = sw.alpha + sw.zeta
+    mode = getattr(cfg, "fusion_mode", config.DEFAULT_FUSION_MODE)
+    if mode not in config.FUSION_MODES:
+        mode = config.DEFAULT_FUSION_MODE  # fail open: never break retrieval
+
+    if mode == "bm25_lead":
+        # BM25 leads; vector is a recall fallback for BM25-misses plus a
+        # tie-break. Deliberately NOT a hard band -- a BM25-miss keeps a
+        # non-zero score, because erasing it would make conceptual queries
+        # (whose answer is not a literal token match) unanswerable.
+        w = getattr(cfg, "bm25_lead_weight", 0.85)
+        bm25_component = (1.0 / (1.0 + bm25_rank)) if bm25_rank is not None else 0.0
+        return band * (w * bm25_component + (1.0 - w) * max(0.0, vector))
+
+    if mode == "weighted_rrf":
+        # Rank-level RRF: scale-robust (reads positions, not raw cosines).
+        # Weighted because equal-weight RRF measured WORSE than bm25-alone
+        # (0.67 vs 0.81) -- RRF assumes comparably-good rankers, and here
+        # the vector ranker is the weaker one.
+        rk = getattr(cfg, "rrf_k", 60)
+        wb = getattr(cfg, "rrf_weight_bm25", 0.75)
+        wv = getattr(cfg, "rrf_weight_vector", 0.25)
+        raw = 0.0
+        if bm25_rank is not None:
+            raw += wb / (rk + 1 + bm25_rank)
+        if vec_rank is not None:
+            raw += wv / (rk + 1 + vec_rank)
+        ceiling = (wb + wv) / (rk + 1)
+        return band * (raw / ceiling) if ceiling > 0 else 0.0
+
+    # weighted_sum: the historical score-level blend, unchanged. No longer
+    # the default (weighted_rrf measured +0.38 lexical / +0.05 conceptual
+    # hit@5 against it) but kept exactly as-is: it is both the escape hatch
+    # and the baseline any future fusion change is compared against.
+    return sw.alpha * vector + sw.zeta * lexical
+
+
 def query(
     store: Store,
     embedder: Embedder,
@@ -162,6 +223,14 @@ def query(
         if nid not in vec_scores or sim > vec_scores[nid]:
             vec_scores[nid] = sim
             chunk_info[nid] = (chunk_idx, chunk_text)
+
+    # 2b. Vector RANK positions (0-based, best first) for the rank-level
+    # fusion modes. `weighted_rrf` reads positions rather than raw cosines,
+    # which is what makes it robust to the two rankers' scores living on
+    # incomparable scales.
+    vec_ranks: dict[str, int] = {
+        nid: i for i, nid in enumerate(sorted(vec_scores, key=lambda n: -vec_scores[n]))
+    }
 
     # 3. Graph proximity from candidates.
     graph_scores = graph.compute_graph_scores(store, vec_scores)
@@ -239,14 +308,17 @@ def query(
         c_lexical = _lexical_score(q_tokens, node)
         if nid in bm25_ranks:
             c_lexical = max(c_lexical, 1.0 / (1.0 + bm25_ranks[nid]))
-        s = (
-            sw.alpha * c_vector
-            + sw.beta * c_graph
-            + sw.gamma * c_recency
-            + sw.delta * c_type
-            + sw.epsilon * c_project
-            + sw.zeta * c_lexical
-        )
+        # Fusion rebalance: the vector<->lexical blend is the ONLY
+        # mode-dependent part of the score. The context terms below are
+        # orthogonal and identical across modes, so an A/B of fusion_mode
+        # measures one change, not two.
+        s = relevance_score(
+            cfg,
+            vector=c_vector,
+            lexical=c_lexical,
+            bm25_rank=bm25_ranks.get(nid),
+            vec_rank=vec_ranks.get(nid),
+        ) + (sw.beta * c_graph + sw.gamma * c_recency + sw.delta * c_type + sw.epsilon * c_project)
         if out_of_scope:
             # v4.3.2: deprioritize (don't erase) cross-project matches.
             s *= getattr(cfg, "project_isolation_penalty", 0.85)

@@ -23,6 +23,12 @@ log = logging.getLogger(__name__)
 
 # --- Defaults -------------------------------------------------------------
 
+#: How the two relevance rankers (dense vector + BM25) are fused.
+#: Single source of truth: ``config._apply`` validates writes against this,
+#: ``retrieve.relevance_score`` falls back to the default on anything else.
+FUSION_MODES = ("weighted_sum", "bm25_lead", "weighted_rrf")
+DEFAULT_FUSION_MODE = "weighted_rrf"
+
 
 @dataclass
 class ScoringWeights:
@@ -81,6 +87,48 @@ class Config:
     requery_window_seconds: int = 300
     requery_cosine_threshold: float = 0.85
     requery_top_n_hits: int = 3
+    # Fusion rebalance: how the two RELEVANCE rankers (dense vector and
+    # BM25/lexical) combine. The context terms (graph/recency/type/project)
+    # and the multiplicative finishers are orthogonal and unaffected.
+    #
+    #   'weighted_rrf'  (default) -- rank-level Reciprocal Rank Fusion,
+    #                   scale-robust, with bm25 weighted above vector.
+    #   'weighted_sum'  -- the historical score-level blend
+    #                   alpha*vector + zeta*lexical (kept as the escape
+    #                   hatch and the comparable pre-change baseline).
+    #   'bm25_lead'     -- BM25 leads the ranking; vector is a recall
+    #                   fallback for BM25-misses plus a tie-break.
+    #
+    # MEASURED, 80-query SELF set (42 lexical + 38 conceptual), one pinned
+    # corpus of 18,656 nodes, hit@5:
+    #
+    #                  lexical  conceptual  overall
+    #   weighted_sum     0.500     0.132     0.325
+    #   bm25_lead        0.690     0.079     0.400   <- REGRESSES conceptual
+    #   weighted_rrf     0.881     0.184     0.550   <- wins BOTH halves
+    #
+    # An earlier probe on the lexical half alone had put bm25-alone (0.81)
+    # above naive equal-weight RRF (0.67) and suggested a BM25-led fusion.
+    # Expanding the set with conceptual queries overturned that: bm25_lead
+    # buys lexical precision by SINKING conceptual recall, which is exactly
+    # the overfit that eval set was expanded to catch. Weighting RRF toward
+    # bm25 (rather than the naive 1:1 the probe tested) beats bm25_lead on
+    # BOTH halves -- including on lexical, because 1/(1+rank) collapses
+    # after the top few ranks while RRF's k-damping preserves BM25's order
+    # across the whole candidate pool.
+    fusion_mode: str = DEFAULT_FUSION_MODE
+    # bm25_lead: BM25's share of the relevance band; vector gets the rest.
+    # 0.85 makes a top BM25 hit dominate a perfect-cosine BM25-miss while
+    # leaving the miss a non-zero fallback score (never erase recall).
+    bm25_lead_weight: float = 0.85
+    # weighted_rrf: the standard RRF damping constant + per-ranker weights.
+    # rrf_k=60 is the literature default, NOT a value fitted here -- a sweep
+    # (10/30/60/100/200) is smooth and unimodal around it. Every w_bm25 in
+    # 0.5..1.0 beat weighted_sum, so the MODE choice is robust even where
+    # the exact weight is not.
+    rrf_k: int = 60
+    rrf_weight_bm25: float = 0.75
+    rrf_weight_vector: float = 0.25
     # v1.2 phase 4: MMR re-rank lambda. 0.7 leans toward relevance
     # with enough diversity penalty to nuke near-duplicates. 1.0
     # bypasses MMR (pre-v1.2 behavior; saves ~0.5ms/query). 0.0 is
@@ -184,6 +232,11 @@ def save(cfg: Config) -> None:
         "requery_cosine_threshold": cfg.requery_cosine_threshold,
         "requery_top_n_hits": cfg.requery_top_n_hits,
         "mmr_lambda": cfg.mmr_lambda,
+        "fusion_mode": cfg.fusion_mode,
+        "bm25_lead_weight": cfg.bm25_lead_weight,
+        "rrf_k": cfg.rrf_k,
+        "rrf_weight_bm25": cfg.rrf_weight_bm25,
+        "rrf_weight_vector": cfg.rrf_weight_vector,
         "retune_min_queries": cfg.retune_min_queries,
         "project_isolation_mode": cfg.project_isolation_mode,
         "project_isolation_penalty": cfg.project_isolation_penalty,
@@ -245,6 +298,18 @@ def _apply(cfg: Config, raw: dict) -> None:
         cfg.requery_cosine_threshold = max(0.0, min(2.0, float(raw["requery_cosine_threshold"])))
     if isinstance(raw.get("requery_top_n_hits"), int):
         cfg.requery_top_n_hits = max(0, min(100, int(raw["requery_top_n_hits"])))
+    if isinstance(raw.get("fusion_mode"), str):
+        fm = raw["fusion_mode"].strip().lower()
+        if fm in FUSION_MODES:
+            cfg.fusion_mode = fm
+    if isinstance(raw.get("bm25_lead_weight"), int | float):
+        cfg.bm25_lead_weight = max(0.0, min(1.0, float(raw["bm25_lead_weight"])))
+    if isinstance(raw.get("rrf_k"), int):
+        cfg.rrf_k = max(1, int(raw["rrf_k"]))
+    if isinstance(raw.get("rrf_weight_bm25"), int | float):
+        cfg.rrf_weight_bm25 = max(0.0, float(raw["rrf_weight_bm25"]))
+    if isinstance(raw.get("rrf_weight_vector"), int | float):
+        cfg.rrf_weight_vector = max(0.0, float(raw["rrf_weight_vector"]))
     if isinstance(raw.get("mmr_lambda"), int | float):
         cfg.mmr_lambda = max(0.0, min(1.0, float(raw["mmr_lambda"])))
     if isinstance(raw.get("retune_min_queries"), int):
