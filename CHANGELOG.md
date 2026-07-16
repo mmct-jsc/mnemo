@@ -2,6 +2,49 @@
 
 All notable changes to mnemo are documented here.
 
+## [6.2.0] - 2026-07-16
+
+**Retrieval fusion rebalance -- rank-level weighted RRF is the new default ranking. Measured +0.23 hit@5 overall, and it wins on BOTH halves of the query distribution.**
+
+Retrieval was the weak link the v6.0.0 reliability baseline exposed. The 6-term
+weighted sum blended the dense-vector and BM25 rankers at the SCORE level, which
+under-weighted the far stronger lexical signal. The fix is rank-level fusion.
+
+- **`config.fusion_mode`** -- the vector<->lexical relevance core is now a swappable
+  seam: `weighted_rrf` (new default), `weighted_sum` (the previous behaviour, kept
+  as the escape hatch and the comparable baseline), `bm25_lead`. The CONTEXT terms
+  (graph / recency / type / project) and the multiplicative finishers (exact-name
+  boost, isolation penalty) are orthogonal and **unchanged** in every mode, so a
+  mode A/B measures one change rather than two. Every mode scores into the same
+  `[0, alpha+zeta]` band. An unknown mode **fails open** to the default.
+- **Measured** on an 80-query set (42 lexical + 38 conceptual) against one pinned
+  corpus of 18,656 nodes, hit@5:
+
+  | mode | lexical | conceptual | overall |
+  |---|---|---|---|
+  | `weighted_sum` (old default) | 0.500 | 0.132 | 0.325 |
+  | `bm25_lead` | 0.690 | **0.079** | 0.400 |
+  | **`weighted_rrf`** (new default) | **0.881** | **0.184** | **0.550** |
+
+  `rrf_k=60` is the literature default, not a value fitted here (a 10..200 sweep is
+  smooth and unimodal around it), and every `w_bm25` in 0.5..1.0 beat the old
+  default. Tunable via `rrf_k` / `rrf_weight_bm25` / `rrf_weight_vector`.
+- **Eval set expanded 42 -> 80 and tagged by `query_type`** (`lexical|conceptual`);
+  `mnemo eval` now breaks hit@1/hit@5/MRR down per type. This is what makes the
+  lexical-vs-semantic tradeoff of a ranking change visible instead of hidden inside
+  one blended average -- and it is what caught `bm25_lead` regressing conceptual
+  recall. The 38 conceptual queries were authored from corpus ground truth and
+  adversarially verified (a candidate was rejected if a keyword search on the
+  prompt's own words found the answering file -- that would make it lexical).
+- **Known limitation:** `hit@1` is roughly flat (0.175 -> 0.188). RRF reliably gets
+  the right node INTO the top-5 without sharply ordering the top; mnemo injects
+  k=5 cited nodes, so hit@5 is the operative metric.
+- **Known weak spot (next lever, now evidence-backed):** conceptual retrieval is
+  poor in absolute terms (0.184). Prose questions surface CODE nodes because the
+  corpus is ~17.4k code vs ~1.2k prose nodes and the type-priority weight cannot
+  overcome those odds. Fusion cannot fix this; prose-vs-code ranking and a harder
+  project-isolation penalty can.
+
 ## [6.1.0] - 2026-06-18
 
 **Governance layer -- mnemo now tells an agent what to do and NOT do, and enforces it with teeth.**
