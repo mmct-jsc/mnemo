@@ -1,212 +1,652 @@
 [
   {
     "prompt": "where is the statusline presence line formatted",
-    "expect_source_contains": ["statusline.py"],
+    "expect_source_contains": [
+      "statusline.py"
+    ],
+    "query_type": "lexical",
     "note": "v5.25.0 statusline module"
   },
   {
     "prompt": "how do the Claude Code hooks inject cited memory into a prompt",
-    "expect_source_contains": ["cli.py"],
+    "expect_source_contains": [
+      "cli.py"
+    ],
+    "query_type": "lexical",
     "note": "hook_user_prompt_submit"
   },
   {
     "prompt": "where are the MCP tools registered with their risk levels",
-    "expect_source_contains": ["agent_tools.py"],
+    "expect_source_contains": [
+      "agent_tools.py"
+    ],
+    "query_type": "lexical",
     "note": "TOOLS registry + _tool decorator"
   },
   {
     "prompt": "how does mnemo detect god objects in the code lens",
-    "expect_source_contains": ["analyzer.py"],
+    "expect_source_contains": [
+      "analyzer.py"
+    ],
+    "query_type": "lexical",
     "note": "detect_god_object"
   },
   {
     "prompt": "where is the canonical project key derived from a filesystem path",
-    "expect_source_contains": ["paths.py"],
+    "expect_source_contains": [
+      "paths.py"
+    ],
+    "query_type": "lexical",
     "note": "resolve_project_key / project_key_from_abs"
   },
   {
     "prompt": "how does reindex decide whether an existing node changed",
-    "expect_source_contains": ["ingest.py"],
+    "expect_source_contains": [
+      "ingest.py"
+    ],
+    "query_type": "lexical",
     "note": "get_node_by_source + hash compare"
   },
   {
     "prompt": "where is the MiniLM embedding model loaded lazily",
-    "expect_source_contains": ["embed.py"],
+    "expect_source_contains": [
+      "embed.py"
+    ],
+    "query_type": "lexical",
     "note": "Embedder._load local-first"
   },
   {
     "prompt": "how does the daemon find which process is listening on its port",
-    "expect_source_contains": ["daemon.py"],
+    "expect_source_contains": [
+      "daemon.py"
+    ],
+    "query_type": "lexical",
     "note": "_listener_pid_for_port"
   },
   {
     "prompt": "where are audit queue findings reconciled by fingerprint",
-    "expect_source_contains": ["store.py", "analyzer.py"],
+    "expect_source_contains": [
+      "store.py",
+      "analyzer.py"
+    ],
+    "query_type": "lexical",
     "note": "v5.22.0 audit_queue"
   },
   {
     "prompt": "how are dead mnemo citations stripped from a node body",
-    "expect_source_contains": ["apply.py"],
+    "expect_source_contains": [
+      "apply.py"
+    ],
+    "query_type": "lexical",
     "note": "strip_dead_citations"
   },
   {
     "prompt": "where does the hybrid retrieval scoring combine vector and graph signals",
-    "expect_source_contains": ["retrieve.py"],
+    "expect_source_contains": [
+      "retrieve.py"
+    ],
+    "query_type": "lexical",
     "note": "the scoring formula"
   },
   {
     "prompt": "how does the post tool use hook decide a file is memory shaped",
-    "expect_source_contains": ["cli.py"],
+    "expect_source_contains": [
+      "cli.py"
+    ],
+    "query_type": "lexical",
     "note": "_is_memory_shaped"
   },
   {
     "prompt": "where do the install scripts wire the status line into settings",
-    "expect_source_contains": ["install.sh", "install.ps1", "statusline.py"],
+    "expect_source_contains": [
+      "install.sh",
+      "install.ps1",
+      "statusline.py"
+    ],
+    "query_type": "lexical",
     "note": "statusline-setup / ensure_statusline"
   },
   {
     "prompt": "how does the doctor verify the plugin is registered in Claude Code",
-    "expect_source_contains": ["doctor.py"],
+    "expect_source_contains": [
+      "doctor.py"
+    ],
+    "query_type": "lexical",
     "note": "check_plugin_registered"
   },
   {
     "prompt": "where does the FastAPI app get created and the v1 routes registered",
-    "expect_source_contains": ["server.py"],
+    "expect_source_contains": [
+      "server.py"
+    ],
+    "query_type": "lexical",
     "note": "create_app"
   },
   {
     "prompt": "how does the MCP server expose mnemo tools over stdio",
-    "expect_source_contains": ["mcp_server.py"],
+    "expect_source_contains": [
+      "mcp_server.py"
+    ],
+    "query_type": "lexical",
     "note": "make_context / stdio server"
   },
   {
     "prompt": "where is the server side spectral galaxy graph layout computed",
-    "expect_source_contains": ["graph_layout.py", "graph.py"],
+    "expect_source_contains": [
+      "graph_layout.py",
+      "graph.py"
+    ],
+    "query_type": "lexical",
     "note": "v4.6 custom layout"
   },
   {
     "prompt": "how does the chat agent stream tool calls back to the browser",
-    "expect_source_contains": ["chat.py"],
+    "expect_source_contains": [
+      "chat.py"
+    ],
+    "query_type": "lexical",
     "note": "v3 SSE chat companion"
   },
   {
     "prompt": "where are retrieval candidates compressed to fit the token budget",
-    "expect_source_contains": ["compress.py"],
+    "expect_source_contains": [
+      "compress.py"
+    ],
+    "query_type": "lexical",
     "note": "<=800 token budgeting"
   },
   {
     "prompt": "how does the active workspace drive the retrieval project scope",
-    "expect_source_contains": ["workspaces.py"],
+    "expect_source_contains": [
+      "workspaces.py"
+    ],
+    "query_type": "lexical",
     "note": "active workspace -> project_key"
   },
   {
     "prompt": "where does the file classifier decide a source file is suspicious",
-    "expect_source_contains": ["safeguards.py"],
+    "expect_source_contains": [
+      "safeguards.py"
+    ],
+    "query_type": "lexical",
     "note": "classify_file heuristics"
   },
   {
     "prompt": "how are git commits walked and turned into commit nodes",
-    "expect_source_contains": ["git_log.py"],
+    "expect_source_contains": [
+      "git_log.py"
+    ],
+    "query_type": "lexical",
     "note": "walk_commits / commit_to_node"
   },
   {
     "prompt": "where does the markdown parser split frontmatter from the body",
-    "expect_source_contains": ["md.py"],
+    "expect_source_contains": [
+      "md.py"
+    ],
+    "query_type": "lexical",
     "note": "parsers/md frontmatter"
   },
   {
     "prompt": "how does the Tier 2 resolver emit calls edges between functions",
-    "expect_source_contains": ["scope.py"],
+    "expect_source_contains": [
+      "scope.py"
+    ],
+    "query_type": "lexical",
     "note": "resolve_calls"
   },
   {
     "prompt": "where is the BM25 lexical search implemented over the FTS5 table",
-    "expect_source_contains": ["store.py"],
+    "expect_source_contains": [
+      "store.py"
+    ],
+    "query_type": "lexical",
     "note": "v5.27.0 bm25_search"
   },
   {
     "prompt": "how does auto scope resolve which project keys a working directory belongs to",
-    "expect_source_contains": ["retrieve.py"],
+    "expect_source_contains": [
+      "retrieve.py"
+    ],
+    "query_type": "lexical",
     "note": "v5.26.0 resolve_auto_scope"
   },
   {
     "prompt": "where is the exact name finisher boost applied to a retrieval candidate",
-    "expect_source_contains": ["retrieve.py"],
+    "expect_source_contains": [
+      "retrieve.py"
+    ],
+    "query_type": "lexical",
     "note": "v5.27.0 _exact_name_match"
   },
   {
     "prompt": "how does a code declaration get its line stable identity key",
-    "expect_source_contains": ["code.py"],
+    "expect_source_contains": [
+      "code.py"
+    ],
+    "query_type": "lexical",
     "note": "v5.28.0 _stabilize_keys / code_file_and_range"
   },
   {
     "prompt": "where does reindex re-key a legacy code node in place during migration",
-    "expect_source_contains": ["ingest.py"],
+    "expect_source_contains": [
+      "ingest.py"
+    ],
+    "query_type": "lexical",
     "note": "v5.28.0 _migrate_legacy_code_node"
   },
   {
     "prompt": "how does the code identity migration dry run copy the database",
-    "expect_source_contains": ["migrate_identity.py"],
+    "expect_source_contains": [
+      "migrate_identity.py"
+    ],
+    "query_type": "lexical",
     "note": "v5.28.0 dry_run_from_db"
   },
   {
     "prompt": "where is the per file mtime recorded so an unchanged reindex is skipped",
-    "expect_source_contains": ["store.py", "ingest.py"],
+    "expect_source_contains": [
+      "store.py",
+      "ingest.py"
+    ],
+    "query_type": "lexical",
     "note": "v5.28.0 file_index / set_file_mtime"
   },
   {
     "prompt": "how does the embedder fall back when the model is not cached locally",
-    "expect_source_contains": ["embed.py"],
+    "expect_source_contains": [
+      "embed.py"
+    ],
+    "query_type": "lexical",
     "note": "local_files_only then network"
   },
   {
     "prompt": "where are query feedback events recorded for the auto tuner",
-    "expect_source_contains": ["store.py"],
+    "expect_source_contains": [
+      "store.py"
+    ],
+    "query_type": "lexical",
     "note": "feedback_event table"
   },
   {
     "prompt": "how does the prompt architect exclude local only nodes before paste",
-    "expect_source_contains": ["retrieve.py", "agent_tools.py"],
+    "expect_source_contains": [
+      "retrieve.py",
+      "agent_tools.py"
+    ],
+    "query_type": "lexical",
     "note": "exclude_local_only"
   },
   {
     "prompt": "where is the coordinate descent auto tuner that rescos weights",
-    "expect_source_contains": ["autotune.py", "retrieve.py"],
+    "expect_source_contains": [
+      "autotune.py",
+      "retrieve.py"
+    ],
+    "query_type": "lexical",
     "note": "v1.2 auto-tuner"
   },
   {
     "prompt": "how does a full source request re-read the exact lines from disk",
-    "expect_source_contains": ["server.py"],
+    "expect_source_contains": [
+      "server.py"
+    ],
+    "query_type": "lexical",
     "note": "get_node_full_source"
   },
   {
     "prompt": "what is the dual remote ship workflow for a mnemo release",
-    "expect_source_contains": ["feedback_mnemo_release_workflow"],
+    "expect_source_contains": [
+      "feedback_mnemo_release_workflow"
+    ],
+    "query_type": "lexical",
     "note": "branch -> tag -> PR -> merge sequence"
   },
   {
     "prompt": "what are the canonical working pipelines for mnemo development",
-    "expect_source_contains": ["reference_mnemo_pipelines"],
+    "expect_source_contains": [
+      "reference_mnemo_pipelines"
+    ],
+    "query_type": "lexical",
     "note": "BASE pipelines reference"
   },
   {
     "prompt": "what is the BASE flag and project isolation contract in mnemo",
-    "expect_source_contains": ["project_mnemo_base_isolation"],
+    "expect_source_contains": [
+      "project_mnemo_base_isolation"
+    ],
+    "query_type": "lexical",
     "note": "BASE bypasses isolation"
   },
   {
     "prompt": "how must starlette middleware order be set so header stampers run last",
-    "expect_source_contains": ["feedback_starlette_middleware_order"],
+    "expect_source_contains": [
+      "feedback_starlette_middleware_order"
+    ],
+    "query_type": "lexical",
     "note": "last add_middleware is outermost"
   },
   {
     "prompt": "what are the Alpine.js gotchas for the mnemo UI",
-    "expect_source_contains": ["feedback_mnemo_alpine_gotchas"],
+    "expect_source_contains": [
+      "feedback_mnemo_alpine_gotchas"
+    ],
+    "query_type": "lexical",
     "note": "named factories, scoped querySelector"
   },
   {
     "prompt": "why does Path.resolve behave differently across platforms for project keys",
-    "expect_source_contains": ["feedback_cross_platform_path_resolve"],
+    "expect_source_contains": [
+      "feedback_cross_platform_path_resolve"
+    ],
+    "query_type": "lexical",
     "note": "pass through absolute paths"
+  },
+  {
+    "prompt": "the lookup keeps coming back with nothing at all even though i am certain the information was saved somewhere - what should i work through to find out why",
+    "expect_source_contains": [
+      "feedback_mnemo_silent_zero_modes"
+    ],
+    "query_type": "conceptual",
+    "note": "v1.2 silent-zero-hit diagnostic ladder (isolation / budget floor / bad project override)"
+  },
+  {
+    "prompt": "i pointed the tool at the wrong folder and then took it back off the list but everything it slurped in is still hanging around",
+    "expect_source_contains": [
+      "feedback_mnemo_source_cleanup_safety"
+    ],
+    "query_type": "conceptual",
+    "note": "v1.1.1 lifecycle-cleanup-must-cascade lesson (+ the one-shot orphan prune for pre-fix damage)"
+  },
+  {
+    "prompt": "why would the exact same project folder end up with two different identities depending on which machine the client happens to be running on",
+    "expect_source_contains": [
+      "feedback_cross_platform_path_resolve"
+    ],
+    "query_type": "conceptual",
+    "note": "Path.resolve() is platform-dependent; pass through absolute paths in cross-platform key derivation"
+  },
+  {
+    "prompt": "each attempt to improve how this feature behaves ends up breaking something different - should i keep going or settle for the older rougher version that actually worked",
+    "expect_source_contains": [
+      "feedback_revert_over_perfectionize"
+    ],
+    "query_type": "conceptual",
+    "note": "user-validated resolution rule: revert to last known-good beats an extended perfectionize that regresses"
+  },
+  {
+    "prompt": "i checked the display problem on my own setup and it looked correct but the person who reported it insists nothing has changed",
+    "expect_source_contains": [
+      "feedback_reproduce_user_exact_scenario"
+    ],
+    "query_type": "conceptual",
+    "note": "reproduce the reporter's exact scenario (their conversation, width, panel state) before claiming a UI fix"
+  },
+  {
+    "prompt": "do i really need to run the full checks for a change that only edits written prose",
+    "expect_source_contains": [
+      "feedback_mnemo_ci_doc_link_test"
+    ],
+    "query_type": "conceptual",
+    "note": "docs-only commits still break the suite; the doc tests assert a closed set of README links"
+  },
+  {
+    "prompt": "the official way to detect that someone clicked blank space instead of an item stops working once the library ships in its compressed form",
+    "expect_source_contains": [
+      "feedback_cytoscape_minified_core"
+    ],
+    "query_type": "conceptual",
+    "note": "reference equality against a library's core breaks under minification; use a capability test instead"
+  },
+  {
+    "prompt": "why do notes written while working on one codebase stay out of another codebase's results by default, and how do i mark something as applying everywhere",
+    "expect_source_contains": [
+      "project_mnemo_base_isolation"
+    ],
+    "query_type": "conceptual",
+    "note": "project-isolation-by-default + the BASE escape hatch (strategic principle, 2026-05-10)"
+  },
+  {
+    "prompt": "what do we offer that a rival product built only around source code cannot",
+    "expect_source_contains": [
+      "reference_competitor_gitnexus_comparison"
+    ],
+    "query_type": "conceptual",
+    "note": "mnemo's durable positioning vs code-only intelligence tools"
+  },
+  {
+    "prompt": "what should we actually measure to know this thing is dependable if search ranking scores are not it",
+    "expect_source_contains": [
+      "session_handover_v6_0_0_shipped"
+    ],
+    "query_type": "conceptual",
+    "note": "v6.0.0 reliability arc -- hit@k is the wrong bar; measure agentic task-success over the moat"
+  },
+  {
+    "prompt": "is blending the two search rankings by their positions better than leaning on the stronger one",
+    "expect_source_contains": [
+      "session_handover_v6_1_0_shipped"
+    ],
+    "query_type": "conceptual",
+    "note": "2026-06-18 measured fusion verdict -- naive RRF loses to BM25 alone; the 6-term sum under-weights lexical"
+  },
+  {
+    "prompt": "what stops an assistant from saying it ran the checks when it never actually did",
+    "expect_source_contains": [
+      "session_handover_v6_1_0_shipped"
+    ],
+    "query_type": "conceptual",
+    "note": "v6.1.0 G3 evidence ledger -- real exit code captured passively; freshness re-opens the gate on any edit"
+  },
+  {
+    "prompt": "why not just hand the model the whole notes file and let it work it out",
+    "expect_source_contains": [
+      "2026-05-09-mnemo-design"
+    ],
+    "query_type": "conceptual",
+    "note": "v1 token-cost doctrine -- rank/compress/cite, never dump full files"
+  },
+  {
+    "prompt": "why isnt matching on meaning alone enough to pull up the right past notes",
+    "expect_source_contains": [
+      "2026-05-09-mnemo-design"
+    ],
+    "query_type": "conceptual",
+    "note": "Sec 6.1 why Graph-RAG over pure vector RAG -- typed edges capture what similarity misses"
+  },
+  {
+    "prompt": "what stops it from telling me something that was correct long ago but has since been overruled",
+    "expect_source_contains": [
+      "2026-05-09-mnemo-design"
+    ],
+    "query_type": "conceptual",
+    "note": "supersedes edge + structural recency -- newer knowledge overrides stale knowledge at rank time"
+  },
+  {
+    "prompt": "what keeps me from writing down something thats already been captured before",
+    "expect_source_contains": [
+      "2026-05-09-mnemo-design",
+      "mnemo-add-knowledge"
+    ],
+    "query_type": "conceptual",
+    "note": "Sec 9.4 novelty check -- 0.85 similarity gate prompts supersede/append/cancel before a new node is written"
+  },
+  {
+    "prompt": "what makes this different from tools that only chart how the code hangs together",
+    "expect_source_contains": [
+      "2026-05-11-mnemo-v2.0-design"
+    ],
+    "query_type": "conceptual",
+    "note": "v2.0 positioning -- code intelligence that also remembers why, via the memory layer competitors lack"
+  },
+  {
+    "prompt": "should the assistant be free to act on its own or does someone need to sign off first",
+    "expect_source_contains": [
+      "2026-05-14-mnemo-v3-design"
+    ],
+    "query_type": "conceptual",
+    "note": "v3 three-tier risk model (safe/confirm/danger) -- destructive tools always prompt, no allow-always escape"
+  },
+  {
+    "prompt": "why did chasing the same kind of visual glitch over and over end up forcing a bigger cleanup",
+    "expect_source_contains": [
+      "2026-05-16-mnemo-v4-design"
+    ],
+    "query_type": "conceptual",
+    "note": "v4.x contract-first doctrine -- repeated same-shape bugs mean a missing contract, not a missing fix"
+  },
+  {
+    "prompt": "would it speed things up to let the video hardware work out where everything goes",
+    "expect_source_contains": [
+      "2026-05-17-mnemo-v4.6-custom-graph-engine-design"
+    ],
+    "query_type": "conceptual",
+    "note": "v4.6 scale judgment -- GPU is for rendering not layout; CPU Barnes-Hut is sub-second at this size"
+  },
+  {
+    "prompt": "how do we keep an assistant from claiming the work is finished when it never really ran anything",
+    "expect_source_contains": [
+      "2026-06-18-mnemo-v6.1.0-governance-design"
+    ],
+    "query_type": "conceptual",
+    "note": "v6.1.0 governance: gate honesty is evidence-based -- real captured exit codes, never the agent's word"
+  },
+  {
+    "prompt": "why does writing our standards down in a document not actually make anyone follow them",
+    "expect_source_contains": [
+      "2026-06-18-mnemo-v6.1.0-governance-design"
+    ],
+    "query_type": "conceptual",
+    "note": "v6.1.0 S0: written conventions are unenforced prose an agent silently skips -- the reason the governance layer exists at all"
+  },
+  {
+    "prompt": "should a background service that is down be allowed to prevent me from finishing my work",
+    "expect_source_contains": [
+      "2026-06-18-mnemo-v6.1.0-governance-design"
+    ],
+    "query_type": "conceptual",
+    "note": "v6.1.0 non-negotiable design principle: every hook fails open -- a checker that is unavailable must never brick the session"
+  },
+  {
+    "prompt": "what does this thing know that i could not just find by looking through the files myself",
+    "expect_source_contains": [
+      "2026-06-11-mnemo-v6.0.0-task-success-harness-design"
+    ],
+    "query_type": "conceptual",
+    "note": "the moat thesis: the typed graph + cross-session memory are the two things an agent's own grep+read loop cannot reconstruct"
+  },
+  {
+    "prompt": "if our own numbers come out flawless what does that actually prove",
+    "expect_source_contains": [
+      "2026-06-11-mnemo-v6.0.0-task-success-harness-design"
+    ],
+    "query_type": "conceptual",
+    "note": "v6.0.0 non-circularity + baseline triage: a self-derived 1.00 is a regression guard, not independent proof of correctness"
+  },
+  {
+    "prompt": "why build the yardstick before trying to make anything better",
+    "expect_source_contains": [
+      "2026-06-11-mnemo-v6.0.0-task-success-harness-design",
+      "2026-06-10-mnemo-v5.26.0-precision-baseline-auto-scope-design"
+    ],
+    "query_type": "conceptual",
+    "note": "the measure-before-tuning doctrine (v5.26 lesson): no tuning without a baseline; build the instrument first and ship it alone"
+  },
+  {
+    "prompt": "what has to be true before i can honestly say a piece of work is finished",
+    "expect_source_contains": [
+      ".claude/CLAUDE.md"
+    ],
+    "query_type": "conceptual",
+    "note": "global-memory completion rule -- the operator-green bar"
+  },
+  {
+    "prompt": "one measurement says a part has failed but nothing else agrees how should i decide",
+    "expect_source_contains": [
+      ".claude/CLAUDE.md"
+    ],
+    "query_type": "conceptual",
+    "note": "edge-device iron rule -- never trust a single signal to declare a fault"
+  },
+  {
+    "prompt": "why does it only ever hand over a small slice of a note instead of the whole file",
+    "expect_source_contains": [
+      "CLAUDE.md"
+    ],
+    "query_type": "conceptual",
+    "note": "token-budgeted retrieval doctrine (<=800 tokens, never dump full files)"
+  },
+  {
+    "prompt": "why not let a language model decide what kind of question is being asked",
+    "expect_source_contains": [
+      "docs/architecture.md"
+    ],
+    "query_type": "conceptual",
+    "note": "deliberate non-goal -- deterministic intent classification over an LLM call"
+  },
+  {
+    "prompt": "how do we stop a design mistake from quietly creeping back in after it was fixed",
+    "expect_source_contains": [
+      "docs/architecture.md"
+    ],
+    "query_type": "conceptual",
+    "note": "guard tests as the contract's teeth against silent regression"
+  },
+  {
+    "prompt": "what keeps one idea worded several different ways from filling every slot in the results",
+    "expect_source_contains": [
+      "rerank.py",
+      "retrieve.py"
+    ],
+    "query_type": "conceptual",
+    "note": "MMR diversity re-rank -- lambda-weighted relevance minus max similarity to already-picked hits"
+  },
+  {
+    "prompt": "why do we push knowledge from other projects down the ranking instead of hiding it completely",
+    "expect_source_contains": [
+      "retrieve.py"
+    ],
+    "query_type": "conceptual",
+    "note": "v4.3.2 SOFT project isolation -- hard filter caused a silent-zero, replaced by a score multiplier"
+  },
+  {
+    "prompt": "if one of the do not do this notes is written wrong does the whole assistant stop working",
+    "expect_source_contains": [
+      "governance.py"
+    ],
+    "query_type": "conceptual",
+    "note": "governance fail-open law -- a malformed rule degrades to non-binding and never raises"
+  },
+  {
+    "prompt": "how do we know a change to search quality is a real improvement and not just a feeling",
+    "expect_source_contains": [
+      "eval_retrieval.py"
+    ],
+    "query_type": "conceptual",
+    "note": "v5.26.0 no-tuning-without-a-baseline doctrine -- labelled set plus pure scorer"
+  },
+  {
+    "prompt": "why is finding the right piece of text not the real test of whether this tool beats the assistant just looking through files itself",
+    "expect_source_contains": [
+      "eval_tasks.py"
+    ],
+    "query_type": "conceptual",
+    "note": "v6.0.0 moat argument -- snippet retrieval is the commodity axis; agentic task-success is the real bar"
+  },
+  {
+    "prompt": "when the tool adjusts its own ranking numbers what stops it from just fitting to what it already saw",
+    "expect_source_contains": [
+      "retune.py"
+    ],
+    "query_type": "conceptual",
+    "note": "auto-tuner's time-ordered 80/20 train/val split -- future feedback cannot leak into training"
+  },
+  {
+    "prompt": "when a file looks dodgy during a scan do we quietly ignore it or does a human get told",
+    "expect_source_contains": [
+      "safeguards.py"
+    ],
+    "query_type": "conceptual",
+    "note": "safeguards' surface-don't-silently-drop contract -- suspicious files go to a report for a user decision"
   }
 ]
