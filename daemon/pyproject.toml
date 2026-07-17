@@ -46,7 +46,7 @@ dependencies = [
     # Windows path that caused recurrent orphaned-daemon bugs
     # (v3.2 gotcha #32, v5.5.0 lesson #93). See
     # ``mnemo.daemon._listener_pid_for_port``.
-    "psutil>=6.1",
+    "psutil>=7.2.2",
 ]
 
 [tool.hatch.build.targets.wheel.sources]
