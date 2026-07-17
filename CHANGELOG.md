@@ -2,6 +2,41 @@
 
 All notable changes to mnemo are documented here.
 
+## [6.2.1] - 2026-07-16
+
+**Fix: 22% of the index was invisible to semantic search. Reindex now guarantees every node is embedded.**
+
+Found by dogfooding v6.2.0: the freshly written session handover would not surface
+in mnemo's own graph. 4,106 of 18,661 live nodes (22.0%) had zero embeddings --
+including **100% of `commit` nodes, 100% of `code_endpoint` nodes**, and the two
+most recent session handovers, meaning the canonical entry-point memory could not
+be recalled by meaning at all. BM25/FTS5 still indexed every one of them, so
+nothing ever errored and no count looked wrong. A textbook silent zero.
+
+- **Root cause.** Two independent paths created nodes that never got embedded, and
+  one skip rule made it permanent:
+  - The PostToolUse hook nudges `POST /v1/reindex?embed=false` to stay fast, so
+    `ingest.reindex_events` ran with `embedder=None` and stored the node
+    unembedded. A later reindex *with* an embedder then saw an unchanged file hash
+    and took the `unchanged` branch -- so the embed was never retried. Forever.
+  - The git-log walk upserted `commit` nodes without embedding them at all.
+  - `embed.embed_all_unembedded` already implemented the exact repair, but nothing
+    in production ever called it (only `scripts/smoke_ingest.py` did).
+- **Fix.** A reindex that has an embedder now enforces one creation-path-agnostic
+  invariant at the end of the run: **no node is left unembedded**. Fixing each
+  creation site would have been whack-a-mole -- there are at least three, and the
+  next one added would have regressed it silently. Free in steady state (one query
+  that finds nothing to do); `embed=false` stays a strict no-embed fast path, so
+  the hook keeps its speed.
+- **Visibility.** The repair is never silent: `ReindexReport.embedded_backfilled`,
+  the `done` event, and `POST /v1/reindex` all report the count (steady state 0).
+- **`mnemo doctor` gains an `embedding coverage` check** reporting unembedded nodes
+  and the percentage, so this class of failure can never hide again.
+
+Note for anyone who has been running mnemo for a while: your first `mnemo reindex`
+on 6.2.1 may take noticeably longer than usual while it backfills. That is the
+repair; subsequent runs return to normal.
+
 ## [6.2.0] - 2026-07-16
 
 **Retrieval fusion rebalance -- rank-level weighted RRF is the new default ranking. Measured +0.23 hit@5 overall, and it wins on BOTH halves of the query distribution.**

@@ -153,3 +153,28 @@ def test_check_statusline_other_is_advisory(tmp_path: Path) -> None:
     p = tmp_path / "settings.json"
     p.write_text(json.dumps({"statusLine": {"command": "/other"}}), encoding="utf-8")
     assert doctor.check_statusline(p).ok is None
+
+
+# --- embedding coverage (the 22%-unembedded silent-zero guard) -------------
+
+
+def test_check_embeddings_all_covered() -> None:
+    r = doctor.check_embeddings(total=100, unembedded=0)
+    assert r.ok is True
+    assert "100" in r.detail
+
+
+def test_check_embeddings_flags_unembedded_nodes() -> None:
+    """The failure that hid for months: nodes indexed by BM25 but invisible
+    to vector search. Doctor must call it out, with the repair command."""
+    r = doctor.check_embeddings(total=18661, unembedded=4106)
+    assert r.ok is False
+    assert "4106" in r.detail
+    assert "22" in r.detail, "surface the percentage -- 22% is the headline"
+    assert "reindex" in r.hint
+
+
+def test_check_embeddings_empty_index_is_not_a_failure() -> None:
+    """An empty store is check_index's job to report, not a divide-by-zero here."""
+    r = doctor.check_embeddings(total=0, unembedded=0)
+    assert r.ok is not False
