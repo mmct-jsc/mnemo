@@ -276,6 +276,9 @@ def reindex(
                     "updated": report.updated,
                     "unchanged": report.unchanged,
                     "removed": report.removed,
+                    # Nonzero means these nodes had been invisible to semantic
+                    # search until this run repaired them. Steady state is 0.
+                    "embedded_backfilled": report.embedded_backfilled,
                     "errors": [list(e) for e in report.errors],
                 },
                 indent=2,

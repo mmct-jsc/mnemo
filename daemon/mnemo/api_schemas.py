@@ -276,6 +276,9 @@ class ReindexReportOut(BaseModel):
     unchanged: int
     removed: int
     errors: list[tuple[str, str]]
+    #: Nodes repaired by the embedding backfill. Steady state 0; a nonzero
+    #: value means they had been invisible to semantic search.
+    embedded_backfilled: int = 0
 
     @classmethod
     def from_report(cls, r: ReindexReport) -> ReindexReportOut:
@@ -285,6 +288,7 @@ class ReindexReportOut(BaseModel):
             unchanged=r.unchanged,
             removed=r.removed,
             errors=list(r.errors),
+            embedded_backfilled=r.embedded_backfilled,
         )
 
 

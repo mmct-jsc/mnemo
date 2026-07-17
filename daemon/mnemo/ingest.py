@@ -95,6 +95,11 @@ class ReindexReport:
     unchanged: int = 0
     removed: int = 0
     errors: list[tuple[str, str]] = field(default_factory=list)
+    #: Nodes that existed WITHOUT embeddings and were repaired by this run.
+    #: Surfaced (not silent) because an invisible-to-vector-search node is
+    #: exactly the failure mode that hid for months -- see the backfill in
+    #: ``reindex_events``. Steady state is 0.
+    embedded_backfilled: int = 0
 
     @property
     def total_seen(self) -> int:
@@ -943,6 +948,38 @@ def reindex_events(
         },
     )
 
+    # Embedding backfill -- the invariant: after a reindex WITH an embedder,
+    # no node is left unembedded.
+    #
+    # Enforced HERE, once, rather than at each creation site. Nodes reach the
+    # store by several paths (the file walk, the git-log commit walk, code
+    # post-passes) and only some of them embed:
+    #
+    #   - the file walk skips embedding whenever ``embedder is None`` -- which
+    #     is exactly what the PostToolUse hook asks for via
+    #     ``POST /v1/reindex?embed=false`` to stay fast. A later reindex then
+    #     sees an unchanged hash and takes the ``unchanged`` branch, so the
+    #     embed is never retried. The node stays invisible to vector search
+    #     forever, while BM25/FTS5 still indexes it -- so nothing looks broken.
+    #   - the git-log path never embedded commit nodes at all.
+    #
+    # That cost 22% of a real 18.6k-node corpus (including 100% of commits and
+    # the newest session handovers). Patching each site is whack-a-mole; the
+    # next path added would regress it silently. One end-of-run sweep is
+    # creation-path agnostic and free in steady state (a single query returning
+    # nothing to do).
+    if embedder is not None:
+        try:
+            from mnemo.embed import embed_all_unembedded
+
+            report.embedded_backfilled = embed_all_unembedded(store, embedder)  # type: ignore[arg-type]
+            if report.embedded_backfilled:
+                log.info("embedding backfill: repaired %d node(s)", report.embedded_backfilled)
+        except Exception as exc:  # pragma: no cover - defensive
+            # Never fail a reindex over the backfill; report it instead.
+            log.warning("embedding backfill failed: %s", exc)
+            report.errors.append(("<embedding-backfill>", str(exc)))
+
     yield (
         "done",
         {
@@ -950,6 +987,7 @@ def reindex_events(
             "updated": report.updated,
             "unchanged": report.unchanged,
             "removed": report.removed,
+            "embedded_backfilled": report.embedded_backfilled,
             # Errors are tuples; serialize as plain list for JSON.
             "errors": [{"path": p, "error": e} for (p, e) in report.errors],
             "duration_ms": duration_ms,
@@ -971,6 +1009,7 @@ def _drain(events: Iterator[tuple[str, dict]]) -> ReindexReport:
             report.updated = payload["updated"]
             report.unchanged = payload["unchanged"]
             report.removed = payload["removed"]
+            report.embedded_backfilled = payload.get("embedded_backfilled", 0)
             # done's errors are dicts {path, error}; legacy report uses tuples.
             report.errors = [(e["path"], e["error"]) for e in payload["errors"]]
     return report

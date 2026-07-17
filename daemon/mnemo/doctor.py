@@ -59,6 +59,38 @@ def check_index(node_count: int) -> CheckResult:
     )
 
 
+def check_embeddings(total: int, unembedded: int) -> CheckResult:
+    """Is every indexed node actually reachable by MEANING, not just by keyword?
+
+    A node with no embeddings is still returned by BM25/FTS5, so the index
+    looks healthy from every angle except the one that matters for "how/why"
+    questions -- which is exactly how 22% of a real 18.6k-node corpus
+    (including 100% of commits and the newest session handovers) stayed
+    invisible without a single error. This check is the tripwire.
+    """
+    if total <= 0:
+        return CheckResult(
+            name="embedding coverage",
+            ok=None,
+            detail="no nodes indexed yet",
+            hint="mnemo reindex",
+            required=False,
+        )
+    pct = 100.0 * unembedded / total
+    return CheckResult(
+        name="embedding coverage",
+        ok=unembedded == 0,
+        detail=(
+            f"all {total} nodes embedded"
+            if unembedded == 0
+            else f"{unembedded} of {total} nodes ({pct:.1f}%) have NO embeddings "
+            f"-- invisible to semantic search (keyword search still finds them)"
+        ),
+        hint="mnemo reindex   (backfills embeddings for any unembedded node)",
+        required=False,
+    )
+
+
 def check_daemon(*, probe: Callable[[], tuple[bool, str | None]]) -> CheckResult:
     ok, version = probe()
     return CheckResult(
@@ -200,13 +232,34 @@ def _node_count() -> int:
         store.close()
 
 
+def _embedding_coverage() -> tuple[int, int]:
+    """Returns ``(total_nodes, unembedded_nodes)``; (0, 0) if unreadable."""
+    from mnemo import paths
+    from mnemo.store import Store
+
+    try:
+        store = Store(paths.db_path())
+    except Exception:
+        return (0, 0)
+    try:
+        ids = {n.id for n in store.list_nodes(limit=10**6)}
+        embedded = store.list_embedded_node_ids()
+        return (len(ids), len(ids - embedded))
+    except Exception:
+        return (0, 0)
+    finally:
+        store.close()
+
+
 def gather() -> list[CheckResult]:
     """Run every check against the live environment."""
     from mnemo import paths
 
+    total, unembedded = _embedding_coverage()
     return [
         check_mnemo_on_path(),
         check_index(_node_count()),
+        check_embeddings(total, unembedded),
         check_plugin_registered(paths.claude_home()),
         check_statusline(paths.claude_home() / "settings.json"),
         check_daemon(probe=_default_daemon_probe),
